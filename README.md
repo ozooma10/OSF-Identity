@@ -1,5 +1,7 @@
 # OSF Identity
 
+[![CI](https://github.com/ozooma10/OSF-Identity/actions/workflows/ci.yml/badge.svg)](https://github.com/ozooma10/OSF-Identity/actions/workflows/ci.yml)
+
 An SFSE framework that applies face-and-body appearance presets to unique
 Starfield NPCs from drop-in packages, without editing their source plugins.
 

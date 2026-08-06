@@ -58,6 +58,8 @@ fails the whole apply closed.
 - `tools/verify.ps1` — full Windows verification: plugin build, both host
   test suites, fixture validator tests, fixture provenance gate.
 - `tools/verify-host.sh` — the host-side subset for non-Windows machines.
+- `.github/workflows/ci.yml` — runs both of the above on every push: a Linux
+  job for fast parser feedback and a Windows job that builds the plugin.
 - Host tests prove the parsers only. Game-side lifecycle changes require a
   clean install on the pinned runtime and log/visual evidence — see the
   evidence boundary in [AGENTS.md](../AGENTS.md).
