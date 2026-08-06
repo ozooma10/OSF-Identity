@@ -1,8 +1,8 @@
 includes("lib/commonlibsf")
 
 set_project("OSF Identity")
-set_version("0.1.0")
-set_license("MIT")
+set_version("1.0.0")
+set_license("GPL-3.0")
 set_languages("c++23")
 set_warnings("allextra")
 
@@ -13,7 +13,7 @@ target("OSF Identity")
     add_rules("commonlibsf.plugin", {
         name = "osf-identity",
         author = "ozooma10",
-        description = "Safe package-driven runtime NPC appearance distribution",
+        description = "Runtime NPC appearance distribution",
         email = "ozooma10@protonmail.com"
     })
 
