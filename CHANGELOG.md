@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Reorganize sources: `src/Probe/` is now `src/NpcAppearance/` (namespace
+  `NpcAppearance`), the shared strict JSON reader lives in
+  `NpcAppearance/Json.*`, and `docs/ARCHITECTURE.md` maps the pipeline.
+- Reject Windows-rooted preset paths on every platform and add
+  `tools/verify-host.sh` so host tests build warning-clean and pass on
+  non-Windows machines.
 - Make `package.json` optional. A package folder holding only
   `Presets/<OwningPlugin>/<LocalFormID>.npc` is discovered with its lowercased
   folder name as the `packageId` at priority `0`.

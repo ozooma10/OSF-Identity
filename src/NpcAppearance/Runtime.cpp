@@ -35,6 +35,12 @@ namespace NpcAppearance
 {
     namespace
     {
+        // ==================================================================
+        // Native byte contracts
+        // Address Library IDs and the expected prologue bytes of every
+        // native routine the runtime may call on 1.16.244. Each call site
+        // re-verifies these at runtime; any mismatch fails the apply closed.
+        // ==================================================================
         constexpr REL::ID kActorCopyAppearanceWorkerID{ 97401 };
         constexpr REL::ID kNpcFactorySingletonID{ 824718 };
         constexpr REL::ID kNpcFactoryVtableID{ 420871 };
@@ -118,6 +124,12 @@ namespace NpcAppearance
             0x24, 0x18, 0x48, 0x89, 0x74, 0x24, 0x20, 0x57
         };
 
+        // ==================================================================
+        // Scene lifecycle state
+        // Shared between the event sinks, the SFSE frame callback, and the
+        // native drain. Sets/maps are guarded by g_eventMutex; counters and
+        // flags are atomics.
+        // ==================================================================
         std::mutex                    g_eventMutex;
         std::unordered_set<RE::TESFormID> g_targetBaseIDs;
         std::unordered_set<RE::TESFormID> g_loadedTargetRefs;
@@ -283,6 +295,11 @@ namespace NpcAppearance
             }
         };
 
+        // ==================================================================
+        // Snapshots
+        // Byte-exact captures of base NPC state taken before mutation and
+        // compared after, so restore paths can prove original-at-rest.
+        // ==================================================================
         struct NonVisualSnapshot
         {
             std::string         editorID;
@@ -1111,6 +1128,9 @@ namespace NpcAppearance
             return true;
         }
 
+        // ==================================================================
+        // Persistent application and target-hold tracking
+        // ==================================================================
         struct PersistentAppliedState
         {
             RE::TESFormID        baseID{ 0 };
@@ -1240,6 +1260,12 @@ namespace NpcAppearance
         std::atomic<std::uint64_t>       g_targetHoldRollbackDueSerial{ 0 };
         std::atomic<bool>                g_targetHoldRollbackDeferralLogged{ false };
 
+        // ==================================================================
+        // Preset -> donor population
+        // Writes decoded preset data onto a temporary donor NPC through the
+        // game's own setters; the donor is later copied onto the target and
+        // destroyed.
+        // ==================================================================
         void PopulatePresetMorphs(
             RE::TESNPC* a_donor,
             const AppearancePreset& a_preset,
@@ -1882,6 +1908,12 @@ namespace NpcAppearance
             }).detach();
         }
 
+        // ==================================================================
+        // Native main-thread lifecycle
+        // Everything below OnNpcAppearanceNativeFrame executes inside the
+        // verified BSService queue drain; the SFSE frame callback only
+        // requests that work via RequestNpcAppearanceNativeFrame.
+        // ==================================================================
         void OnNpcAppearanceNativeFrame()
         {
             const auto nativeThreadID = ::GetCurrentThreadId();
@@ -2170,6 +2202,11 @@ namespace NpcAppearance
             }
         }
 
+        // ==================================================================
+        // Target resolution
+        // plugin name + local FormID -> runtime FormID -> eligible unique
+        // HumanRace TESNPC, with per-tier (full/medium/small) arithmetic.
+        // ==================================================================
         struct LoadedPlugin
         {
             RE::TESFile* file{ nullptr };
@@ -2263,6 +2300,11 @@ namespace NpcAppearance
             return npc;
         }
 
+        // ==================================================================
+        // Diagnostic command surface (npcapp ...)
+        // Unbound in release builds; mirrors the pipeline stages so each
+        // layer can be exercised and inspected in isolation.
+        // ==================================================================
         void RunStatus(const LineSink& a_out)
         {
             const auto root = DefaultPluginDirectory();
@@ -4451,6 +4493,11 @@ namespace NpcAppearance
                       : "copyref: FAIL nonvisual snapshot changed; do not use this path");
         }
 
+        // ==================================================================
+        // Startup
+        // Fail-closed arming sequence: packages directory -> scan ->
+        // validated winners -> scene sinks -> persistent manager.
+        // ==================================================================
         void OnNpcAppearanceDataLoaded()
         {
             g_startupPackagesPresent.store(false, std::memory_order_release);
