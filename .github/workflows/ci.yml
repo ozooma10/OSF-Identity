@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  host-checks:
+    name: Host checks (Linux)
+    runs-on: ubuntu-latest
+    # Pushes already cover every same-repo branch, so the pull_request event is
+    # only needed for forks. Without this the two events double every run.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # Parsers, fixture validator, and the provenance gate: fast feedback that
+      # does not need the game toolchain.
+      - name: Run host verification
+        run: ./tools/verify-host.sh
+
+  windows-build:
+    name: Build and verify (Windows)
+    runs-on: windows-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # CommonLibSF, and its own commonlib-shared submodule.
+          submodules: recursive
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: xmake-io/setup-xmake@v1
+        with:
+          xmake-version: latest
+
+      # spdlog and the xmake package repository are rebuilt from source on a
+      # cold cache, which dominates the job's runtime.
+      - name: Cache xmake packages
+        uses: actions/cache@v4
+        with:
+          path: ~/AppData/Local/.xmake
+          key: xmake-${{ runner.os }}-${{ hashFiles('xmake.lua', 'lib/commonlibsf/xmake.lua', 'lib/commonlibsf/lib/commonlib-shared/xmake.lua') }}
+          restore-keys: |
+            xmake-${{ runner.os }}-
+
+      # Plugin build plus both host test suites, the fixture validator tests,
+      # and the provenance gate. This does not prove the game-side lifecycle;
+      # see the evidence boundary in AGENTS.md.
+      - name: Run full verification
+        shell: pwsh
+        run: ./tools/verify.ps1

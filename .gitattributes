@@ -5,6 +5,8 @@
 *.md text eol=lf
 *.json text eol=lf
 *.ps1 text eol=lf
+*.sh text eol=lf
+*.yml text eol=lf
 
 # Producer exports are immutable byte-for-byte compatibility fixtures.
 fixtures/osf-identity/Presets/**/*.npc binary

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Add GitHub Actions CI: a Windows job running the full `tools/verify.ps1`
+  (plugin build, host suites, fixture gate) and a Linux job running
+  `tools/verify-host.sh`.
+- Point the CommonLibSF submodule at its HTTPS URL so `git clone --recursive`
+  works without SSH credentials.
 - Reorganize sources: `src/Probe/` is now `src/NpcAppearance/` (namespace
   `NpcAppearance`), the shared strict JSON reader lives in
   `NpcAppearance/Json.*`, and `docs/ARCHITECTURE.md` maps the pipeline.

@@ -6,7 +6,9 @@ $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 
 Push-Location $repoRoot
 try {
-    & xmake f -m debug
+    # -y installs missing xmake packages without prompting, so the same script
+    # drives an interactive shell and unattended CI identically.
+    & xmake f -m debug -y
     if ($LASTEXITCODE -ne 0) { throw "xmake configure failed with exit code $LASTEXITCODE" }
 
     foreach ($target in @(
