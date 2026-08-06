@@ -1,0 +1,22 @@
+{
+  "$schema": "../../package.schema.json",
+  "schemaVersion": 1,
+  "packageId": "author.sarah-example",
+  "priority": 100,
+  "requires": {
+    "plugins": [
+      "Starfield.esm"
+    ],
+    "assets": []
+  },
+  "assignments": [
+    {
+      "target": {
+        "plugin": "Starfield.esm",
+        "localFormId": "00005983"
+      },
+      "preset": "Presets/Sarah.npc",
+      "scope": "faceAndBody"
+    }
+  ]
+}

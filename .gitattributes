@@ -1,0 +1,10 @@
+* text=auto
+*.cpp text eol=lf
+*.h text eol=lf
+*.lua text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+*.ps1 text eol=lf
+
+# Producer exports are immutable byte-for-byte compatibility fixtures.
+fixtures/npc-appearance-loader/Presets/**/*.npc binary

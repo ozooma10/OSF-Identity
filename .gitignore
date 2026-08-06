@@ -1,0 +1,9 @@
+build/
+dist/
+tmp/
+.xmake/
+.vs/
+vsxmake*/
+compile_commands.json
+*.user
+tools/**/__pycache__/

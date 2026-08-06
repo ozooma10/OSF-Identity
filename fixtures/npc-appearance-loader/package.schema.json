@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:runtime-npc-appearance-distributor:package:v1",
+  "title": "Runtime NPC Appearance Distributor package",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "packageId",
+    "priority",
+    "requires",
+    "assignments"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "schemaVersion": {
+      "const": 1
+    },
+    "packageId": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$"
+    },
+    "priority": {
+      "type": "integer",
+      "minimum": -1000000,
+      "maximum": 1000000
+    },
+    "requires": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "plugins",
+        "assets"
+      ],
+      "properties": {
+        "plugins": {
+          "type": "array",
+          "maxItems": 256,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[^\\\\/:]+\\.[eE][sS][mMpPlL]$"
+          }
+        },
+        "assets": {
+          "type": "array",
+          "maxItems": 256,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "assignments": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1024,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "target",
+          "preset",
+          "scope"
+        ],
+        "properties": {
+          "target": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "plugin",
+              "localFormId"
+            ],
+            "properties": {
+              "plugin": {
+                "type": "string",
+                "pattern": "^[^\\\\/:]+\\.[eE][sS][mMpPlL]$"
+              },
+              "localFormId": {
+                "type": "string",
+                "pattern": "^(?:[0-9A-Fa-f]{1,6}|0[0-9A-Fa-f]{6}|00[0-9A-Fa-f]{6})$"
+              }
+            }
+          },
+          "preset": {
+            "type": "string",
+            "pattern": "\\.[nN][pP][cC]$"
+          },
+          "scope": {
+            "const": "faceAndBody"
+          }
+        }
+      }
+    }
+  }
+}

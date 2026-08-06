@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:runtime-npc-appearance-distributor:fixture-metadata:v1",
+  "title": "Runtime NPC Appearance Distributor golden fixture metadata",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "producer",
+    "producerVersion",
+    "gameVersion",
+    "sourceNpc",
+    "loadedPlugins",
+    "files"
+  ],
+  "properties": {
+    "$schema": { "type": "string" },
+    "schemaVersion": { "const": 1 },
+    "producer": { "enum": ["Creation Kit", "CharGenMenu"] },
+    "producerVersion": { "type": "string", "minLength": 1 },
+    "gameVersion": { "const": "1.16.244.0" },
+    "sourceNpc": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["plugin", "localFormId", "editorId"],
+      "properties": {
+        "plugin": {
+          "type": "string",
+          "pattern": "^[^\\\\/:]+\\.[eE][sS][mMpPlL]$"
+        },
+        "localFormId": {
+          "type": "string",
+          "pattern": "^(?:[0-9A-Fa-f]{1,6}|0[0-9A-Fa-f]{6}|00[0-9A-Fa-f]{6})$"
+        },
+        "editorId": { "type": "string", "minLength": 1 }
+      }
+    },
+    "loadedPlugins": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[^\\\\/:]+\\.[eE][sS][mMpPlL]$"
+      }
+    },
+    "files": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "Baseline.npc",
+        "HeadpartOnly.npc",
+        "FacialMorphOnly.npc",
+        "TintOnly.npc",
+        "BodyMorphOnly.npc",
+        "Sarah.npc"
+      ],
+      "properties": {
+        "Baseline.npc": { "$ref": "#/$defs/file" },
+        "HeadpartOnly.npc": { "$ref": "#/$defs/file" },
+        "FacialMorphOnly.npc": { "$ref": "#/$defs/file" },
+        "TintOnly.npc": { "$ref": "#/$defs/file" },
+        "BodyMorphOnly.npc": { "$ref": "#/$defs/file" },
+        "Sarah.npc": { "$ref": "#/$defs/file" }
+      }
+    }
+  },
+  "$defs": {
+    "file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["controlledEdit", "roundTripReloaded", "sha256"],
+      "properties": {
+        "controlledEdit": { "type": "string", "minLength": 1 },
+        "roundTripReloaded": { "const": true },
+        "sha256": { "type": "string", "pattern": "^[0-9A-Fa-f]{64}$" }
+      }
+    }
+  }
+}

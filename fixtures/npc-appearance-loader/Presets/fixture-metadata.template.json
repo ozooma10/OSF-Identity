@@ -1,0 +1,47 @@
+{
+  "$schema": "../fixture-metadata.schema.json",
+  "schemaVersion": 1,
+  "producer": "Creation Kit",
+  "producerVersion": "1.16.244.0",
+  "gameVersion": "1.16.244.0",
+  "sourceNpc": {
+    "plugin": "Starfield.esm",
+    "localFormId": "00005983",
+    "editorId": "Companion_SarahMorgan"
+  },
+  "loadedPlugins": [
+    "Starfield.esm"
+  ],
+  "files": {
+    "Baseline.npc": {
+      "controlledEdit": "Unchanged source appearance.",
+      "roundTripReloaded": false,
+      "sha256": "fill after the successful producer round-trip"
+    },
+    "HeadpartOnly.npc": {
+      "controlledEdit": "Describe the one headpart changed from Baseline.npc.",
+      "roundTripReloaded": false,
+      "sha256": "fill after the successful producer round-trip"
+    },
+    "FacialMorphOnly.npc": {
+      "controlledEdit": "Describe the one facial morph or bone slider changed from Baseline.npc.",
+      "roundTripReloaded": false,
+      "sha256": "fill after the successful producer round-trip"
+    },
+    "TintOnly.npc": {
+      "controlledEdit": "Describe the one tint or color changed from Baseline.npc.",
+      "roundTripReloaded": false,
+      "sha256": "fill after the successful producer round-trip"
+    },
+    "BodyMorphOnly.npc": {
+      "controlledEdit": "Describe the one body morph changed from Baseline.npc.",
+      "roundTripReloaded": false,
+      "sha256": "fill after the successful producer round-trip"
+    },
+    "Sarah.npc": {
+      "controlledEdit": "Describe the complete Sarah vertical-slice appearance.",
+      "roundTripReloaded": false,
+      "sha256": "fill after the successful producer round-trip"
+    }
+  }
+}

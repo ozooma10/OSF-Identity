@@ -1,0 +1,843 @@
+#include "Probe/NpcAppearanceConfig.h"
+
+#include <algorithm>
+#include <charconv>
+#include <cctype>
+#include <cwchar>
+#include <fstream>
+#include <format>
+#include <limits>
+#include <map>
+#include <ranges>
+#include <set>
+#include <system_error>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
+
+namespace Probe::NpcAppearance
+{
+    namespace
+    {
+        [[nodiscard]] char LowerASCII(const char a_ch) noexcept
+        {
+            return a_ch >= 'A' && a_ch <= 'Z' ? static_cast<char>(a_ch - 'A' + 'a') : a_ch;
+        }
+
+        [[nodiscard]] std::string FoldASCII(const std::string_view a_text)
+        {
+            std::string folded;
+            folded.reserve(a_text.size());
+            for (const char ch : a_text) {
+                folded.push_back(LowerASCII(ch));
+            }
+            return folded;
+        }
+
+        void AppendUTF8(std::string& a_out, const std::uint32_t a_cp)
+        {
+            if (a_cp <= 0x7F) {
+                a_out.push_back(static_cast<char>(a_cp));
+            } else if (a_cp <= 0x7FF) {
+                a_out.push_back(static_cast<char>(0xC0 | (a_cp >> 6)));
+                a_out.push_back(static_cast<char>(0x80 | (a_cp & 0x3F)));
+            } else if (a_cp <= 0xFFFF) {
+                a_out.push_back(static_cast<char>(0xE0 | (a_cp >> 12)));
+                a_out.push_back(static_cast<char>(0x80 | ((a_cp >> 6) & 0x3F)));
+                a_out.push_back(static_cast<char>(0x80 | (a_cp & 0x3F)));
+            } else {
+                a_out.push_back(static_cast<char>(0xF0 | (a_cp >> 18)));
+                a_out.push_back(static_cast<char>(0x80 | ((a_cp >> 12) & 0x3F)));
+                a_out.push_back(static_cast<char>(0x80 | ((a_cp >> 6) & 0x3F)));
+                a_out.push_back(static_cast<char>(0x80 | (a_cp & 0x3F)));
+            }
+        }
+
+        struct JsonValue
+        {
+            enum class Kind
+            {
+                kNull,
+                kBoolean,
+                kInteger,
+                kString,
+                kArray,
+                kObject
+            };
+
+            Kind kind{ Kind::kNull };
+            std::size_t offset{ 0 };
+            bool boolean{ false };
+            std::int64_t integer{ 0 };
+            std::string string;
+            std::vector<JsonValue> array;
+            std::vector<std::pair<std::string, JsonValue>> object;
+
+            [[nodiscard]] const JsonValue* Find(const std::string_view a_key) const noexcept
+            {
+                const auto it = std::ranges::find_if(object, [&](const auto& a_entry) {
+                    return a_entry.first == a_key;
+                });
+                return it == object.end() ? nullptr : std::addressof(it->second);
+            }
+        };
+
+        class JsonReader
+        {
+        public:
+            explicit JsonReader(const std::string_view a_text) : _text(a_text) {}
+
+            [[nodiscard]] bool Parse(JsonValue& a_out)
+            {
+                SkipWhitespace();
+                if (!ParseValue(a_out, 0)) {
+                    return false;
+                }
+                SkipWhitespace();
+                return _pos == _text.size() || Fail("trailing data after JSON value");
+            }
+
+            [[nodiscard]] std::size_t ErrorOffset() const noexcept { return _errorOffset; }
+            [[nodiscard]] const std::string& Error() const noexcept { return _error; }
+
+        private:
+            [[nodiscard]] bool ParseValue(JsonValue& a_out, const std::size_t a_depth)
+            {
+                if (a_depth > 32) {
+                    return Fail("JSON nesting exceeds safety limit");
+                }
+                SkipWhitespace();
+                a_out.offset = _pos;
+                if (_pos >= _text.size()) {
+                    return Fail("truncated JSON value");
+                }
+                switch (_text[_pos]) {
+                case '{': return ParseObject(a_out, a_depth + 1);
+                case '[': return ParseArray(a_out, a_depth + 1);
+                case '"':
+                    a_out.kind = JsonValue::Kind::kString;
+                    return ParseString(a_out.string);
+                case 't':
+                    a_out.kind = JsonValue::Kind::kBoolean;
+                    a_out.boolean = true;
+                    return ConsumeLiteral("true");
+                case 'f':
+                    a_out.kind = JsonValue::Kind::kBoolean;
+                    a_out.boolean = false;
+                    return ConsumeLiteral("false");
+                case 'n':
+                    a_out.kind = JsonValue::Kind::kNull;
+                    return ConsumeLiteral("null");
+                default:
+                    if (_text[_pos] == '-' || (_text[_pos] >= '0' && _text[_pos] <= '9')) {
+                        a_out.kind = JsonValue::Kind::kInteger;
+                        return ParseInteger(a_out.integer);
+                    }
+                    return Fail("invalid JSON value");
+                }
+            }
+
+            [[nodiscard]] bool ParseObject(JsonValue& a_out, const std::size_t a_depth)
+            {
+                a_out.kind = JsonValue::Kind::kObject;
+                ++_pos;
+                SkipWhitespace();
+                if (Consume('}')) {
+                    return true;
+                }
+                std::unordered_set<std::string> keys;
+                for (;;) {
+                    const auto keyOffset = _pos;
+                    std::string key;
+                    if (!ParseString(key)) {
+                        return false;
+                    }
+                    if (!keys.insert(key).second) {
+                        return FailAt(keyOffset, "duplicate object property '" + key + "'");
+                    }
+                    SkipWhitespace();
+                    if (!Consume(':')) {
+                        return Fail("expected ':' after object property");
+                    }
+                    JsonValue value;
+                    if (!ParseValue(value, a_depth)) {
+                        return false;
+                    }
+                    a_out.object.emplace_back(std::move(key), std::move(value));
+                    SkipWhitespace();
+                    if (Consume('}')) {
+                        return true;
+                    }
+                    if (!Consume(',')) {
+                        return Fail("expected ',' or '}' in object");
+                    }
+                    SkipWhitespace();
+                }
+            }
+
+            [[nodiscard]] bool ParseArray(JsonValue& a_out, const std::size_t a_depth)
+            {
+                a_out.kind = JsonValue::Kind::kArray;
+                ++_pos;
+                SkipWhitespace();
+                if (Consume(']')) {
+                    return true;
+                }
+                for (;;) {
+                    if (a_out.array.size() >= kMaxAssignments) {
+                        return Fail("JSON array exceeds safety limit");
+                    }
+                    JsonValue value;
+                    if (!ParseValue(value, a_depth)) {
+                        return false;
+                    }
+                    a_out.array.push_back(std::move(value));
+                    SkipWhitespace();
+                    if (Consume(']')) {
+                        return true;
+                    }
+                    if (!Consume(',')) {
+                        return Fail("expected ',' or ']' in array");
+                    }
+                    SkipWhitespace();
+                }
+            }
+
+            [[nodiscard]] bool ParseInteger(std::int64_t& a_out)
+            {
+                const auto begin = _pos;
+                if (_text[_pos] == '-') {
+                    ++_pos;
+                }
+                if (_pos >= _text.size()) {
+                    return Fail("truncated JSON integer");
+                }
+                if (_text[_pos] == '0') {
+                    ++_pos;
+                    if (_pos < _text.size() && std::isdigit(static_cast<unsigned char>(_text[_pos]))) {
+                        return Fail("JSON integer has a leading zero");
+                    }
+                } else if (_text[_pos] >= '1' && _text[_pos] <= '9') {
+                    while (_pos < _text.size() && std::isdigit(static_cast<unsigned char>(_text[_pos]))) {
+                        ++_pos;
+                    }
+                } else {
+                    return Fail("invalid JSON integer");
+                }
+                if (_pos < _text.size() && (_text[_pos] == '.' || _text[_pos] == 'e' || _text[_pos] == 'E')) {
+                    return Fail("manifest numbers must be integers");
+                }
+                const auto* first = _text.data() + begin;
+                const auto* last = _text.data() + _pos;
+                const auto [ptr, ec] = std::from_chars(first, last, a_out, 10);
+                return ec == std::errc{} && ptr == last || FailAt(begin, "JSON integer is out of range");
+            }
+
+            [[nodiscard]] bool ParseHex4(std::uint32_t& a_out)
+            {
+                if (_text.size() - _pos < 4) {
+                    return Fail("truncated Unicode escape");
+                }
+                std::uint32_t value = 0;
+                for (std::size_t i = 0; i < 4; ++i) {
+                    const char ch = _text[_pos++];
+                    value <<= 4;
+                    if (ch >= '0' && ch <= '9') value |= static_cast<std::uint32_t>(ch - '0');
+                    else if (ch >= 'a' && ch <= 'f') value |= static_cast<std::uint32_t>(ch - 'a' + 10);
+                    else if (ch >= 'A' && ch <= 'F') value |= static_cast<std::uint32_t>(ch - 'A' + 10);
+                    else return Fail("invalid Unicode escape");
+                }
+                a_out = value;
+                return true;
+            }
+
+            [[nodiscard]] bool ParseString(std::string& a_out)
+            {
+                if (!Consume('"')) {
+                    return Fail("expected JSON string");
+                }
+                while (_pos < _text.size()) {
+                    const unsigned char ch = static_cast<unsigned char>(_text[_pos++]);
+                    if (ch == '"') {
+                        return true;
+                    }
+                    if (ch < 0x20) {
+                        return Fail("control character in JSON string");
+                    }
+                    if (ch != '\\') {
+                        a_out.push_back(static_cast<char>(ch));
+                    } else {
+                        if (_pos >= _text.size()) {
+                            return Fail("truncated JSON escape");
+                        }
+                        switch (const char esc = _text[_pos++]) {
+                        case '"': a_out.push_back('"'); break;
+                        case '\\': a_out.push_back('\\'); break;
+                        case '/': a_out.push_back('/'); break;
+                        case 'b': a_out.push_back('\b'); break;
+                        case 'f': a_out.push_back('\f'); break;
+                        case 'n': a_out.push_back('\n'); break;
+                        case 'r': a_out.push_back('\r'); break;
+                        case 't': a_out.push_back('\t'); break;
+                        case 'u': {
+                            std::uint32_t cp = 0;
+                            if (!ParseHex4(cp)) return false;
+                            if (cp >= 0xD800 && cp <= 0xDBFF) {
+                                if (_text.size() - _pos < 6 || _text[_pos] != '\\' || _text[_pos + 1] != 'u') {
+                                    return Fail("high surrogate without low surrogate");
+                                }
+                                _pos += 2;
+                                std::uint32_t low = 0;
+                                if (!ParseHex4(low)) return false;
+                                if (low < 0xDC00 || low > 0xDFFF) return Fail("invalid low surrogate");
+                                cp = 0x10000 + ((cp - 0xD800) << 10) + (low - 0xDC00);
+                            } else if (cp >= 0xDC00 && cp <= 0xDFFF) {
+                                return Fail("unpaired low surrogate");
+                            }
+                            AppendUTF8(a_out, cp);
+                            break;
+                        }
+                        default: return Fail("invalid JSON escape");
+                        }
+                    }
+                    if (a_out.size() > 4096) {
+                        return Fail("JSON string exceeds safety limit");
+                    }
+                }
+                return Fail("unterminated JSON string");
+            }
+
+            [[nodiscard]] bool ConsumeLiteral(const std::string_view a_literal)
+            {
+                if (_text.substr(_pos, a_literal.size()) != a_literal) {
+                    return Fail("invalid JSON literal");
+                }
+                _pos += a_literal.size();
+                return true;
+            }
+
+            void SkipWhitespace() noexcept
+            {
+                while (_pos < _text.size() && (_text[_pos] == ' ' || _text[_pos] == '\t' ||
+                                                _text[_pos] == '\r' || _text[_pos] == '\n')) {
+                    ++_pos;
+                }
+            }
+
+            [[nodiscard]] bool Consume(const char a_expected) noexcept
+            {
+                if (_pos < _text.size() && _text[_pos] == a_expected) {
+                    ++_pos;
+                    return true;
+                }
+                return false;
+            }
+
+            [[nodiscard]] bool Fail(std::string a_message)
+            {
+                return FailAt(_pos, std::move(a_message));
+            }
+
+            [[nodiscard]] bool FailAt(const std::size_t a_offset, std::string a_message)
+            {
+                if (_error.empty()) {
+                    _errorOffset = a_offset;
+                    _error = std::move(a_message);
+                }
+                return false;
+            }
+
+            std::string_view _text;
+            std::size_t _pos{ 0 };
+            std::size_t _errorOffset{ 0 };
+            std::string _error;
+        };
+
+        void AddIssue(ManifestResult& a_result, const std::filesystem::path& a_path,
+                      const std::size_t a_offset, std::string a_code, std::string a_message)
+        {
+            a_result.issues.push_back({ a_path, a_offset, std::move(a_code), std::move(a_message) });
+        }
+
+        [[nodiscard]] bool HasOnlyProperties(const JsonValue& a_object,
+                                             const std::initializer_list<std::string_view> a_allowed,
+                                             ManifestResult& a_result,
+                                             const std::filesystem::path& a_path)
+        {
+            for (const auto& [name, value] : a_object.object) {
+                if (std::ranges::find(a_allowed, name) == a_allowed.end()) {
+                    AddIssue(a_result, a_path, value.offset, "unknown_property",
+                             "unknown property '" + name + "'");
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        [[nodiscard]] const JsonValue* Require(const JsonValue& a_object, const std::string_view a_name,
+                                               const JsonValue::Kind a_kind, ManifestResult& a_result,
+                                               const std::filesystem::path& a_path)
+        {
+            const auto* value = a_object.Find(a_name);
+            if (!value) {
+                AddIssue(a_result, a_path, a_object.offset, "missing_property",
+                         "missing property '" + std::string(a_name) + "'");
+                return nullptr;
+            }
+            if (value->kind != a_kind) {
+                AddIssue(a_result, a_path, value->offset, "wrong_type",
+                         "property '" + std::string(a_name) + "' has the wrong type");
+                return nullptr;
+            }
+            return value;
+        }
+
+        [[nodiscard]] bool IsPluginName(const std::string_view a_name)
+        {
+            if (a_name.empty() || a_name.size() > 260 || a_name.contains('/') || a_name.contains('\\') ||
+                a_name.contains(':')) {
+                return false;
+            }
+            const auto folded = FoldASCII(a_name);
+            return folded.ends_with(".esm") || folded.ends_with(".esp") || folded.ends_with(".esl");
+        }
+
+        [[nodiscard]] bool IsPackageID(const std::string_view a_id)
+        {
+            if (a_id.size() < 3 || a_id.size() > 128 || !std::isalnum(static_cast<unsigned char>(a_id.front()))) {
+                return false;
+            }
+            return std::ranges::all_of(a_id, [](const unsigned char a_ch) {
+                return (a_ch >= 'a' && a_ch <= 'z') || (a_ch >= '0' && a_ch <= '9') ||
+                       a_ch == '.' || a_ch == '_' || a_ch == '-';
+            });
+        }
+
+        [[nodiscard]] bool ParseLocalFormID(const std::string_view a_text, std::uint32_t& a_out)
+        {
+            if (a_text.empty() || a_text.size() > 8 || a_text.starts_with("0x") || a_text.starts_with("0X")) {
+                return false;
+            }
+            std::uint32_t value = 0;
+            const auto [ptr, ec] = std::from_chars(a_text.data(), a_text.data() + a_text.size(), value, 16);
+            if (ec != std::errc{} || ptr != a_text.data() + a_text.size() || value > 0x00FFFFFF) {
+                return false;
+            }
+            a_out = value;
+            return true;
+        }
+
+        [[nodiscard]] bool PathComponentEquals(const std::filesystem::path& a_left,
+                                               const std::filesystem::path& a_right)
+        {
+#ifdef _WIN32
+            return _wcsicmp(a_left.c_str(), a_right.c_str()) == 0;
+#else
+            return a_left == a_right;
+#endif
+        }
+
+        [[nodiscard]] bool IsWithin(const std::filesystem::path& a_root,
+                                    const std::filesystem::path& a_candidate)
+        {
+            auto rootIt = a_root.begin();
+            auto candidateIt = a_candidate.begin();
+            for (; rootIt != a_root.end(); ++rootIt, ++candidateIt) {
+                if (candidateIt == a_candidate.end() || !PathComponentEquals(*rootIt, *candidateIt)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        [[nodiscard]] bool ValidateRelativePath(const std::string& a_text,
+                                                std::filesystem::path& a_out,
+                                                std::string& a_error)
+        {
+            if (a_text.empty()) {
+                a_error = "path is empty";
+                return false;
+            }
+            const std::filesystem::path relative{ a_text };
+            if (relative.is_absolute() || relative.has_root_name() || relative.has_root_directory()) {
+                a_error = "path must be relative";
+                return false;
+            }
+            for (const auto& component : relative) {
+                if (component == "..") {
+                    a_error = "path contains parent traversal";
+                    return false;
+                }
+            }
+            a_out = relative.lexically_normal();
+            return true;
+        }
+
+        [[nodiscard]] bool ResolvePresetPath(const std::filesystem::path& a_manifestPath,
+                                             const std::string& a_text,
+                                             const bool a_requireFile,
+                                             std::filesystem::path& a_out,
+                                             std::string& a_error)
+        {
+            std::filesystem::path relative;
+            if (!ValidateRelativePath(a_text, relative, a_error)) {
+                return false;
+            }
+            if (FoldASCII(relative.extension().string()) != ".npc") {
+                a_error = "preset path must use the .npc extension";
+                return false;
+            }
+
+            std::error_code ec;
+            const auto root = std::filesystem::absolute(a_manifestPath.parent_path(), ec).lexically_normal();
+            if (ec) {
+                a_error = "could not resolve package directory: " + ec.message();
+                return false;
+            }
+            auto candidate = (root / relative).lexically_normal();
+            if (!IsWithin(root, candidate)) {
+                a_error = "preset path escapes the package directory";
+                return false;
+            }
+            if (a_requireFile) {
+                const auto canonicalRoot = std::filesystem::weakly_canonical(root, ec);
+                if (ec) {
+                    a_error = "could not canonicalize package directory: " + ec.message();
+                    return false;
+                }
+                const auto canonicalCandidate = std::filesystem::weakly_canonical(candidate, ec);
+                if (ec || !IsWithin(canonicalRoot, canonicalCandidate)) {
+                    a_error = "preset path resolves outside the package directory";
+                    return false;
+                }
+                if (!std::filesystem::is_regular_file(canonicalCandidate, ec) || ec) {
+                    a_error = "preset file is missing or is not a regular file";
+                    return false;
+                }
+                const auto size = std::filesystem::file_size(canonicalCandidate, ec);
+                if (ec || size == 0 || size > kMaxPresetBytes) {
+                    a_error = "preset file size is outside the accepted range";
+                    return false;
+                }
+                candidate = canonicalCandidate;
+            }
+            a_out = std::move(candidate);
+            return true;
+        }
+
+        [[nodiscard]] bool ParseStringArray(const JsonValue& a_value, const std::string_view a_property,
+                                            const bool a_plugins, std::vector<std::string>& a_strings,
+                                            std::vector<std::filesystem::path>& a_paths,
+                                            ManifestResult& a_result, const std::filesystem::path& a_path)
+        {
+            if (a_value.kind != JsonValue::Kind::kArray) {
+                AddIssue(a_result, a_path, a_value.offset, "wrong_type",
+                         "property '" + std::string(a_property) + "' must be an array");
+                return false;
+            }
+            if (a_value.array.size() > kMaxRequirements) {
+                AddIssue(a_result, a_path, a_value.offset, "limit_exceeded",
+                         "property '" + std::string(a_property) + "' exceeds the requirement limit");
+                return false;
+            }
+            std::unordered_set<std::string> seen;
+            for (const auto& item : a_value.array) {
+                if (item.kind != JsonValue::Kind::kString) {
+                    AddIssue(a_result, a_path, item.offset, "wrong_type",
+                             "property '" + std::string(a_property) + "' must contain strings");
+                    return false;
+                }
+                if (a_plugins) {
+                    if (!IsPluginName(item.string)) {
+                        AddIssue(a_result, a_path, item.offset, "invalid_plugin", "invalid required plugin name");
+                        return false;
+                    }
+                    if (!seen.insert(FoldASCII(item.string)).second) {
+                        AddIssue(a_result, a_path, item.offset, "duplicate_requirement", "duplicate required plugin");
+                        return false;
+                    }
+                    a_strings.push_back(item.string);
+                } else {
+                    std::filesystem::path relative;
+                    std::string error;
+                    if (!ValidateRelativePath(item.string, relative, error)) {
+                        AddIssue(a_result, a_path, item.offset, "invalid_asset_path", error);
+                        return false;
+                    }
+                    if (!seen.insert(FoldASCII(relative.generic_string())).second) {
+                        AddIssue(a_result, a_path, item.offset, "duplicate_requirement", "duplicate required asset");
+                        return false;
+                    }
+                    a_paths.push_back(std::move(relative));
+                }
+            }
+            return true;
+        }
+    }
+
+    std::string Target::CanonicalKey() const
+    {
+        return std::format("{}:{:08x}", FoldASCII(plugin), localFormID);
+    }
+
+    ManifestResult ParsePackageManifest(const std::string_view a_json,
+                                        const std::filesystem::path& a_manifestPath,
+                                        const bool a_requirePresetFiles)
+    {
+        ManifestResult result;
+        if (a_json.size() > kMaxManifestBytes) {
+            AddIssue(result, a_manifestPath, 0, "manifest_too_large", "manifest exceeds 1 MiB safety limit");
+            return result;
+        }
+
+        JsonValue root;
+        JsonReader reader{ a_json };
+        if (!reader.Parse(root)) {
+            AddIssue(result, a_manifestPath, reader.ErrorOffset(), "invalid_json", reader.Error());
+            return result;
+        }
+        if (root.kind != JsonValue::Kind::kObject) {
+            AddIssue(result, a_manifestPath, root.offset, "wrong_type", "manifest root must be an object");
+            return result;
+        }
+        if (!HasOnlyProperties(root, { "$schema", "schemaVersion", "packageId", "priority", "requires", "assignments" },
+                               result, a_manifestPath)) {
+            return result;
+        }
+        if (const auto* schemaHint = root.Find("$schema");
+            schemaHint && schemaHint->kind != JsonValue::Kind::kString) {
+            AddIssue(result, a_manifestPath, schemaHint->offset, "wrong_type",
+                     "property '$schema' has the wrong type");
+            return result;
+        }
+
+        const auto* schema = Require(root, "schemaVersion", JsonValue::Kind::kInteger, result, a_manifestPath);
+        const auto* packageID = Require(root, "packageId", JsonValue::Kind::kString, result, a_manifestPath);
+        const auto* priority = Require(root, "priority", JsonValue::Kind::kInteger, result, a_manifestPath);
+        const auto* requirementsNode = Require(root, "requires", JsonValue::Kind::kObject, result, a_manifestPath);
+        const auto* assignments = Require(root, "assignments", JsonValue::Kind::kArray, result, a_manifestPath);
+        if (!schema || !packageID || !priority || !requirementsNode || !assignments) {
+            return result;
+        }
+        if (schema->integer != 1) {
+            AddIssue(result, a_manifestPath, schema->offset, "unsupported_schema",
+                     "unsupported schemaVersion " + std::to_string(schema->integer));
+            return result;
+        }
+        if (!IsPackageID(packageID->string)) {
+            AddIssue(result, a_manifestPath, packageID->offset, "invalid_package_id",
+                     "packageId must be 3-128 lowercase ASCII letters, digits, '.', '_' or '-'");
+            return result;
+        }
+        if (priority->integer < kMinPriority || priority->integer > kMaxPriority) {
+            AddIssue(result, a_manifestPath, priority->offset, "invalid_priority", "priority is outside the accepted range");
+            return result;
+        }
+        if (assignments->array.empty() || assignments->array.size() > kMaxAssignments) {
+            AddIssue(result, a_manifestPath, assignments->offset, "invalid_assignment_count",
+                     "assignments must contain 1-1024 entries");
+            return result;
+        }
+
+        PackageManifest manifest;
+        manifest.schemaVersion = 1;
+        manifest.packageID = packageID->string;
+        manifest.priority = static_cast<std::int32_t>(priority->integer);
+        manifest.manifestPath = a_manifestPath;
+
+        if (!HasOnlyProperties(*requirementsNode, { "plugins", "assets" }, result, a_manifestPath)) {
+            return result;
+        }
+        const auto* plugins = Require(*requirementsNode, "plugins", JsonValue::Kind::kArray, result, a_manifestPath);
+        const auto* assets = Require(*requirementsNode, "assets", JsonValue::Kind::kArray, result, a_manifestPath);
+        if (!plugins || !assets ||
+            !ParseStringArray(*plugins, "plugins", true, manifest.requirements.plugins,
+                              manifest.requirements.assets, result, a_manifestPath) ||
+            !ParseStringArray(*assets, "assets", false, manifest.requirements.plugins,
+                              manifest.requirements.assets, result, a_manifestPath)) {
+            return result;
+        }
+
+        std::unordered_set<std::string> targets;
+        for (const auto& rawAssignment : assignments->array) {
+            if (rawAssignment.kind != JsonValue::Kind::kObject ||
+                !HasOnlyProperties(rawAssignment, { "target", "preset", "scope" }, result, a_manifestPath)) {
+                if (rawAssignment.kind != JsonValue::Kind::kObject) {
+                    AddIssue(result, a_manifestPath, rawAssignment.offset, "wrong_type", "assignment must be an object");
+                }
+                return result;
+            }
+            const auto* target = Require(rawAssignment, "target", JsonValue::Kind::kObject, result, a_manifestPath);
+            const auto* preset = Require(rawAssignment, "preset", JsonValue::Kind::kString, result, a_manifestPath);
+            const auto* scope = Require(rawAssignment, "scope", JsonValue::Kind::kString, result, a_manifestPath);
+            if (!target || !preset || !scope ||
+                !HasOnlyProperties(*target, { "plugin", "localFormId" }, result, a_manifestPath)) {
+                return result;
+            }
+            const auto* plugin = Require(*target, "plugin", JsonValue::Kind::kString, result, a_manifestPath);
+            const auto* localFormID = Require(*target, "localFormId", JsonValue::Kind::kString, result, a_manifestPath);
+            if (!plugin || !localFormID) {
+                return result;
+            }
+            if (!IsPluginName(plugin->string)) {
+                AddIssue(result, a_manifestPath, plugin->offset, "invalid_plugin", "target plugin name is invalid");
+                return result;
+            }
+            Assignment assignment;
+            assignment.target.plugin = plugin->string;
+            if (!ParseLocalFormID(localFormID->string, assignment.target.localFormID)) {
+                AddIssue(result, a_manifestPath, localFormID->offset, "invalid_local_form_id",
+                         "localFormId must be 1-8 hexadecimal digits no greater than 00FFFFFF");
+                return result;
+            }
+            if (scope->string != "faceAndBody") {
+                AddIssue(result, a_manifestPath, scope->offset, "unsupported_scope",
+                         "scope must be 'faceAndBody' in schema version 1");
+                return result;
+            }
+            std::string presetError;
+            if (!ResolvePresetPath(a_manifestPath, preset->string, a_requirePresetFiles,
+                                   assignment.presetPath, presetError)) {
+                AddIssue(result, a_manifestPath, preset->offset, "invalid_preset", presetError);
+                return result;
+            }
+            const auto targetKey = assignment.target.CanonicalKey();
+            if (!targets.insert(targetKey).second) {
+                AddIssue(result, a_manifestPath, target->offset, "duplicate_target",
+                         "package contains more than one assignment for target " + targetKey);
+                return result;
+            }
+            manifest.assignments.push_back(std::move(assignment));
+        }
+
+        result.manifest = std::move(manifest);
+        return result;
+    }
+
+    ManifestResult LoadPackageManifest(const std::filesystem::path& a_manifestPath,
+                                       const bool a_requirePresetFiles)
+    {
+        ManifestResult result;
+        std::error_code ec;
+        const auto size = std::filesystem::file_size(a_manifestPath, ec);
+        if (ec || size > kMaxManifestBytes) {
+            AddIssue(result, a_manifestPath, 0, "manifest_read_failed",
+                     ec ? "could not stat manifest: " + ec.message() : "manifest exceeds 1 MiB safety limit");
+            return result;
+        }
+        std::ifstream stream{ a_manifestPath, std::ios::binary };
+        std::string text(static_cast<std::size_t>(size), '\0');
+        if (!stream.is_open() || (size != 0 && !stream.read(text.data(), static_cast<std::streamsize>(text.size())))) {
+            AddIssue(result, a_manifestPath, 0, "manifest_read_failed", "could not read complete manifest");
+            return result;
+        }
+        return ParsePackageManifest(text, a_manifestPath, a_requirePresetFiles);
+    }
+
+    DiscoveryResult DiscoverPackages(const std::filesystem::path& a_packagesRoot,
+                                     const bool a_requirePresetFiles)
+    {
+        DiscoveryResult result;
+        std::error_code ec;
+        if (!std::filesystem::is_directory(a_packagesRoot, ec) || ec) {
+            result.issues.push_back({ a_packagesRoot, 0, "package_root_missing", "package root is missing or is not a directory" });
+            return result;
+        }
+        std::vector<std::filesystem::path> manifests;
+        std::filesystem::recursive_directory_iterator it{ a_packagesRoot,
+            std::filesystem::directory_options::skip_permission_denied, ec };
+        const std::filesystem::recursive_directory_iterator end;
+        for (; !ec && it != end; it.increment(ec)) {
+            if (it->is_regular_file(ec) && !ec && FoldASCII(it->path().filename().string()) == "package.json") {
+                manifests.push_back(it->path());
+                if (manifests.size() > kMaxPackages) {
+                    result.issues.push_back({ a_packagesRoot, 0, "package_limit_exceeded", "package count exceeds safety limit" });
+                    return result;
+                }
+            }
+        }
+        if (ec) {
+            result.issues.push_back({ a_packagesRoot, 0, "package_scan_failed", ec.message() });
+            return result;
+        }
+        std::ranges::sort(manifests, [](const auto& a_left, const auto& a_right) {
+            return FoldASCII(a_left.generic_string()) < FoldASCII(a_right.generic_string());
+        });
+        for (const auto& manifestPath : manifests) {
+            auto parsed = LoadPackageManifest(manifestPath, a_requirePresetFiles);
+            result.issues.insert(result.issues.end(),
+                                 std::make_move_iterator(parsed.issues.begin()),
+                                 std::make_move_iterator(parsed.issues.end()));
+            if (parsed.manifest) {
+                result.packages.push_back(std::move(*parsed.manifest));
+            }
+        }
+
+        std::unordered_map<std::string, std::size_t> counts;
+        for (const auto& package : result.packages) {
+            ++counts[FoldASCII(package.packageID)];
+        }
+        std::erase_if(result.packages, [&](const auto& package) {
+            if (counts[FoldASCII(package.packageID)] == 1) {
+                return false;
+            }
+            result.issues.push_back({ package.manifestPath, 0, "duplicate_package_id",
+                                      "every package using duplicate packageId '" + package.packageID + "' was rejected" });
+            return true;
+        });
+        return result;
+    }
+
+    AssetRequirementResult CheckRequiredAssets(
+        const PackageManifest& a_package,
+        const std::filesystem::path& a_dataRoot)
+    {
+        AssetRequirementResult result;
+        if (a_dataRoot.empty()) {
+            result.missing = a_package.requirements.assets;
+            return result;
+        }
+        for (const auto& relative : a_package.requirements.assets) {
+            std::error_code ec;
+            if (!std::filesystem::is_regular_file(a_dataRoot / relative, ec) || ec) {
+                result.missing.push_back(relative);
+            }
+        }
+        return result;
+    }
+
+    SelectionResult SelectAssignments(const std::vector<PackageManifest>& a_packages)
+    {
+        struct Candidate
+        {
+            const PackageManifest* package;
+            const Assignment* assignment;
+        };
+        std::map<std::string, std::vector<Candidate>> groups;
+        for (const auto& package : a_packages) {
+            for (const auto& assignment : package.assignments) {
+                groups[assignment.target.CanonicalKey()].push_back({ &package, &assignment });
+            }
+        }
+
+        SelectionResult result;
+        for (auto& [targetKey, candidates] : groups) {
+            std::ranges::sort(candidates, [](const Candidate& a_left, const Candidate& a_right) {
+                if (a_left.package->priority != a_right.package->priority) {
+                    return a_left.package->priority > a_right.package->priority;
+                }
+                return a_left.package->packageID < a_right.package->packageID;
+            });
+            const auto& winner = candidates.front();
+            result.winners.push_back({ winner.assignment->target, winner.assignment->presetPath,
+                                       winner.package->packageID, winner.package->priority });
+            for (const auto& candidate : candidates) {
+                const bool won = std::addressof(candidate) == std::addressof(candidates.front());
+                result.decisions.push_back({ targetKey, candidate.package->packageID,
+                                             candidate.package->priority, won,
+                                             won ? "winner" : "shadowed_by_" + winner.package->packageID });
+            }
+        }
+        return result;
+    }
+}
