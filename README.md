@@ -29,7 +29,7 @@ Data/SFSE/Plugins/OSFIdentity/Packs/
   Sarah Reimagined/       # arbitrary folder name; this is the pack ID
     package.json          # optional
     Companion_SarahMorgan.npc
-    Companion_SarahMorgan.identity.json
+    Companion_SarahMorgan.json
 ```
 
 Removing a pack promotes the next valid one, or restores the original

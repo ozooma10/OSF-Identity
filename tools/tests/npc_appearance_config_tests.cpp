@@ -194,7 +194,7 @@ int main()
     Write(conventionRoot / "package.json",
           R"({"schemaVersion":1,"priority":100,"requires":{"plugins":["SharedAssets.esm"],"assets":["Textures/Shared.dds"]},"presetConvention":"editorIdFilename"})");
     Write(conventionRoot / "Crew_ConstellationDaniel.npc", "fixture");
-    Write(conventionRoot / "Crew_ConstellationDaniel.identity.json",
+    Write(conventionRoot / "Crew_ConstellationDaniel.json",
           R"({"schemaVersion":1,"requires":{"plugins":["ExampleHairMod.esm"],"assets":["Meshes/Hair/Example.mesh"]}})");
     Write(conventionRoot / "Companion_SarahMorgan.npc", "fixture");
     const auto convention = NA::LoadPackageManifest(conventionRoot / "package.json", true);
@@ -216,10 +216,10 @@ int main()
     Write(isolatedRoot / "package.json",
           R"({"schemaVersion":1,"priority":0,"requires":{"plugins":[],"assets":[]},"presetConvention":"editorIdFilename"})");
     Write(isolatedRoot / "BrokenSidecar.npc", "fixture");
-    Write(isolatedRoot / "BrokenSidecar.identity.json", "{");
+    Write(isolatedRoot / "BrokenSidecar.json", "{");
     Write(isolatedRoot / "ValidEditorID.npc", "fixture");
     Write(isolatedRoot / "Invalid-Editor-ID.npc", "fixture");
-    Write(isolatedRoot / "Orphan.identity.json",
+    Write(isolatedRoot / "Orphan.json",
           R"({"schemaVersion":1,"requires":{"plugins":[],"assets":[]}})");
     Write(isolatedRoot / "Nested" / "NestedEditorID.npc", "fixture");
     const auto isolated = NA::LoadPackageManifest(isolatedRoot / "package.json", true);
@@ -295,6 +295,8 @@ int main()
 
     const auto implicitRoot = root / "implicit-discovery";
     Write(implicitRoot / "Author.MyPack" / "Crew_ConstellationDaniel.npc", "fixture");
+    Write(implicitRoot / "Author.MyPack" / "Crew_ConstellationDaniel.json",
+          R"({"schemaVersion":1,"requires":{"plugins":[],"assets":[]}})");
     Write(implicitRoot / "My Cool Pack!" / "Companion_SarahMorgan.npc", "fixture");
     Write(implicitRoot / "ab" / "Companion_SarahMorgan.npc", "fixture");
     Write(implicitRoot / "author.suspect" / "package.jsn", "{}");

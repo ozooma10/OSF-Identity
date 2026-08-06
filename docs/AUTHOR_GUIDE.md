@@ -10,7 +10,7 @@ holding one preset file per target NPC — no manifest required:
 Data/SFSE/Plugins/OSFIdentity/Packs/
   Sarah Reimagined/               # folder name is the pack ID
     Companion_SarahMorgan.npc     # target NPC's EditorID
-    Companion_SarahMorgan.identity.json  # optional per-preset dependencies
+    Companion_SarahMorgan.json      # optional per-preset dependencies
 ```
 
 To build one:
@@ -76,8 +76,8 @@ traversal, and absolute preset paths.
 
 ## Per-preset dependencies
 
-If a single preset needs optional mods, add a sidecar with the same filename
-stem:
+If a single preset needs optional mods, add `<EditorID>.json` beside its
+matching `<EditorID>.npc` file:
 
 ```json
 {

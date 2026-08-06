@@ -508,7 +508,7 @@ namespace NpcAppearance
 
                 Requirements presetRequirements;
                 const auto sidecarName = FoldASCII(
-                    file.stem().string() + ".identity.json");
+                    file.stem().string() + ".json");
                 if (const auto sidecar = filesByName.find(sidecarName);
                     sidecar != filesByName.end()) {
                     auto metadata = LoadPresetMetadata(sidecar->second, packageRoot);
@@ -538,12 +538,12 @@ namespace NpcAppearance
 
             for (const auto& file : files) {
                 const auto filename = file.filename().string();
-                if (!EndsWithFolded(filename, ".identity.json")) {
+                if (FoldASCII(file.extension().string()) != ".json" ||
+                    FoldASCII(filename) == "package.json") {
                     continue;
                 }
-                const auto stemLength = filename.size() - std::string_view{ ".identity.json" }.size();
                 const auto presetName = FoldASCII(
-                    filename.substr(0, stemLength) + ".npc");
+                    file.stem().string() + ".npc");
                 if (!filesByName.contains(presetName)) {
                     AddIssue(a_result, file, 0, "orphan_preset_metadata",
                              "preset metadata has no adjacent .npc file");
@@ -571,10 +571,18 @@ namespace NpcAppearance
         [[nodiscard]] bool IsSuspectRootFile(const std::filesystem::path& a_file)
         {
             const auto filename = FoldASCII(a_file.filename().string());
-            if (filename == "package.json" || EndsWithFolded(filename, ".identity.json")) {
+            if (filename == "package.json") {
                 return false;
             }
             const auto extension = FoldASCII(a_file.extension().string());
+            if (extension == ".json") {
+                std::error_code ec;
+                const auto presetPath = a_file.parent_path() /
+                    (a_file.stem().string() + ".npc");
+                if (std::filesystem::is_regular_file(presetPath, ec) && !ec) {
+                    return false;
+                }
+            }
             return extension == ".json" || extension == ".jsonc" ||
                 filename.starts_with("package.");
         }
