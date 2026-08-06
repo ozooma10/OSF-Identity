@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:osf-identity:package:v1",
   "title": "OSF Identity appearance pack manifest",
-  "description": "Optional pack manifest. A pack without a package.json is discovered from its folder name (lowercased) at priority 0 using the pluginFolderLocalFormId convention; add this file only to set a priority, share requires across presets, or use explicit assignments.",
+  "description": "Optional pack manifest. A pack without a package.json is discovered from its folder name (lowercased) at priority 0 using flat EditorID filenames; add this file only to set a priority, share requires across presets, or use explicit assignments.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -41,7 +41,7 @@
       "$ref": "#/$defs/requirements"
     },
     "presetConvention": {
-      "const": "pluginFolderLocalFormId"
+      "const": "editorIdFilename"
     },
     "assignments": {
       "type": "array",
@@ -60,16 +60,12 @@
             "type": "object",
             "additionalProperties": false,
             "required": [
-              "plugin",
-              "localFormId"
+              "editorId"
             ],
             "properties": {
-              "plugin": {
-                "$ref": "#/$defs/plugin"
-              },
-              "localFormId": {
+              "editorId": {
                 "type": "string",
-                "pattern": "^(?:[0-9A-Fa-f]{1,6}|0[0-9A-Fa-f]{6}|00[0-9A-Fa-f]{6})$"
+                "pattern": "^[A-Za-z0-9_]{1,128}$"
               }
             }
           },

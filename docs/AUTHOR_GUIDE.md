@@ -9,9 +9,8 @@ holding one preset file per target NPC — no manifest required:
 ```text
 Data/SFSE/Plugins/OSFIdentity/Packs/
   author.my-pack/                 # folder name is the packageId
-    Starfield.esm/                # plugin that owns the base NPC
-      00005983.npc                # that plugin's local FormID (Sarah)
-      00005983.identity.json      # optional per-preset dependencies
+    Companion_SarahMorgan.npc     # target NPC's EditorID
+    Companion_SarahMorgan.identity.json  # optional per-preset dependencies
 ```
 
 To build one:
@@ -19,17 +18,16 @@ To build one:
 1. **Export a preset** with Creation Kit `1.16.244` or the verified
    CharGenMenu/SFEE `1.16.244` build, and confirm the producer reloads the
    exact export. Never hand-edit the `.npc`.
-2. **Name it after the target.** Directory = owning plugin, filename = that
-   plugin's local FormID (8-digit hex, load-order index zeroed out). Presets
-   must sit directly in the plugin directory — nested folders are not scanned.
+2. **Name it after the target.** The filename stem must be the target NPC's
+   exact EditorID, using 1-128 ASCII letters, digits, or underscores. Presets
+   sit directly in the pack folder; nested folders are not scanned.
 3. **Name the pack folder.** Lowercased, it becomes your `packageId`, so it
    must be 3-128 ASCII letters, digits, `.`, `_`, or `-`, starting with a
    letter or digit. `Author.MyPack` becomes `author.mypack`; a folder with
    spaces, punctuation, or non-ASCII characters is rejected with
-   `invalid_package_folder_name` and you must rename it or add a manifest. In a
-   manifest-less pack, convention presets belong directly under owning-plugin
-   directories. A stray `package.jsn`, `notes.json`, or a `package.json` buried
-   in a subfolder rejects the whole pack rather than being ignored.
+   `invalid_package_folder_name` and you must rename it or add a manifest. A
+   stray `package.jsn`, `notes.json`, or a `package.json` buried in a subfolder
+   rejects the whole pack rather than being ignored.
 4. **Declare dependencies.** Optional hair, beard, or asset mods go in a
    sidecar (per preset, below) or in a manifest `requires` (pack-wide).
    Undeclared dependencies are the top cause of "works on my machine" — users
@@ -52,7 +50,7 @@ priority, `requires` shared by every preset, or explicit assignments:
   "packageId": "author.my-pack",
   "priority": 100,
   "requires": { "plugins": [], "assets": [] },
-  "presetConvention": "pluginFolderLocalFormId"
+  "presetConvention": "editorIdFilename"
 }
 ```
 
@@ -66,10 +64,9 @@ A manifest overrides the folder name, so `packageId` no longer has to match it.
   packs target the same NPC, the highest priority wins; ties go to ascending
   `packageId`. Mod-manager order is irrelevant. The `100` used in these
   examples outranks every manifest-less pack.
-- `requires` - plugins and loose Data-relative assets every preset needs. The
-  owning plugin of each preset is always an implicit requirement. A missing
-  pack-wide requirement disables the whole pack.
-- Exactly one of `presetConvention: "pluginFolderLocalFormId"` or
+- `requires` - plugins and loose Data-relative assets every preset needs. A
+  missing pack-wide requirement disables the whole pack.
+- Exactly one of `presetConvention: "editorIdFilename"` or
   `assignments`.
 
 Two packs that resolve to the same `packageId` — including a folder name
@@ -96,11 +93,10 @@ stem:
 }
 ```
 
-Sidecar, manifest, and implicit owning-plugin requirements are additive. A
-missing or malformed sidecar disables only its preset; the rest of the pack
-and lower-priority candidates still compete. List every plugin needed to
-resolve non-vanilla headparts and every loose asset that needs an availability
-check.
+Sidecar and manifest requirements are additive. A missing or malformed sidecar
+disables only its preset; the rest of the pack and lower-priority candidates
+still compete. List every plugin needed to resolve non-vanilla headparts and
+every loose asset that needs an availability check.
 
 ## Explicit assignments
 
@@ -115,8 +111,8 @@ directly, with per-assignment `requires`:
   "requires": { "plugins": [], "assets": [] },
   "assignments": [
     {
-      "target": { "plugin": "Starfield.esm", "localFormId": "00005983" },
-      "preset": "Starfield.esm/00005983.npc",
+      "target": { "editorId": "Companion_SarahMorgan" },
+      "preset": "Companion_SarahMorgan.npc",
       "scope": "faceAndBody",
       "requires": { "plugins": ["ExampleHairMod.esm"], "assets": [] }
     }
@@ -132,7 +128,9 @@ directly, with per-assignment `requires`:
 - Only the two producers above are supported. CharGenMenu's empty
   `NPCFormEditorID` and quantized tint encoding are part of its verified
   contract; renaming arbitrary JSON to `.npc` does not make it compatible.
-- Do not use EditorIDs or load-order-prefixed runtime FormIDs as filenames.
+- Use the exact target EditorID as the filename stem. EditorID matching and
+  conflict detection are case-insensitive; case-only duplicate filenames are
+  rejected.
 - Do not bundle the OSF Identity DLL in a pack — keeping framework, story
   mod, and appearance pack separate stops optional mods from becoming
   story-mod dependencies.

@@ -3,7 +3,6 @@
 #include "NpcAppearance/Json.h"
 
 #include <algorithm>
-#include <charconv>
 #include <cctype>
 #include <cwchar>
 #include <fstream>
@@ -105,18 +104,16 @@ namespace NpcAppearance
             });
         }
 
-        [[nodiscard]] bool ParseLocalFormID(const std::string_view a_text, std::uint32_t& a_out)
+        [[nodiscard]] bool IsEditorID(const std::string_view a_text)
         {
-            if (a_text.empty() || a_text.size() > 8 || a_text.starts_with("0x") || a_text.starts_with("0X")) {
+            if (a_text.empty() || a_text.size() > 128) {
                 return false;
             }
-            std::uint32_t value = 0;
-            const auto [ptr, ec] = std::from_chars(a_text.data(), a_text.data() + a_text.size(), value, 16);
-            if (ec != std::errc{} || ptr != a_text.data() + a_text.size() || value > 0x00FFFFFF) {
-                return false;
-            }
-            a_out = value;
-            return true;
+            return std::ranges::all_of(a_text, [](const unsigned char a_ch) {
+                return (a_ch >= 'A' && a_ch <= 'Z') ||
+                       (a_ch >= 'a' && a_ch <= 'z') ||
+                       (a_ch >= '0' && a_ch <= '9') || a_ch == '_';
+            });
         }
 
         [[nodiscard]] bool PathComponentEquals(const std::filesystem::path& a_left,
@@ -302,7 +299,6 @@ namespace NpcAppearance
         [[nodiscard]] bool MergeRequirements(
             const Requirements& a_package,
             const Requirements& a_assignment,
-            const std::string_view a_targetPlugin,
             Requirements& a_out,
             std::string& a_error)
         {
@@ -324,8 +320,6 @@ namespace NpcAppearance
             for (const auto& plugin : a_assignment.plugins) {
                 if (!addPlugin(plugin)) return false;
             }
-            if (!addPlugin(a_targetPlugin)) return false;
-
             std::unordered_set<std::string> assets;
             const auto addAsset = [&](const std::filesystem::path& a_asset) {
                 const auto folded = FoldASCII(a_asset.generic_string());
@@ -467,26 +461,25 @@ namespace NpcAppearance
                 return;
             }
 
-            std::vector<std::filesystem::path> pluginDirectories;
+            std::vector<std::filesystem::path> files;
             std::filesystem::directory_iterator rootIt{
                 packageRoot, std::filesystem::directory_options::skip_permission_denied, ec };
             const std::filesystem::directory_iterator end;
             for (; !ec && rootIt != end; rootIt.increment(ec)) {
-                if (rootIt->is_directory(ec) && !ec) {
-                    pluginDirectories.push_back(rootIt->path());
-                } else if (!ec && rootIt->is_regular_file(ec) && !ec &&
-                           (FoldASCII(rootIt->path().extension().string()) == ".npc" ||
-                            EndsWithFolded(rootIt->path().filename().string(), ".identity.json"))) {
+                if (rootIt->is_regular_file(ec) && !ec) {
+                    files.push_back(rootIt->path());
+                } else if (!ec && rootIt->is_directory(ec) && !ec) {
                     AddIssue(a_result, rootIt->path(), 0, "invalid_convention_layout",
-                             "preset and metadata files must be inside <OwningPlugin>/");
+                             "nested preset directories are not supported; EditorID presets belong at the pack root");
                 }
             }
             if (ec) {
                 AddIssue(a_result, packageRoot, 0, "preset_scan_failed", ec.message());
                 return;
             }
-            std::ranges::sort(pluginDirectories, [](const auto& a_left, const auto& a_right) {
-                return FoldASCII(a_left.generic_string()) < FoldASCII(a_right.generic_string());
+            std::ranges::sort(files, [](const auto& a_left, const auto& a_right) {
+                return FoldASCII(a_left.filename().string()) <
+                    FoldASCII(a_right.filename().string());
             });
 
             struct Candidate
@@ -495,109 +488,77 @@ namespace NpcAppearance
                 std::filesystem::path sourcePath;
             };
             std::vector<Candidate> candidates;
-            for (const auto& pluginDirectory : pluginDirectories) {
-                const auto plugin = pluginDirectory.filename().string();
-                if (!IsPluginName(plugin)) {
-                    AddIssue(a_result, pluginDirectory, 0, "invalid_convention_plugin",
-                             "preset directory name must be an ESM, ESP, or ESL plugin filename");
+            std::unordered_map<std::string, std::filesystem::path> filesByName;
+            for (const auto& file : files) {
+                const auto folded = FoldASCII(file.filename().string());
+                if (!filesByName.emplace(folded, file).second) {
+                    AddIssue(a_result, file, 0, "duplicate_convention_filename",
+                             "case-insensitive duplicate filename is not supported");
+                }
+            }
+
+            for (const auto& file : files) {
+                if (FoldASCII(file.extension().string()) != ".npc") {
+                    continue;
+                }
+                const auto editorID = file.stem().string();
+                if (!IsEditorID(editorID)) {
+                    AddIssue(a_result, file, 0, "invalid_convention_editor_id",
+                             "preset filename stem must be a 1-128 character ASCII EditorID using letters, digits, or '_'");
                     continue;
                 }
 
-                std::vector<std::filesystem::path> files;
-                std::filesystem::directory_iterator pluginIt{
-                    pluginDirectory,
-                    std::filesystem::directory_options::skip_permission_denied, ec };
-                for (; !ec && pluginIt != end; pluginIt.increment(ec)) {
-                    if (pluginIt->is_regular_file(ec) && !ec) {
-                        files.push_back(pluginIt->path());
-                    } else if (!ec && pluginIt->is_directory(ec) && !ec) {
-                        AddIssue(a_result, pluginIt->path(), 0, "invalid_convention_layout",
-                                 "nested preset directories are not supported");
-                    }
-                }
-                if (ec) {
-                    AddIssue(a_result, pluginDirectory, 0, "preset_scan_failed", ec.message());
-                    ec.clear();
+                Assignment assignment;
+                assignment.target = Target{ editorID };
+                std::string presetError;
+                if (!ResolvePresetPath(a_manifest.manifestPath, file.filename().generic_string(),
+                                       a_requirePresetFiles, assignment.presetPath,
+                                       presetError)) {
+                    AddIssue(a_result, file, 0, "invalid_preset", presetError);
                     continue;
                 }
-                std::ranges::sort(files, [](const auto& a_left, const auto& a_right) {
-                    return FoldASCII(a_left.filename().string()) <
-                        FoldASCII(a_right.filename().string());
-                });
-                std::unordered_map<std::string, std::filesystem::path> filesByName;
-                for (const auto& file : files) {
-                    const auto folded = FoldASCII(file.filename().string());
-                    if (!filesByName.emplace(folded, file).second) {
-                        AddIssue(a_result, file, 0, "duplicate_convention_filename",
-                                 "case-insensitive duplicate filename is not supported");
+
+                Requirements presetRequirements;
+                const auto sidecarName = FoldASCII(
+                    file.stem().string() + ".identity.json");
+                if (const auto sidecar = filesByName.find(sidecarName);
+                    sidecar != filesByName.end()) {
+                    auto metadata = LoadPresetMetadata(sidecar->second, packageRoot);
+                    a_result.issues.insert(
+                        a_result.issues.end(),
+                        std::make_move_iterator(metadata.issues.begin()),
+                        std::make_move_iterator(metadata.issues.end()));
+                    if (!metadata.requirements) {
+                        continue;
                     }
+                    presetRequirements = std::move(*metadata.requirements);
                 }
-
-                for (const auto& file : files) {
-                    if (FoldASCII(file.extension().string()) != ".npc") {
-                        continue;
-                    }
-                    std::uint32_t localFormID = 0;
-                    if (!ParseLocalFormID(file.stem().string(), localFormID)) {
-                        AddIssue(a_result, file, 0, "invalid_convention_form_id",
-                                 "preset filename must be a plugin-local hexadecimal FormID no greater than 00FFFFFF");
-                        continue;
-                    }
-
-                    Assignment assignment;
-                    assignment.target = Target{ plugin, localFormID };
-                    const auto relative = pluginDirectory.filename() / file.filename();
-                    std::string presetError;
-                    if (!ResolvePresetPath(a_manifest.manifestPath, relative.generic_string(),
-                                           a_requirePresetFiles, assignment.presetPath,
-                                           presetError)) {
-                        AddIssue(a_result, file, 0, "invalid_preset", presetError);
-                        continue;
-                    }
-
-                    Requirements presetRequirements;
-                    const auto sidecarName = FoldASCII(
-                        file.stem().string() + ".identity.json");
-                    if (const auto sidecar = filesByName.find(sidecarName);
-                        sidecar != filesByName.end()) {
-                        auto metadata = LoadPresetMetadata(sidecar->second, packageRoot);
-                        a_result.issues.insert(
-                            a_result.issues.end(),
-                            std::make_move_iterator(metadata.issues.begin()),
-                            std::make_move_iterator(metadata.issues.end()));
-                        if (!metadata.requirements) {
-                            continue;
-                        }
-                        presetRequirements = std::move(*metadata.requirements);
-                    }
-                    std::string requirementsError;
-                    if (!MergeRequirements(a_manifest.requirements, presetRequirements,
-                                           plugin, assignment.requirements,
-                                           requirementsError)) {
-                        AddIssue(a_result, file, 0, "effective_requirements_invalid",
-                                 requirementsError);
-                        continue;
-                    }
-                    if (candidates.size() >= kMaxAssignments) {
-                        AddIssue(a_result, file, 0, "assignment_limit_exceeded",
-                                 "convention preset count exceeds the 1024-assignment safety limit");
-                        return;
-                    }
-                    candidates.push_back({ std::move(assignment), file });
+                std::string requirementsError;
+                if (!MergeRequirements(a_manifest.requirements, presetRequirements,
+                                       assignment.requirements, requirementsError)) {
+                    AddIssue(a_result, file, 0, "effective_requirements_invalid",
+                             requirementsError);
+                    continue;
                 }
+                if (candidates.size() >= kMaxAssignments) {
+                    AddIssue(a_result, file, 0, "assignment_limit_exceeded",
+                             "convention preset count exceeds the 1024-assignment safety limit");
+                    return;
+                }
+                candidates.push_back({ std::move(assignment), file });
+            }
 
-                for (const auto& file : files) {
-                    const auto filename = file.filename().string();
-                    if (!EndsWithFolded(filename, ".identity.json")) {
-                        continue;
-                    }
-                    const auto stemLength = filename.size() - std::string_view{ ".identity.json" }.size();
-                    const auto presetName = FoldASCII(
-                        filename.substr(0, stemLength) + ".npc");
-                    if (!filesByName.contains(presetName)) {
-                        AddIssue(a_result, file, 0, "orphan_preset_metadata",
-                                 "preset metadata has no adjacent .npc file");
-                    }
+            for (const auto& file : files) {
+                const auto filename = file.filename().string();
+                if (!EndsWithFolded(filename, ".identity.json")) {
+                    continue;
+                }
+                const auto stemLength = filename.size() - std::string_view{ ".identity.json" }.size();
+                const auto presetName = FoldASCII(
+                    filename.substr(0, stemLength) + ".npc");
+                if (!filesByName.contains(presetName)) {
+                    AddIssue(a_result, file, 0, "orphan_preset_metadata",
+                             "preset metadata has no adjacent .npc file");
                 }
             }
 
@@ -622,7 +583,7 @@ namespace NpcAppearance
         [[nodiscard]] bool IsSuspectRootFile(const std::filesystem::path& a_file)
         {
             const auto filename = FoldASCII(a_file.filename().string());
-            if (filename == "package.json") {
+            if (filename == "package.json" || EndsWithFolded(filename, ".identity.json")) {
                 return false;
             }
             const auto extension = FoldASCII(a_file.extension().string());
@@ -669,7 +630,7 @@ namespace NpcAppearance
             manifest.packageID = packageID;
             manifest.priority = 0;
             manifest.manifestPath = a_packageDirectory / "package.json";
-            manifest.format = PackageFormat::kPluginFolderLocalFormID;
+            manifest.format = PackageFormat::kEditorIDFilename;
             manifest.implicitManifest = true;
             DiscoverConventionAssignments(manifest, result, a_requirePresetFiles);
             result.manifest = std::move(manifest);
@@ -713,8 +674,7 @@ namespace NpcAppearance
                 AddIssue(result, suspects.front(), 0, "suspect_package_root_file",
                          "pack has no package.json; rename '" +
                              suspects.front().filename().string() +
-                             "' to 'package.json' or remove it; convention presets belong in "
-                             "<OwningPlugin>/ directories");
+                             "' to 'package.json' or remove it; EditorID presets belong at the pack root");
                 return result;
             }
             if (std::filesystem::path nested; FindNestedManifest(a_packageDirectory, nested)) {
@@ -729,19 +689,7 @@ namespace NpcAppearance
 
     std::string Target::CanonicalKey() const
     {
-        return std::format("{}:{:08x}", FoldASCII(plugin), localFormID);
-    }
-
-    bool IsLocalFormIDValidForTier(
-        const std::uint32_t a_localFormID,
-        const PluginTier a_tier) noexcept
-    {
-        switch (a_tier) {
-        case PluginTier::kSmall: return a_localFormID <= 0xFFF;
-        case PluginTier::kMedium: return a_localFormID <= 0xFFFF;
-        case PluginTier::kFull: return a_localFormID <= 0x00FFFFFF;
-        }
-        return false;
+        return FoldASCII(editorID);
     }
 
     ManifestResult ParsePackageManifest(const std::string_view a_json,
@@ -820,9 +768,9 @@ namespace NpcAppearance
                      "assignments must contain 1-1024 entries");
             return result;
         }
-        if (convention && convention->string != kPluginFolderLocalFormIDConvention) {
+        if (convention && convention->string != kEditorIDFilenameConvention) {
             AddIssue(result, a_manifestPath, convention->offset, "unsupported_preset_convention",
-                     "presetConvention must be 'pluginFolderLocalFormId' in schema version 1");
+                     "presetConvention must be 'editorIdFilename' in schema version 1");
             return result;
         }
 
@@ -831,7 +779,7 @@ namespace NpcAppearance
         manifest.packageID = packageID->string;
         manifest.priority = static_cast<std::int32_t>(priority->integer);
         manifest.manifestPath = a_manifestPath;
-        manifest.format = convention ? PackageFormat::kPluginFolderLocalFormID :
+        manifest.format = convention ? PackageFormat::kEditorIDFilename :
                                        PackageFormat::kExplicitAssignments;
 
         if (!ParseRequirementsNode(
@@ -858,29 +806,22 @@ namespace NpcAppearance
                 const auto* scope = Require(rawAssignment, "scope", JsonValue::Kind::kString,
                                             result, a_manifestPath);
                 if (!target || !preset || !scope ||
-                    !HasOnlyProperties(*target, { "plugin", "localFormId" },
+                    !HasOnlyProperties(*target, { "editorId" },
                                        result, a_manifestPath)) {
                     return result;
                 }
-                const auto* plugin = Require(*target, "plugin", JsonValue::Kind::kString,
-                                             result, a_manifestPath);
-                const auto* localFormID = Require(*target, "localFormId", JsonValue::Kind::kString,
-                                                  result, a_manifestPath);
-                if (!plugin || !localFormID) {
+                const auto* editorID = Require(*target, "editorId", JsonValue::Kind::kString,
+                                               result, a_manifestPath);
+                if (!editorID) {
                     return result;
                 }
-                if (!IsPluginName(plugin->string)) {
-                    AddIssue(result, a_manifestPath, plugin->offset, "invalid_plugin",
-                             "target plugin name is invalid");
+                if (!IsEditorID(editorID->string)) {
+                    AddIssue(result, a_manifestPath, editorID->offset, "invalid_editor_id",
+                             "editorId must be 1-128 ASCII letters, digits, or '_'");
                     return result;
                 }
                 Assignment assignment;
-                assignment.target.plugin = plugin->string;
-                if (!ParseLocalFormID(localFormID->string, assignment.target.localFormID)) {
-                    AddIssue(result, a_manifestPath, localFormID->offset, "invalid_local_form_id",
-                             "localFormId must be 1-8 hexadecimal digits no greater than 00FFFFFF");
-                    return result;
-                }
+                assignment.target.editorID = editorID->string;
                 if (scope->string != "faceAndBody") {
                     AddIssue(result, a_manifestPath, scope->offset, "unsupported_scope",
                              "scope must be 'faceAndBody' in schema version 1");
@@ -896,7 +837,7 @@ namespace NpcAppearance
                 }
                 std::string requirementsError;
                 if (!MergeRequirements(manifest.requirements, assignmentRequirements,
-                                       plugin->string, assignment.requirements,
+                                       assignment.requirements,
                                        requirementsError)) {
                     AddIssue(result, a_manifestPath, rawAssignment.offset,
                              "effective_requirements_invalid", requirementsError);

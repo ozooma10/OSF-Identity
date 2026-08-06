@@ -2103,8 +2103,7 @@ namespace NpcAppearance
                 const std::vector<std::string> trialArgs{
                     "npcapp",
                     "targetpersistent",
-                    assignment->target.plugin,
-                    std::format("{:08X}", assignment->target.localFormID),
+                    assignment->target.editorID,
                     std::format("{:08X}", ready->refID),
                     assignment->presetPath.string()
                 };
@@ -2141,8 +2140,7 @@ namespace NpcAppearance
             const std::vector<std::string> trialArgs{
                 "npcapp",
                 "targethold",
-                assignment->target.plugin,
-                std::format("{:08X}", assignment->target.localFormID),
+                assignment->target.editorID,
                 std::format("{:08X}", ready->refID),
                 assignment->presetPath.string()
             };
@@ -2204,82 +2202,35 @@ namespace NpcAppearance
 
         // ==================================================================
         // Target resolution
-        // plugin name + local FormID -> runtime FormID -> eligible unique
-        // HumanRace TESNPC, with per-tier (full/medium/small) arithmetic.
+        // EditorID -> eligible unique HumanRace TESNPC.
         // ==================================================================
-        struct LoadedPlugin
-        {
-            RE::TESFile* file{ nullptr };
-            PluginTier tier{ PluginTier::kFull };
-            std::uint32_t index{ 0 };
-        };
-
-        [[nodiscard]] std::optional<LoadedPlugin> FindLoadedPlugin(const std::string_view a_name)
+        [[nodiscard]] bool FindLoadedPlugin(const std::string_view a_name)
         {
             const auto* handler = RE::TESDataHandler::GetSingleton();
             if (!handler) {
-                return std::nullopt;
+                return false;
             }
             const std::string needle{ a_name };
-            const auto find = [&](const auto& a_files, const PluginTier a_tier)
-                -> std::optional<LoadedPlugin> {
-                std::uint32_t tierIndex = 0;
+            const auto find = [&](const auto& a_files) {
                 for (auto* file : a_files) {
                     if (file && ::_stricmp(file->fileName, needle.c_str()) == 0) {
-                        return LoadedPlugin{ file, a_tier,
-                            a_tier == PluginTier::kFull ? file->compileIndex : tierIndex };
+                        return true;
                     }
-                    ++tierIndex;
                 }
-                return std::nullopt;
+                return false;
             };
-            if (auto found = find(handler->compiledFileCollection.files, PluginTier::kFull)) {
-                return found;
-            }
-            if (auto found = find(handler->compiledFileCollection.mediumFiles, PluginTier::kMedium)) {
-                return found;
-            }
-            return find(handler->compiledFileCollection.smallFiles, PluginTier::kSmall);
-        }
-
-        [[nodiscard]] std::optional<RE::TESFormID> ResolveRuntimeFormID(const Target& a_target)
-        {
-            const auto plugin = FindLoadedPlugin(a_target.plugin);
-            if (!plugin) {
-                return std::nullopt;
-            }
-            switch (plugin->tier) {
-            case PluginTier::kSmall:
-                if (!IsLocalFormIDValidForTier(a_target.localFormID, plugin->tier)) {
-                    return std::nullopt;
-                }
-                return 0xFE000000u | (plugin->index << 12) | a_target.localFormID;
-            case PluginTier::kMedium:
-                if (!IsLocalFormIDValidForTier(a_target.localFormID, plugin->tier)) {
-                    return std::nullopt;
-                }
-                return 0xFD000000u | (plugin->index << 16) | a_target.localFormID;
-            case PluginTier::kFull:
-                if (!IsLocalFormIDValidForTier(a_target.localFormID, plugin->tier)) {
-                    return std::nullopt;
-                }
-                return (plugin->index << 24) | a_target.localFormID;
-            }
-            return std::nullopt;
+            return find(handler->compiledFileCollection.files) ||
+                find(handler->compiledFileCollection.mediumFiles) ||
+                find(handler->compiledFileCollection.smallFiles);
         }
 
         [[nodiscard]] RE::TESNPC* ResolveEligibleTarget(const LineSink& a_out, const Target& a_target)
         {
-            const auto runtimeID = ResolveRuntimeFormID(a_target);
-            if (!runtimeID) {
-                a_out(std::format("resolve {}: target plugin absent or local FormID exceeds its tier",
-                                  a_target.CanonicalKey()));
-                return nullptr;
-            }
-            auto* npc = RE::TESForm::LookupByID<RE::TESNPC>(*runtimeID);
+            auto* npc = RE::TESForm::LookupByEditorID<RE::TESNPC>(
+                RE::BSFixedString{ a_target.editorID.c_str() });
             if (!npc) {
-                a_out(std::format("resolve {} -> 0x{:08X}: not found or not TESNPC",
-                                  a_target.CanonicalKey(), *runtimeID));
+                a_out(std::format("resolve {}: EditorID not found or not TESNPC",
+                                  a_target.CanonicalKey()));
                 return nullptr;
             }
             if (!npc->IsUnique()) {
@@ -2311,7 +2262,7 @@ namespace NpcAppearance
             a_out("OSF Identity diagnostics: disabled-by-default / explicit commands only");
             a_out(std::format("pluginDirectory={}", root.string()));
             a_out(std::format("packsDirectory={}", DefaultPacksDirectory().string()));
-            a_out("manifestParser=implemented (strict package schema v1, plugin+localFormId targeting, containment, deterministic conflicts)");
+            a_out("manifestParser=implemented (strict package schema v1, EditorID targeting, containment, deterministic conflicts)");
             a_out("npcDecoder=implemented (strict CK 1.16.244 JSON contract; golden matrix and adversarial corpus pass)");
             a_out("dependencyResolver=RUNTIME-PROVEN read-only on Sarah (forms/headparts + facial shape/bone + FaceDB color/teeth/AVM catalogs)");
             a_out("runtimeNpcImporter=NO SAFE SEAM FOUND (SavePCFace is a parse-only console wrapper)");
@@ -2372,21 +2323,21 @@ namespace NpcAppearance
             };
 
             const auto valid = ParsePackageManifest(
-                R"({"schemaVersion":1,"packageId":"author.sarah","priority":100,"requires":{"plugins":["Starfield.esm"],"assets":[]},"assignments":[{"target":{"plugin":"Starfield.esm","localFormId":"00005983"},"preset":"Sarah.npc","scope":"faceAndBody"}]})",
+                R"({"schemaVersion":1,"packageId":"author.sarah","priority":100,"requires":{"plugins":["Starfield.esm"],"assets":[]},"assignments":[{"target":{"editorId":"Companion_SarahMorgan"},"preset":"Sarah.npc","scope":"faceAndBody"}]})",
                 manifestPath, false);
             check(valid.manifest && valid.manifest->assignments.size() == 1 && valid.issues.empty(),
                   "valid production manifest");
             check(valid.manifest && valid.manifest->assignments[0].target.CanonicalKey() ==
-                                        "starfield.esm:00005983",
-                  "canonical plugin plus local FormID target");
+                                        "companion_sarahmorgan",
+                  "canonical case-insensitive EditorID target");
 
             const auto traversal = ParsePackageManifest(
-                R"({"schemaVersion":1,"packageId":"author.traversal","priority":0,"requires":{"plugins":[],"assets":[]},"assignments":[{"target":{"plugin":"Starfield.esm","localFormId":"00005983"},"preset":"../escape.npc","scope":"faceAndBody"}]})",
+                R"({"schemaVersion":1,"packageId":"author.traversal","priority":0,"requires":{"plugins":[],"assets":[]},"assignments":[{"target":{"editorId":"Companion_SarahMorgan"},"preset":"../escape.npc","scope":"faceAndBody"}]})",
                 manifestPath, false);
             check(traversal.HasFatalError(), "parent traversal rejected");
 
             const auto unsupportedScope = ParsePackageManifest(
-                R"({"schemaVersion":1,"packageId":"author.scope","priority":0,"requires":{"plugins":[],"assets":[]},"assignments":[{"target":{"plugin":"Starfield.esm","localFormId":"00005983"},"preset":"Sarah.npc","scope":"faceOnly"}]})",
+                R"({"schemaVersion":1,"packageId":"author.scope","priority":0,"requires":{"plugins":[],"assets":[]},"assignments":[{"target":{"editorId":"Companion_SarahMorgan"},"preset":"Sarah.npc","scope":"faceOnly"}]})",
                 manifestPath, false);
             check(unsupportedScope.HasFatalError(), "unproven scope rejected");
 
@@ -2981,20 +2932,15 @@ namespace NpcAppearance
 
         void RunRefs(const LineSink& a_out, const std::vector<std::string>& a_args)
         {
-            if (a_args.size() < 5) {
-                a_out("usage: npcapp refs <plugin> <localFormID> <preset.npc>");
+            if (a_args.size() < 4) {
+                a_out("usage: npcapp refs <editorID> <preset.npc>");
                 return;
             }
-            const auto localFormID = ParseFormID(a_args[3]);
-            if (!localFormID || *localFormID > 0x00FFFFFF) {
-                a_out("refs: localFormID must be hexadecimal and no greater than 00FFFFFF");
-                return;
-            }
-            auto* target = ResolveEligibleTarget(a_out, Target{ a_args[2], *localFormID });
+            auto* target = ResolveEligibleTarget(a_out, Target{ a_args[2] });
             if (!target) {
                 return;
             }
-            const std::filesystem::path path{ JoinArguments(a_args, 4) };
+            const std::filesystem::path path{ JoinArguments(a_args, 3) };
             const auto decoded = LoadCkPreset(path);
             if (!decoded.preset) {
                 a_out(std::format("refs: preset rejected path={} issues={}",
@@ -3012,20 +2958,15 @@ namespace NpcAppearance
 
         void RunAvmInspect(const LineSink& a_out, const std::vector<std::string>& a_args)
         {
-            if (a_args.size() < 5) {
-                a_out("usage: npcapp avm <plugin> <localFormID> <preset.npc>");
+            if (a_args.size() < 4) {
+                a_out("usage: npcapp avm <editorID> <preset.npc>");
                 return;
             }
-            const auto localFormID = ParseFormID(a_args[3]);
-            if (!localFormID || *localFormID > 0x00FFFFFF) {
-                a_out("avm: localFormID must be hexadecimal and no greater than 00FFFFFF");
-                return;
-            }
-            auto* target = ResolveEligibleTarget(a_out, Target{ a_args[2], *localFormID });
+            auto* target = ResolveEligibleTarget(a_out, Target{ a_args[2] });
             if (!target) {
                 return;
             }
-            const std::filesystem::path path{ JoinArguments(a_args, 4) };
+            const std::filesystem::path path{ JoinArguments(a_args, 3) };
             const auto decoded = LoadCkPreset(path);
             if (!decoded.preset) {
                 a_out(std::format("avm: preset rejected path={} issues={}",
@@ -3069,16 +3010,11 @@ namespace NpcAppearance
 
         void RunResolve(const LineSink& a_out, const std::vector<std::string>& a_args)
         {
-            if (a_args.size() < 4) {
-                a_out("usage: npcapp resolve <plugin> <localFormID>");
+            if (a_args.size() < 3) {
+                a_out("usage: npcapp resolve <editorID>");
                 return;
             }
-            const auto localFormID = ParseFormID(a_args[3]);
-            if (!localFormID || *localFormID > 0x00FFFFFF) {
-                a_out("resolve: localFormID must be hexadecimal and no greater than 00FFFFFF");
-                return;
-            }
-            (void)ResolveEligibleTarget(a_out, Target{ a_args[2], *localFormID });
+            (void)ResolveEligibleTarget(a_out, Target{ a_args[2] });
         }
 
         void RunDonor(const LineSink& a_out, const std::vector<std::string>& a_args)
@@ -3170,21 +3106,16 @@ namespace NpcAppearance
 
         void RunDonorSeed(const LineSink& a_out, const std::vector<std::string>& a_args)
         {
-            if (a_args.size() < 5) {
-                a_out("usage: npcapp donorseed <plugin> <localFormID> <preset.npc>");
+            if (a_args.size() < 4) {
+                a_out("usage: npcapp donorseed <editorID> <preset.npc>");
                 return;
             }
-            const auto localFormID = ParseFormID(a_args[3]);
-            if (!localFormID || *localFormID > 0x00FFFFFF) {
-                a_out("donorseed: localFormID must be hexadecimal and no greater than 00FFFFFF");
-                return;
-            }
-            auto* target = ResolveEligibleTarget(a_out, Target{ a_args[2], *localFormID });
+            auto* target = ResolveEligibleTarget(a_out, Target{ a_args[2] });
             if (!target) {
                 return;
             }
 
-            const std::filesystem::path path{ JoinArguments(a_args, 4) };
+            const std::filesystem::path path{ JoinArguments(a_args, 3) };
             const auto decoded = LoadCkPreset(path);
             if (!decoded.preset) {
                 a_out(std::format("donorseed: preset rejected path={} issues={}",
@@ -3298,20 +3229,15 @@ namespace NpcAppearance
 
         void RunDonorMorph(const LineSink& a_out, const std::vector<std::string>& a_args)
         {
-            if (a_args.size() < 5) {
-                a_out("usage: npcapp donormorph <plugin> <localFormID> <preset.npc>");
+            if (a_args.size() < 4) {
+                a_out("usage: npcapp donormorph <editorID> <preset.npc>");
                 return;
             }
-            const auto localFormID = ParseFormID(a_args[3]);
-            if (!localFormID || *localFormID > 0x00FFFFFF) {
-                a_out("donormorph: localFormID must be hexadecimal and no greater than 00FFFFFF");
-                return;
-            }
-            auto* target = ResolveEligibleTarget(a_out, Target{ a_args[2], *localFormID });
+            auto* target = ResolveEligibleTarget(a_out, Target{ a_args[2] });
             if (!target) {
                 return;
             }
-            const std::filesystem::path path{ JoinArguments(a_args, 4) };
+            const std::filesystem::path path{ JoinArguments(a_args, 3) };
             const auto decoded = LoadCkPreset(path);
             if (!decoded.preset) {
                 a_out(std::format("donormorph: preset rejected path={} issues={}",
@@ -3455,20 +3381,15 @@ namespace NpcAppearance
 
         void RunDonorVisual(const LineSink& a_out, const std::vector<std::string>& a_args)
         {
-            if (a_args.size() < 5) {
-                a_out("usage: npcapp donorvisual <plugin> <localFormID> <preset.npc>");
+            if (a_args.size() < 4) {
+                a_out("usage: npcapp donorvisual <editorID> <preset.npc>");
                 return;
             }
-            const auto localFormID = ParseFormID(a_args[3]);
-            if (!localFormID || *localFormID > 0x00FFFFFF) {
-                a_out("donorvisual: localFormID must be hexadecimal and no greater than 00FFFFFF");
-                return;
-            }
-            auto* target = ResolveEligibleTarget(a_out, Target{ a_args[2], *localFormID });
+            auto* target = ResolveEligibleTarget(a_out, Target{ a_args[2] });
             if (!target) {
                 return;
             }
-            const std::filesystem::path path{ JoinArguments(a_args, 4) };
+            const std::filesystem::path path{ JoinArguments(a_args, 3) };
             const auto decoded = LoadCkPreset(path);
             if (!decoded.preset) {
                 a_out(std::format("donorvisual: preset rejected path={} issues={}",
@@ -3655,20 +3576,15 @@ namespace NpcAppearance
 
         void RunDonorCopy(const LineSink& a_out, const std::vector<std::string>& a_args)
         {
-            if (a_args.size() < 5) {
-                a_out("usage: npcapp donorcopy <plugin> <localFormID> <preset.npc>");
+            if (a_args.size() < 4) {
+                a_out("usage: npcapp donorcopy <editorID> <preset.npc>");
                 return;
             }
-            const auto localFormID = ParseFormID(a_args[3]);
-            if (!localFormID || *localFormID > 0x00FFFFFF) {
-                a_out("donorcopy: localFormID must be hexadecimal and no greater than 00FFFFFF");
-                return;
-            }
-            auto* target = ResolveEligibleTarget(a_out, Target{ a_args[2], *localFormID });
+            auto* target = ResolveEligibleTarget(a_out, Target{ a_args[2] });
             if (!target) {
                 return;
             }
-            const std::filesystem::path path{ JoinArguments(a_args, 4) };
+            const std::filesystem::path path{ JoinArguments(a_args, 3) };
             const auto decoded = LoadCkPreset(path);
             if (!decoded.preset) {
                 a_out(std::format("donorcopy: preset rejected path={} issues={}",
@@ -3915,29 +3831,28 @@ namespace NpcAppearance
             const std::string_view trialLabel = persistentLatch ? "targetpersistent" :
                 ownedSnapshotLatch ? "targetsnapshot" :
                 renderLatch ? "targetlatch" : holdForVisualProof ? "targethold" : "targettrial";
-            if (a_args.size() < 6) {
+            if (a_args.size() < 5) {
                 a_out(persistentLatch ?
-                          "usage: npcapp targetpersistent <plugin> <localFormID> <actorRefID> <preset.npc>" :
+                          "usage: npcapp targetpersistent <editorID> <actorRefID> <preset.npc>" :
                       ownedSnapshotLatch ?
-                          "usage: npcapp targetsnapshot <plugin> <localFormID> <actorRefID> <preset.npc>" :
+                          "usage: npcapp targetsnapshot <editorID> <actorRefID> <preset.npc>" :
                       renderLatch ?
-                          "usage: npcapp targetlatch <plugin> <localFormID> <actorRefID> <preset.npc>" :
+                          "usage: npcapp targetlatch <editorID> <actorRefID> <preset.npc>" :
                           holdForVisualProof ?
-                              "usage: npcapp targethold <plugin> <localFormID> <actorRefID> <preset.npc>" :
-                              "usage: npcapp targettrial <plugin> <localFormID> <actorRefID> <preset.npc>");
+                              "usage: npcapp targethold <editorID> <actorRefID> <preset.npc>" :
+                              "usage: npcapp targettrial <editorID> <actorRefID> <preset.npc>");
                 return;
             }
             if (TargetHoldActive()) {
                 a_out("targethold: another visual hold is active; use npcapp targetrestore or wait for automatic rollback");
                 return;
             }
-            const auto localFormID = ParseFormID(a_args[3]);
-            const auto actorRefID = ParseFormID(a_args[4]);
-            if (!localFormID || *localFormID > 0x00FFFFFF || !actorRefID) {
-                a_out("targettrial: invalid localFormID or actorRefID");
+            const auto actorRefID = ParseFormID(a_args[3]);
+            if (!actorRefID) {
+                a_out("targettrial: invalid actorRefID");
                 return;
             }
-            auto* target = ResolveEligibleTarget(a_out, Target{ a_args[2], *localFormID });
+            auto* target = ResolveEligibleTarget(a_out, Target{ a_args[2] });
             if (!target) {
                 return;
             }
@@ -3951,7 +3866,7 @@ namespace NpcAppearance
                 return;
             }
 
-            const std::filesystem::path path{ JoinArguments(a_args, 5) };
+            const std::filesystem::path path{ JoinArguments(a_args, 4) };
             const auto decoded = LoadCkPreset(path);
             if (!decoded.preset) {
                 a_out(std::format("targettrial: preset rejected path={} issues={}",
@@ -4598,7 +4513,7 @@ namespace NpcAppearance
         } else if (a_args[1] == "copyref") {
             RunCopyRef(a_out, a_args);
         } else {
-            a_out("npcapp: status|selftest|scan [packsRoot]|inspect <npc>|resolve <plugin> <localFormID>|refs <plugin> <localFormID> <npc>|avm <plugin> <localFormID> <npc>|donor [count]|donorseed <plugin> <localFormID> <npc>|donormorph <plugin> <localFormID> <npc>|donorvisual <plugin> <localFormID> <npc>|donorcopy <plugin> <localFormID> <npc>|targettrial <plugin> <localFormID> <actorRefID> <npc>|targethold <plugin> <localFormID> <actorRefID> <npc>|targetlatch <plugin> <localFormID> <actorRefID> <npc>|targetsnapshot <plugin> <localFormID> <actorRefID> <npc>|targetrestore|event <status|on|off>|scene <status|on|off|dispatch <on|off>|auto <on|off>|persistent <on [actorRefID]|off>>|copyref <targetRefID> <sourceRefID> [0|1]");
+            a_out("npcapp: status|selftest|scan [packsRoot]|inspect <npc>|resolve <editorID>|refs <editorID> <npc>|avm <editorID> <npc>|donor [count]|donorseed <editorID> <npc>|donormorph <editorID> <npc>|donorvisual <editorID> <npc>|donorcopy <editorID> <npc>|targettrial <editorID> <actorRefID> <npc>|targethold <editorID> <actorRefID> <npc>|targetlatch <editorID> <actorRefID> <npc>|targetsnapshot <editorID> <actorRefID> <npc>|targetrestore|event <status|on|off>|scene <status|on|off|dispatch <on|off>|auto <on|off>|persistent <on [actorRefID]|off>>|copyref <targetRefID> <sourceRefID> [0|1]");
         }
     }
 }

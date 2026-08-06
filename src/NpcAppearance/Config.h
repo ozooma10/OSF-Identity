@@ -17,27 +17,15 @@ namespace NpcAppearance
     inline constexpr std::uintmax_t kMaxPresetBytes = 32 * 1024 * 1024;
     inline constexpr std::int32_t kMinPriority = -1'000'000;
     inline constexpr std::int32_t kMaxPriority = 1'000'000;
-    inline constexpr std::string_view kPluginFolderLocalFormIDConvention =
-        "pluginFolderLocalFormId";
+    inline constexpr std::string_view kEditorIDFilenameConvention =
+        "editorIdFilename";
 
     struct Target
     {
-        std::string plugin;
-        std::uint32_t localFormID{ 0 };
+        std::string editorID;
 
         [[nodiscard]] std::string CanonicalKey() const;
     };
-
-    enum class PluginTier
-    {
-        kFull,
-        kMedium,
-        kSmall
-    };
-
-    [[nodiscard]] bool IsLocalFormIDValidForTier(
-        std::uint32_t a_localFormID,
-        PluginTier a_tier) noexcept;
 
     struct Requirements
     {
@@ -61,7 +49,7 @@ namespace NpcAppearance
     enum class PackageFormat
     {
         kExplicitAssignments,
-        kPluginFolderLocalFormID
+        kEditorIDFilename
     };
 
     struct PackageManifest

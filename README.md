@@ -28,9 +28,8 @@ as separate mods:
 Data/SFSE/Plugins/OSFIdentity/Packs/
   author.package-id/
     package.json          # optional
-    Starfield.esm/
-      0029A8EB.npc
-      0029A8EB.identity.json
+    Companion_SarahMorgan.npc
+    Companion_SarahMorgan.identity.json
 ```
 
 Removing a pack promotes the next valid one, or restores the original
@@ -38,9 +37,9 @@ appearance. See the [Player Guide](docs/PLAYER_GUIDE.md).
 
 ## How packs are chosen
 
-Presets target an NPC by owning-plugin directory and plugin-local FormID
-filename. A pack needs no manifest: its folder name, lowercased, becomes the
-`packageId` and it runs at the default `priority` of `0`. When several valid
+Presets sit directly in their pack folder and target an NPC by EditorID
+filename. Without a manifest, the pack folder name, lowercased, becomes the
+`packageId` and the pack runs at the default `priority` of `0`. When several valid
 packs target the same NPC, the highest `priority` wins; ties go to the
 lexically smaller `packageId`. Mod-manager load order is irrelevant. A
 candidate with a missing plugin or asset is skipped — never partially

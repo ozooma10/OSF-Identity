@@ -13,13 +13,13 @@
 //   npcapp selftest
 //   npcapp scan [packsRoot]
 //   npcapp inspect <preset.npc>
-//   npcapp resolve <plugin> <localFormID>
-//   npcapp refs <plugin> <localFormID> <preset.npc>
+//   npcapp resolve <editorID>
+//   npcapp refs <editorID> <preset.npc>
 //   npcapp donor [count]
-//   npcapp targettrial <plugin> <localFormID> <actorRefID> <preset.npc>
-//   npcapp targethold <plugin> <localFormID> <actorRefID> <preset.npc>
-//   npcapp targetlatch <plugin> <localFormID> <actorRefID> <preset.npc>
-//   npcapp targetsnapshot <plugin> <localFormID> <actorRefID> <preset.npc>
+//   npcapp targettrial <editorID> <actorRefID> <preset.npc>
+//   npcapp targethold <editorID> <actorRefID> <preset.npc>
+//   npcapp targetlatch <editorID> <actorRefID> <preset.npc>
+//   npcapp targetsnapshot <editorID> <actorRefID> <preset.npc>
 //   npcapp targetrestore
 //   npcapp event <status|on|off>
 //   npcapp scene <status|on|off|dispatch <on|off>|auto <on|off>|persistent <on [actorRefID]|off>>

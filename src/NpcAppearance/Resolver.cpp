@@ -638,7 +638,7 @@ namespace NpcAppearance
         } else {
             // Sarah proves that base NPCs can expose neither GetFormEditorID()
             // nor a global EditorID lookup entry at runtime. The package's
-            // plugin+localFormID is the authoritative target identity in this case.
+            // The runtime-resolved EditorID target is authoritative in this case.
         }
 
         result.race = RE::TESForm::LookupByEditorID<RE::TESRace>(

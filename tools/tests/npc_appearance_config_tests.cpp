@@ -22,14 +22,13 @@ namespace
 
     std::string Manifest(const std::string& a_packageID = "author.sarah",
                          const int a_priority = 100,
-                         const std::string& a_plugin = "Starfield.esm",
-                         const std::string& a_formID = "00005983",
+                         const std::string& a_editorID = "Companion_SarahMorgan",
                          const std::string& a_preset = "Sarah.npc",
                          const std::string& a_scope = "faceAndBody")
     {
         return std::format(
-            R"({{"schemaVersion":1,"packageId":"{}","priority":{},"requires":{{"plugins":["{}"],"assets":[]}},"assignments":[{{"target":{{"plugin":"{}","localFormId":"{}"}},"preset":"{}","scope":"{}"}}]}})",
-            a_packageID, a_priority, a_plugin, a_plugin, a_formID, a_preset, a_scope);
+            R"({{"schemaVersion":1,"packageId":"{}","priority":{},"requires":{{"plugins":["Starfield.esm"],"assets":[]}},"assignments":[{{"target":{{"editorId":"{}"}},"preset":"{}","scope":"{}"}}]}})",
+            a_packageID, a_priority, a_editorID, a_preset, a_scope);
     }
 
     void Write(const std::filesystem::path& a_path, const std::string_view a_text)
@@ -68,35 +67,26 @@ int main()
     Check(valid.manifest && valid.manifest->assignments.size() == 1 && valid.issues.empty(),
           "valid production manifest");
     Check(valid.manifest && valid.manifest->assignments[0].target.CanonicalKey() ==
-                                 "starfield.esm:00005983",
-          "canonical load-order-independent target key");
+                                 "companion_sarahmorgan",
+          "canonical case-insensitive EditorID target key");
     Check(valid.manifest &&
               HasPlugin(valid.manifest->assignments[0].requirements, "Starfield.esm"),
-          "target-owning plugin is an implicit assignment requirement");
-    Check(NA::IsLocalFormIDValidForTier(0x00FFFFFF, NA::PluginTier::kFull) &&
-              !NA::IsLocalFormIDValidForTier(0x01000000, NA::PluginTier::kFull) &&
-              NA::IsLocalFormIDValidForTier(0x0000FFFF, NA::PluginTier::kMedium) &&
-              !NA::IsLocalFormIDValidForTier(0x00010000, NA::PluginTier::kMedium) &&
-              NA::IsLocalFormIDValidForTier(0x00000FFF, NA::PluginTier::kSmall) &&
-              !NA::IsLocalFormIDValidForTier(0x00001000, NA::PluginTier::kSmall),
-          "full, medium, and small plugin local FormID bounds enforced");
+          "pack plugin requirement is inherited by the assignment");
 
     const auto explicitPerPreset = NA::ParsePackageManifest(
-        R"({"schemaVersion":1,"packageId":"author.per-preset","priority":0,"requires":{"plugins":["SharedAssets.esm"],"assets":["Textures/Shared.dds"]},"assignments":[{"target":{"plugin":"Starfield.esm","localFormId":"0029A8EB"},"preset":"Daniel.npc","scope":"faceAndBody","requires":{"plugins":["ExampleHairMod.esm"],"assets":["Meshes/Hair/Example.mesh"]}}]})",
+        R"({"schemaVersion":1,"packageId":"author.per-preset","priority":0,"requires":{"plugins":["SharedAssets.esm"],"assets":["Textures/Shared.dds"]},"assignments":[{"target":{"editorId":"Crew_ConstellationDaniel"},"preset":"Daniel.npc","scope":"faceAndBody","requires":{"plugins":["ExampleHairMod.esm"],"assets":["Meshes/Hair/Example.mesh"]}}]})",
         root / "explicit-per-preset" / "package.json", false);
     Check(explicitPerPreset.manifest &&
-              explicitPerPreset.manifest->assignments[0].requirements.plugins.size() == 3 &&
+              explicitPerPreset.manifest->assignments[0].requirements.plugins.size() == 2 &&
               HasPlugin(explicitPerPreset.manifest->assignments[0].requirements,
                         "SharedAssets.esm") &&
               HasPlugin(explicitPerPreset.manifest->assignments[0].requirements,
                         "ExampleHairMod.esm") &&
-              HasPlugin(explicitPerPreset.manifest->assignments[0].requirements,
-                        "Starfield.esm") &&
               explicitPerPreset.manifest->assignments[0].requirements.assets.size() == 2,
           "explicit per-assignment requirements are additive");
 
     const auto assetManifest = NA::ParsePackageManifest(
-        R"({"schemaVersion":1,"packageId":"author.assets","priority":0,"requires":{"plugins":[],"assets":["Textures/Author/Required.dds"]},"assignments":[{"target":{"plugin":"Starfield.esm","localFormId":"00005983"},"preset":"Sarah.npc","scope":"faceAndBody"}]})",
+        R"({"schemaVersion":1,"packageId":"author.assets","priority":0,"requires":{"plugins":[],"assets":["Textures/Author/Required.dds"]},"assignments":[{"target":{"editorId":"Companion_SarahMorgan"},"preset":"Sarah.npc","scope":"faceAndBody"}]})",
         root / "author.assets" / "package.json", false);
     const auto dataRoot = root / "Data";
     Check(assetManifest.manifest &&
@@ -119,39 +109,34 @@ int main()
           "checked-in example matches runtime schema");
 
     const auto missing = NA::ParsePackageManifest(
-        Manifest("author.missing", 0, "Starfield.esm", "00005983", "Missing.npc"),
+        Manifest("author.missing", 0, "Companion_SarahMorgan", "Missing.npc"),
         root / "author.missing" / "package.json", true);
     Check(missing.HasFatalError() && !missing.issues.empty(), "missing preset rejects package");
 
     const auto traversal = NA::ParsePackageManifest(
-        Manifest("author.traversal", 0, "Starfield.esm", "00005983", "../Sarah.npc"),
+        Manifest("author.traversal", 0, "Companion_SarahMorgan", "../Sarah.npc"),
         root / "author.traversal" / "package.json", false);
     Check(traversal.HasFatalError(), "preset parent traversal rejected");
 
     const auto absolute = NA::ParsePackageManifest(
-        Manifest("author.absolute", 0, "Starfield.esm", "00005983", "C:\\\\Sarah.npc"),
+        Manifest("author.absolute", 0, "Companion_SarahMorgan", "C:\\\\Sarah.npc"),
         root / "author.absolute" / "package.json", false);
     Check(absolute.HasFatalError(), "absolute preset path rejected");
 
     const auto wrongExtension = NA::ParsePackageManifest(
-        Manifest("author.extension", 0, "Starfield.esm", "00005983", "Sarah.json"),
+        Manifest("author.extension", 0, "Companion_SarahMorgan", "Sarah.json"),
         root / "author.extension" / "package.json", false);
     Check(wrongExtension.HasFatalError(), "non-npc preset rejected");
 
     const auto wrongScope = NA::ParsePackageManifest(
-        Manifest("author.scope", 0, "Starfield.esm", "00005983", "Sarah.npc", "faceOnly"),
+        Manifest("author.scope", 0, "Companion_SarahMorgan", "Sarah.npc", "faceOnly"),
         root / "author.scope" / "package.json", false);
     Check(wrongScope.HasFatalError(), "unproven scope rejected");
 
-    const auto badPlugin = NA::ParsePackageManifest(
-        Manifest("author.plugin", 0, "not-a-plugin", "00005983"),
-        root / "author.plugin" / "package.json", false);
-    Check(badPlugin.HasFatalError(), "invalid target plugin rejected");
-
-    const auto badFormID = NA::ParsePackageManifest(
-        Manifest("author.form", 0, "Starfield.esm", "01000000"),
-        root / "author.form" / "package.json", false);
-    Check(badFormID.HasFatalError(), "out-of-range local FormID rejected");
+    const auto badEditorID = NA::ParsePackageManifest(
+        Manifest("author.editor", 0, "Companion Sarah/Morgan"),
+        root / "author.editor" / "package.json", false);
+    Check(badEditorID.HasFatalError(), "invalid EditorID rejected");
 
     const auto badPriority = NA::ParsePackageManifest(
         Manifest("author.priority", NA::kMaxPriority + 1),
@@ -174,12 +159,12 @@ int main()
     Check(missingFormat.HasFatalError(), "package requires exactly one authoring format");
 
     const auto mixedFormats = NA::ParsePackageManifest(
-        R"({"schemaVersion":1,"packageId":"author.mixed","priority":0,"requires":{"plugins":[],"assets":[]},"presetConvention":"pluginFolderLocalFormId","assignments":[{"target":{"plugin":"Starfield.esm","localFormId":"00005983"},"preset":"Sarah.npc","scope":"faceAndBody"}]})",
+        R"({"schemaVersion":1,"packageId":"author.mixed","priority":0,"requires":{"plugins":[],"assets":[]},"presetConvention":"editorIdFilename","assignments":[{"target":{"editorId":"Companion_SarahMorgan"},"preset":"Sarah.npc","scope":"faceAndBody"}]})",
         root / "mixed-format" / "package.json", false);
     Check(mixedFormats.HasFatalError(), "explicit and convention formats cannot be mixed");
 
     const auto unknownConvention = NA::ParsePackageManifest(
-        R"({"schemaVersion":1,"packageId":"author.convention","priority":0,"requires":{"plugins":[],"assets":[]},"presetConvention":"editorIdFilename"})",
+        R"({"schemaVersion":1,"packageId":"author.convention","priority":0,"requires":{"plugins":[],"assets":[]},"presetConvention":"pluginFolderLocalFormId"})",
         root / "unknown-convention" / "package.json", false);
     Check(unknownConvention.HasFatalError(), "unknown preset convention rejected");
 
@@ -193,57 +178,55 @@ int main()
     Check(invalidSize.HasFatalError(), "manifest byte bound enforced");
 
     const std::string duplicateTargetJson =
-        R"({"schemaVersion":1,"packageId":"author.duplicate-target","priority":0,"requires":{"plugins":[],"assets":[]},"assignments":[{"target":{"plugin":"Starfield.esm","localFormId":"00005983"},"preset":"a.npc","scope":"faceAndBody"},{"target":{"plugin":"starfield.esm","localFormId":"00005983"},"preset":"b.npc","scope":"faceAndBody"}]})";
+        R"({"schemaVersion":1,"packageId":"author.duplicate-target","priority":0,"requires":{"plugins":[],"assets":[]},"assignments":[{"target":{"editorId":"Companion_SarahMorgan"},"preset":"a.npc","scope":"faceAndBody"},{"target":{"editorId":"companion_sarahmorgan"},"preset":"b.npc","scope":"faceAndBody"}]})";
     const auto duplicateTarget = NA::ParsePackageManifest(
         duplicateTargetJson, root / "duplicate-target" / "package.json", false);
     Check(duplicateTarget.HasFatalError(), "duplicate target rejects package");
 
     const auto conventionRoot = root / "convention";
     Write(conventionRoot / "package.json",
-          R"({"schemaVersion":1,"packageId":"project.community","priority":100,"requires":{"plugins":["SharedAssets.esm"],"assets":["Textures/Shared.dds"]},"presetConvention":"pluginFolderLocalFormId"})");
-    Write(conventionRoot / "Starfield.esm" / "0029A8EB.npc", "fixture");
-    Write(conventionRoot / "Starfield.esm" / "0029A8EB.identity.json",
+          R"({"schemaVersion":1,"packageId":"project.community","priority":100,"requires":{"plugins":["SharedAssets.esm"],"assets":["Textures/Shared.dds"]},"presetConvention":"editorIdFilename"})");
+    Write(conventionRoot / "Crew_ConstellationDaniel.npc", "fixture");
+    Write(conventionRoot / "Crew_ConstellationDaniel.identity.json",
           R"({"schemaVersion":1,"requires":{"plugins":["ExampleHairMod.esm"],"assets":["Meshes/Hair/Example.mesh"]}})");
-    Write(conventionRoot / "Starfield.esm" / "00005983.npc", "fixture");
+    Write(conventionRoot / "Companion_SarahMorgan.npc", "fixture");
     const auto convention = NA::LoadPackageManifest(conventionRoot / "package.json", true);
     const auto daniel = convention.manifest ?
         std::ranges::find_if(convention.manifest->assignments, [](const auto& a_assignment) {
-            return a_assignment.target.localFormID == 0x0029A8EB;
+            return a_assignment.target.editorID == "Crew_ConstellationDaniel";
         }) : std::vector<NA::Assignment>::const_iterator{};
     Check(convention.manifest &&
-              convention.manifest->format == NA::PackageFormat::kPluginFolderLocalFormID &&
+              convention.manifest->format == NA::PackageFormat::kEditorIDFilename &&
               convention.manifest->assignments.size() == 2,
-          "plugin-folder convention discovers direct FormID presets");
+          "flat convention discovers direct EditorID presets");
     Check(convention.manifest && daniel != convention.manifest->assignments.end() &&
-              daniel->target.plugin == "Starfield.esm" &&
               HasPlugin(daniel->requirements, "SharedAssets.esm") &&
               HasPlugin(daniel->requirements, "ExampleHairMod.esm") &&
-              HasPlugin(daniel->requirements, "Starfield.esm") &&
               daniel->requirements.assets.size() == 2,
-          "convention sidecar requirements are additive and target-qualified");
+          "convention sidecar requirements are additive");
 
     const auto isolatedRoot = root / "isolated-invalid";
     Write(isolatedRoot / "package.json",
-          R"({"schemaVersion":1,"packageId":"project.isolated","priority":0,"requires":{"plugins":[],"assets":[]},"presetConvention":"pluginFolderLocalFormId"})");
-    Write(isolatedRoot / "Starfield.esm" / "00000001.npc", "fixture");
-    Write(isolatedRoot / "Starfield.esm" / "00000001.identity.json", "{");
-    Write(isolatedRoot / "Starfield.esm" / "00000002.npc", "fixture");
-    Write(isolatedRoot / "Starfield.esm" / "EditorName.npc", "fixture");
-    Write(isolatedRoot / "Starfield.esm" / "00000003.identity.json",
+          R"({"schemaVersion":1,"packageId":"project.isolated","priority":0,"requires":{"plugins":[],"assets":[]},"presetConvention":"editorIdFilename"})");
+    Write(isolatedRoot / "BrokenSidecar.npc", "fixture");
+    Write(isolatedRoot / "BrokenSidecar.identity.json", "{");
+    Write(isolatedRoot / "ValidEditorID.npc", "fixture");
+    Write(isolatedRoot / "Invalid-Editor-ID.npc", "fixture");
+    Write(isolatedRoot / "Orphan.identity.json",
           R"({"schemaVersion":1,"requires":{"plugins":[],"assets":[]}})");
-    Write(isolatedRoot / "Starfield.esm" / "Nested" / "00000004.npc", "fixture");
+    Write(isolatedRoot / "Nested" / "NestedEditorID.npc", "fixture");
     const auto isolated = NA::LoadPackageManifest(isolatedRoot / "package.json", true);
     Check(isolated.manifest && isolated.manifest->assignments.size() == 1 &&
-              isolated.manifest->assignments[0].target.localFormID == 2,
+              isolated.manifest->assignments[0].target.editorID == "ValidEditorID",
           "malformed sidecar and invalid filename disable only affected presets");
     Check(HasIssue(isolated.issues, "invalid_preset_metadata_json") &&
-              HasIssue(isolated.issues, "invalid_convention_form_id") &&
+              HasIssue(isolated.issues, "invalid_convention_editor_id") &&
               HasIssue(isolated.issues, "orphan_preset_metadata") &&
               HasIssue(isolated.issues, "invalid_convention_layout"),
           "convention diagnostics cover malformed, orphaned, and nested entries");
 
     const auto missingPackageRoot = NA::ParsePackageManifest(
-        R"({"schemaVersion":1,"packageId":"project.empty","priority":0,"requires":{"plugins":[],"assets":[]},"presetConvention":"pluginFolderLocalFormId"})",
+        R"({"schemaVersion":1,"packageId":"project.empty","priority":0,"requires":{"plugins":[],"assets":[]},"presetConvention":"editorIdFilename"})",
         root / "missing-preset-root" / "package.json", true);
     Check(missingPackageRoot.manifest && missingPackageRoot.manifest->assignments.empty() &&
               HasIssue(missingPackageRoot.issues, "package_root_missing"),
@@ -251,10 +234,9 @@ int main()
 
     const auto limitRoot = root / "convention-limit";
     Write(limitRoot / "package.json",
-          R"({"schemaVersion":1,"packageId":"project.limit","priority":0,"requires":{"plugins":[],"assets":[]},"presetConvention":"pluginFolderLocalFormId"})");
+          R"({"schemaVersion":1,"packageId":"project.limit","priority":0,"requires":{"plugins":[],"assets":[]},"presetConvention":"editorIdFilename"})");
     for (std::uint32_t i = 0; i <= NA::kMaxAssignments; ++i) {
-        Write(limitRoot / "Starfield.esm" /
-                  std::format("{:08X}.npc", i + 1),
+        Write(limitRoot / std::format("Npc_{:08X}.npc", i + 1),
               "fixture");
     }
     const auto overLimit = NA::LoadPackageManifest(limitRoot / "package.json", true);
@@ -266,7 +248,7 @@ int main()
         "fixtures/osf-identity/Packs/project.community-example/package.json", false);
     Check(checkedConventionExample.manifest &&
               checkedConventionExample.manifest->format ==
-                  NA::PackageFormat::kPluginFolderLocalFormID,
+                  NA::PackageFormat::kEditorIDFilename,
           "checked-in convention example matches runtime schema");
 
     const auto low = NA::ParsePackageManifest(
@@ -302,13 +284,13 @@ int main()
           "package with a package.json is not reported as implicit");
 
     const auto implicitRoot = root / "implicit-discovery";
-    Write(implicitRoot / "Author.MyPack" / "Starfield.esm" / "0029A8EB.npc", "fixture");
-    Write(implicitRoot / "My Cool Pack!" / "Starfield.esm" / "00005983.npc", "fixture");
-    Write(implicitRoot / "ab" / "Starfield.esm" / "00005983.npc", "fixture");
+    Write(implicitRoot / "Author.MyPack" / "Crew_ConstellationDaniel.npc", "fixture");
+    Write(implicitRoot / "My Cool Pack!" / "Companion_SarahMorgan.npc", "fixture");
+    Write(implicitRoot / "ab" / "Companion_SarahMorgan.npc", "fixture");
     Write(implicitRoot / "author.suspect" / "package.jsn", "{}");
-    Write(implicitRoot / "author.suspect" / "Starfield.esm" / "00005983.npc", "fixture");
+    Write(implicitRoot / "author.suspect" / "Companion_SarahMorgan.npc", "fixture");
     Write(implicitRoot / "author.stray-json" / "notes.json", "{}");
-    Write(implicitRoot / "author.stray-json" / "Starfield.esm" / "00005983.npc",
+    Write(implicitRoot / "author.stray-json" / "Companion_SarahMorgan.npc",
           "fixture");
     Write(implicitRoot / "author.nested" / "inner" / "package.json", Manifest("author.nested-inner"));
     Write(implicitRoot / "author.nested" / "inner" / "Sarah.npc", "fixture");
@@ -321,9 +303,9 @@ int main()
         });
     Check(implicitPack != implicitDiscovery.packages.end() &&
               implicitPack->implicitManifest && implicitPack->priority == 0 &&
-              implicitPack->format == NA::PackageFormat::kPluginFolderLocalFormID &&
+              implicitPack->format == NA::PackageFormat::kEditorIDFilename &&
               implicitPack->assignments.size() == 1 &&
-              implicitPack->assignments[0].target.CanonicalKey() == "starfield.esm:0029a8eb",
+              implicitPack->assignments[0].target.CanonicalKey() == "crew_constellationdaniel",
           "manifest-less package folds its folder name to a packageId at priority 0");
     Check(implicitDiscovery.packages.size() == 2 &&
               std::ranges::any_of(implicitDiscovery.packages, [](const auto& a_package) {
@@ -341,11 +323,11 @@ int main()
           "both an illegal-character folder and a too-short folder are rejected");
 
     const auto mixedRoot = root / "implicit-vs-explicit";
-    Write(mixedRoot / "author.implicit-pack" / "Starfield.esm" / "00005983.npc",
+    Write(mixedRoot / "author.implicit-pack" / "Companion_SarahMorgan.npc",
           "fixture");
     Write(mixedRoot / "author.explicit-pack" / "package.json",
-          R"({"schemaVersion":1,"packageId":"author.explicit-pack","priority":100,"requires":{"plugins":[],"assets":[]},"presetConvention":"pluginFolderLocalFormId"})");
-    Write(mixedRoot / "author.explicit-pack" / "Starfield.esm" / "00005983.npc",
+          R"({"schemaVersion":1,"packageId":"author.explicit-pack","priority":100,"requires":{"plugins":[],"assets":[]},"presetConvention":"editorIdFilename"})");
+    Write(mixedRoot / "author.explicit-pack" / "Companion_SarahMorgan.npc",
           "fixture");
     const auto mixedDiscovery = NA::DiscoverPackages(mixedRoot, true);
     const auto mixedSelection = NA::SelectAssignments(mixedDiscovery.packages);
@@ -354,7 +336,7 @@ int main()
           "an explicit manifest priority outranks a manifest-less package at the same target");
 
     const auto collisionRoot = root / "implicit-collision";
-    Write(collisionRoot / "Author.Collide" / "Starfield.esm" / "00005983.npc",
+    Write(collisionRoot / "Author.Collide" / "Companion_SarahMorgan.npc",
           "fixture");
     Write(collisionRoot / "explicit" / "package.json", Manifest("author.collide"));
     Write(collisionRoot / "explicit" / "Sarah.npc", "fixture");

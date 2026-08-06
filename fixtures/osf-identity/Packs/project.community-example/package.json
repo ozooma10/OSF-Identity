@@ -7,5 +7,5 @@
     "plugins": [],
     "assets": []
   },
-  "presetConvention": "pluginFolderLocalFormId"
+  "presetConvention": "editorIdFilename"
 }

@@ -12,8 +12,7 @@
   "assignments": [
     {
       "target": {
-        "plugin": "Starfield.esm",
-        "localFormId": "00005983"
+        "editorId": "Companion_SarahMorgan"
       },
       "preset": "Sarah.npc",
       "scope": "faceAndBody"
