@@ -1,5 +1,7 @@
 #include "NpcAppearance/Config.h"
 
+#include "NpcAppearance/Json.h"
+
 #include <algorithm>
 #include <charconv>
 #include <cctype>
@@ -34,323 +36,13 @@ namespace NpcAppearance
             return folded;
         }
 
-        void AppendUTF8(std::string& a_out, const std::uint32_t a_cp)
-        {
-            if (a_cp <= 0x7F) {
-                a_out.push_back(static_cast<char>(a_cp));
-            } else if (a_cp <= 0x7FF) {
-                a_out.push_back(static_cast<char>(0xC0 | (a_cp >> 6)));
-                a_out.push_back(static_cast<char>(0x80 | (a_cp & 0x3F)));
-            } else if (a_cp <= 0xFFFF) {
-                a_out.push_back(static_cast<char>(0xE0 | (a_cp >> 12)));
-                a_out.push_back(static_cast<char>(0x80 | ((a_cp >> 6) & 0x3F)));
-                a_out.push_back(static_cast<char>(0x80 | (a_cp & 0x3F)));
-            } else {
-                a_out.push_back(static_cast<char>(0xF0 | (a_cp >> 18)));
-                a_out.push_back(static_cast<char>(0x80 | ((a_cp >> 12) & 0x3F)));
-                a_out.push_back(static_cast<char>(0x80 | ((a_cp >> 6) & 0x3F)));
-                a_out.push_back(static_cast<char>(0x80 | (a_cp & 0x3F)));
-            }
-        }
+        using JsonValue = Json::Value;
 
-        struct JsonValue
-        {
-            enum class Kind
-            {
-                kNull,
-                kBoolean,
-                kInteger,
-                kString,
-                kArray,
-                kObject
-            };
-
-            Kind kind{ Kind::kNull };
-            std::size_t offset{ 0 };
-            bool boolean{ false };
-            std::int64_t integer{ 0 };
-            std::string string;
-            std::vector<JsonValue> array;
-            std::vector<std::pair<std::string, JsonValue>> object;
-
-            [[nodiscard]] const JsonValue* Find(const std::string_view a_key) const noexcept
-            {
-                const auto it = std::ranges::find_if(object, [&](const auto& a_entry) {
-                    return a_entry.first == a_key;
-                });
-                return it == object.end() ? nullptr : std::addressof(it->second);
-            }
-        };
-
-        class JsonReader
-        {
-        public:
-            explicit JsonReader(const std::string_view a_text) : _text(a_text) {}
-
-            [[nodiscard]] bool Parse(JsonValue& a_out)
-            {
-                SkipWhitespace();
-                if (!ParseValue(a_out, 0)) {
-                    return false;
-                }
-                SkipWhitespace();
-                return _pos == _text.size() || Fail("trailing data after JSON value");
-            }
-
-            [[nodiscard]] std::size_t ErrorOffset() const noexcept { return _errorOffset; }
-            [[nodiscard]] const std::string& Error() const noexcept { return _error; }
-
-        private:
-            [[nodiscard]] bool ParseValue(JsonValue& a_out, const std::size_t a_depth)
-            {
-                if (a_depth > 32) {
-                    return Fail("JSON nesting exceeds safety limit");
-                }
-                SkipWhitespace();
-                a_out.offset = _pos;
-                if (_pos >= _text.size()) {
-                    return Fail("truncated JSON value");
-                }
-                switch (_text[_pos]) {
-                case '{': return ParseObject(a_out, a_depth + 1);
-                case '[': return ParseArray(a_out, a_depth + 1);
-                case '"':
-                    a_out.kind = JsonValue::Kind::kString;
-                    return ParseString(a_out.string);
-                case 't':
-                    a_out.kind = JsonValue::Kind::kBoolean;
-                    a_out.boolean = true;
-                    return ConsumeLiteral("true");
-                case 'f':
-                    a_out.kind = JsonValue::Kind::kBoolean;
-                    a_out.boolean = false;
-                    return ConsumeLiteral("false");
-                case 'n':
-                    a_out.kind = JsonValue::Kind::kNull;
-                    return ConsumeLiteral("null");
-                default:
-                    if (_text[_pos] == '-' || (_text[_pos] >= '0' && _text[_pos] <= '9')) {
-                        a_out.kind = JsonValue::Kind::kInteger;
-                        return ParseInteger(a_out.integer);
-                    }
-                    return Fail("invalid JSON value");
-                }
-            }
-
-            [[nodiscard]] bool ParseObject(JsonValue& a_out, const std::size_t a_depth)
-            {
-                a_out.kind = JsonValue::Kind::kObject;
-                ++_pos;
-                SkipWhitespace();
-                if (Consume('}')) {
-                    return true;
-                }
-                std::unordered_set<std::string> keys;
-                for (;;) {
-                    const auto keyOffset = _pos;
-                    std::string key;
-                    if (!ParseString(key)) {
-                        return false;
-                    }
-                    if (!keys.insert(key).second) {
-                        return FailAt(keyOffset, "duplicate object property '" + key + "'");
-                    }
-                    SkipWhitespace();
-                    if (!Consume(':')) {
-                        return Fail("expected ':' after object property");
-                    }
-                    JsonValue value;
-                    if (!ParseValue(value, a_depth)) {
-                        return false;
-                    }
-                    a_out.object.emplace_back(std::move(key), std::move(value));
-                    SkipWhitespace();
-                    if (Consume('}')) {
-                        return true;
-                    }
-                    if (!Consume(',')) {
-                        return Fail("expected ',' or '}' in object");
-                    }
-                    SkipWhitespace();
-                }
-            }
-
-            [[nodiscard]] bool ParseArray(JsonValue& a_out, const std::size_t a_depth)
-            {
-                a_out.kind = JsonValue::Kind::kArray;
-                ++_pos;
-                SkipWhitespace();
-                if (Consume(']')) {
-                    return true;
-                }
-                for (;;) {
-                    if (a_out.array.size() >= kMaxAssignments) {
-                        return Fail("JSON array exceeds safety limit");
-                    }
-                    JsonValue value;
-                    if (!ParseValue(value, a_depth)) {
-                        return false;
-                    }
-                    a_out.array.push_back(std::move(value));
-                    SkipWhitespace();
-                    if (Consume(']')) {
-                        return true;
-                    }
-                    if (!Consume(',')) {
-                        return Fail("expected ',' or ']' in array");
-                    }
-                    SkipWhitespace();
-                }
-            }
-
-            [[nodiscard]] bool ParseInteger(std::int64_t& a_out)
-            {
-                const auto begin = _pos;
-                if (_text[_pos] == '-') {
-                    ++_pos;
-                }
-                if (_pos >= _text.size()) {
-                    return Fail("truncated JSON integer");
-                }
-                if (_text[_pos] == '0') {
-                    ++_pos;
-                    if (_pos < _text.size() && std::isdigit(static_cast<unsigned char>(_text[_pos]))) {
-                        return Fail("JSON integer has a leading zero");
-                    }
-                } else if (_text[_pos] >= '1' && _text[_pos] <= '9') {
-                    while (_pos < _text.size() && std::isdigit(static_cast<unsigned char>(_text[_pos]))) {
-                        ++_pos;
-                    }
-                } else {
-                    return Fail("invalid JSON integer");
-                }
-                if (_pos < _text.size() && (_text[_pos] == '.' || _text[_pos] == 'e' || _text[_pos] == 'E')) {
-                    return Fail("manifest numbers must be integers");
-                }
-                const auto* first = _text.data() + begin;
-                const auto* last = _text.data() + _pos;
-                const auto [ptr, ec] = std::from_chars(first, last, a_out, 10);
-                return ec == std::errc{} && ptr == last || FailAt(begin, "JSON integer is out of range");
-            }
-
-            [[nodiscard]] bool ParseHex4(std::uint32_t& a_out)
-            {
-                if (_text.size() - _pos < 4) {
-                    return Fail("truncated Unicode escape");
-                }
-                std::uint32_t value = 0;
-                for (std::size_t i = 0; i < 4; ++i) {
-                    const char ch = _text[_pos++];
-                    value <<= 4;
-                    if (ch >= '0' && ch <= '9') value |= static_cast<std::uint32_t>(ch - '0');
-                    else if (ch >= 'a' && ch <= 'f') value |= static_cast<std::uint32_t>(ch - 'a' + 10);
-                    else if (ch >= 'A' && ch <= 'F') value |= static_cast<std::uint32_t>(ch - 'A' + 10);
-                    else return Fail("invalid Unicode escape");
-                }
-                a_out = value;
-                return true;
-            }
-
-            [[nodiscard]] bool ParseString(std::string& a_out)
-            {
-                if (!Consume('"')) {
-                    return Fail("expected JSON string");
-                }
-                while (_pos < _text.size()) {
-                    const unsigned char ch = static_cast<unsigned char>(_text[_pos++]);
-                    if (ch == '"') {
-                        return true;
-                    }
-                    if (ch < 0x20) {
-                        return Fail("control character in JSON string");
-                    }
-                    if (ch != '\\') {
-                        a_out.push_back(static_cast<char>(ch));
-                    } else {
-                        if (_pos >= _text.size()) {
-                            return Fail("truncated JSON escape");
-                        }
-                        switch (const char esc = _text[_pos++]) {
-                        case '"': a_out.push_back('"'); break;
-                        case '\\': a_out.push_back('\\'); break;
-                        case '/': a_out.push_back('/'); break;
-                        case 'b': a_out.push_back('\b'); break;
-                        case 'f': a_out.push_back('\f'); break;
-                        case 'n': a_out.push_back('\n'); break;
-                        case 'r': a_out.push_back('\r'); break;
-                        case 't': a_out.push_back('\t'); break;
-                        case 'u': {
-                            std::uint32_t cp = 0;
-                            if (!ParseHex4(cp)) return false;
-                            if (cp >= 0xD800 && cp <= 0xDBFF) {
-                                if (_text.size() - _pos < 6 || _text[_pos] != '\\' || _text[_pos + 1] != 'u') {
-                                    return Fail("high surrogate without low surrogate");
-                                }
-                                _pos += 2;
-                                std::uint32_t low = 0;
-                                if (!ParseHex4(low)) return false;
-                                if (low < 0xDC00 || low > 0xDFFF) return Fail("invalid low surrogate");
-                                cp = 0x10000 + ((cp - 0xD800) << 10) + (low - 0xDC00);
-                            } else if (cp >= 0xDC00 && cp <= 0xDFFF) {
-                                return Fail("unpaired low surrogate");
-                            }
-                            AppendUTF8(a_out, cp);
-                            break;
-                        }
-                        default: return Fail("invalid JSON escape");
-                        }
-                    }
-                    if (a_out.size() > 4096) {
-                        return Fail("JSON string exceeds safety limit");
-                    }
-                }
-                return Fail("unterminated JSON string");
-            }
-
-            [[nodiscard]] bool ConsumeLiteral(const std::string_view a_literal)
-            {
-                if (_text.substr(_pos, a_literal.size()) != a_literal) {
-                    return Fail("invalid JSON literal");
-                }
-                _pos += a_literal.size();
-                return true;
-            }
-
-            void SkipWhitespace() noexcept
-            {
-                while (_pos < _text.size() && (_text[_pos] == ' ' || _text[_pos] == '\t' ||
-                                                _text[_pos] == '\r' || _text[_pos] == '\n')) {
-                    ++_pos;
-                }
-            }
-
-            [[nodiscard]] bool Consume(const char a_expected) noexcept
-            {
-                if (_pos < _text.size() && _text[_pos] == a_expected) {
-                    ++_pos;
-                    return true;
-                }
-                return false;
-            }
-
-            [[nodiscard]] bool Fail(std::string a_message)
-            {
-                return FailAt(_pos, std::move(a_message));
-            }
-
-            [[nodiscard]] bool FailAt(const std::size_t a_offset, std::string a_message)
-            {
-                if (_error.empty()) {
-                    _errorOffset = a_offset;
-                    _error = std::move(a_message);
-                }
-                return false;
-            }
-
-            std::string_view _text;
-            std::size_t _pos{ 0 };
-            std::size_t _errorOffset{ 0 };
-            std::string _error;
+        // Manifest and preset-metadata JSON is integer-only and bounded by the
+        // package limits declared in Config.h.
+        constexpr Json::ReaderLimits kManifestJsonLimits{
+            .maxArrayElements = kMaxAssignments,
+            .integersOnly = true,
         };
 
         void AddIssue(ManifestResult& a_result, const std::filesystem::path& a_path,
@@ -667,7 +359,7 @@ namespace NpcAppearance
             }
 
             JsonValue root;
-            JsonReader reader{ a_json };
+            Json::Reader reader{ a_json, kManifestJsonLimits };
             if (!reader.Parse(root)) {
                 AddIssue(diagnostics, a_path, reader.ErrorOffset(),
                          "invalid_preset_metadata_json", reader.Error());
@@ -683,7 +375,7 @@ namespace NpcAppearance
                              "property '$schema' has the wrong type");
                 } else {
                     const auto* schema = Require(
-                        root, "schemaVersion", JsonValue::Kind::kInteger,
+                        root, "schemaVersion", JsonValue::Kind::kNumber,
                         diagnostics, a_path);
                     const auto* requirementsNode = Require(
                         root, "requires", JsonValue::Kind::kObject,
@@ -1057,7 +749,7 @@ namespace NpcAppearance
         }
 
         JsonValue root;
-        JsonReader reader{ a_json };
+        Json::Reader reader{ a_json, kManifestJsonLimits };
         if (!reader.Parse(root)) {
             AddIssue(result, a_manifestPath, reader.ErrorOffset(), "invalid_json", reader.Error());
             return result;
@@ -1078,9 +770,9 @@ namespace NpcAppearance
             return result;
         }
 
-        const auto* schema = Require(root, "schemaVersion", JsonValue::Kind::kInteger, result, a_manifestPath);
+        const auto* schema = Require(root, "schemaVersion", JsonValue::Kind::kNumber, result, a_manifestPath);
         const auto* packageID = Require(root, "packageId", JsonValue::Kind::kString, result, a_manifestPath);
-        const auto* priority = Require(root, "priority", JsonValue::Kind::kInteger, result, a_manifestPath);
+        const auto* priority = Require(root, "priority", JsonValue::Kind::kNumber, result, a_manifestPath);
         const auto* requirementsNode = Require(root, "requires", JsonValue::Kind::kObject, result, a_manifestPath);
         const auto* assignments = root.Find("assignments");
         const auto* convention = root.Find("presetConvention");
