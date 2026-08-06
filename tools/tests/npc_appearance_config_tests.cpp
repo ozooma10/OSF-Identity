@@ -20,15 +20,14 @@ namespace
         }
     }
 
-    std::string Manifest(const std::string& a_packageID = "author.sarah",
-                         const int a_priority = 100,
+    std::string Manifest(const int a_priority = 100,
                          const std::string& a_editorID = "Companion_SarahMorgan",
                          const std::string& a_preset = "Sarah.npc",
                          const std::string& a_scope = "faceAndBody")
     {
         return std::format(
-            R"({{"schemaVersion":1,"packageId":"{}","priority":{},"requires":{{"plugins":["Starfield.esm"],"assets":[]}},"assignments":[{{"target":{{"editorId":"{}"}},"preset":"{}","scope":"{}"}}]}})",
-            a_packageID, a_priority, a_editorID, a_preset, a_scope);
+            R"({{"schemaVersion":1,"priority":{},"requires":{{"plugins":["Starfield.esm"],"assets":[]}},"assignments":[{{"target":{{"editorId":"{}"}},"preset":"{}","scope":"{}"}}]}})",
+            a_priority, a_editorID, a_preset, a_scope);
     }
 
     void Write(const std::filesystem::path& a_path, const std::string_view a_text)
@@ -66,6 +65,8 @@ int main()
     const auto valid = NA::ParsePackageManifest(Manifest(), manifestPath, true);
     Check(valid.manifest && valid.manifest->assignments.size() == 1 && valid.issues.empty(),
           "valid production manifest");
+    Check(valid.manifest && valid.manifest->packageID == "author.sarah",
+          "manifest package ID comes from its parent folder");
     Check(valid.manifest && valid.manifest->assignments[0].target.CanonicalKey() ==
                                  "companion_sarahmorgan",
           "canonical case-insensitive EditorID target key");
@@ -74,7 +75,7 @@ int main()
           "pack plugin requirement is inherited by the assignment");
 
     const auto explicitPerPreset = NA::ParsePackageManifest(
-        R"({"schemaVersion":1,"packageId":"author.per-preset","priority":0,"requires":{"plugins":["SharedAssets.esm"],"assets":["Textures/Shared.dds"]},"assignments":[{"target":{"editorId":"Crew_ConstellationDaniel"},"preset":"Daniel.npc","scope":"faceAndBody","requires":{"plugins":["ExampleHairMod.esm"],"assets":["Meshes/Hair/Example.mesh"]}}]})",
+        R"({"schemaVersion":1,"priority":0,"requires":{"plugins":["SharedAssets.esm"],"assets":["Textures/Shared.dds"]},"assignments":[{"target":{"editorId":"Crew_ConstellationDaniel"},"preset":"Daniel.npc","scope":"faceAndBody","requires":{"plugins":["ExampleHairMod.esm"],"assets":["Meshes/Hair/Example.mesh"]}}]})",
         root / "explicit-per-preset" / "package.json", false);
     Check(explicitPerPreset.manifest &&
               explicitPerPreset.manifest->assignments[0].requirements.plugins.size() == 2 &&
@@ -86,7 +87,7 @@ int main()
           "explicit per-assignment requirements are additive");
 
     const auto assetManifest = NA::ParsePackageManifest(
-        R"({"schemaVersion":1,"packageId":"author.assets","priority":0,"requires":{"plugins":[],"assets":["Textures/Author/Required.dds"]},"assignments":[{"target":{"editorId":"Companion_SarahMorgan"},"preset":"Sarah.npc","scope":"faceAndBody"}]})",
+        R"({"schemaVersion":1,"priority":0,"requires":{"plugins":[],"assets":["Textures/Author/Required.dds"]},"assignments":[{"target":{"editorId":"Companion_SarahMorgan"},"preset":"Sarah.npc","scope":"faceAndBody"}]})",
         root / "author.assets" / "package.json", false);
     const auto dataRoot = root / "Data";
     Check(assetManifest.manifest &&
@@ -109,67 +110,73 @@ int main()
           "checked-in example matches runtime schema");
 
     const auto missing = NA::ParsePackageManifest(
-        Manifest("author.missing", 0, "Companion_SarahMorgan", "Missing.npc"),
+        Manifest(0, "Companion_SarahMorgan", "Missing.npc"),
         root / "author.missing" / "package.json", true);
     Check(missing.HasFatalError() && !missing.issues.empty(), "missing preset rejects package");
 
     const auto traversal = NA::ParsePackageManifest(
-        Manifest("author.traversal", 0, "Companion_SarahMorgan", "../Sarah.npc"),
+        Manifest(0, "Companion_SarahMorgan", "../Sarah.npc"),
         root / "author.traversal" / "package.json", false);
     Check(traversal.HasFatalError(), "preset parent traversal rejected");
 
     const auto absolute = NA::ParsePackageManifest(
-        Manifest("author.absolute", 0, "Companion_SarahMorgan", "C:\\\\Sarah.npc"),
+        Manifest(0, "Companion_SarahMorgan", "C:\\\\Sarah.npc"),
         root / "author.absolute" / "package.json", false);
     Check(absolute.HasFatalError(), "absolute preset path rejected");
 
     const auto wrongExtension = NA::ParsePackageManifest(
-        Manifest("author.extension", 0, "Companion_SarahMorgan", "Sarah.json"),
+        Manifest(0, "Companion_SarahMorgan", "Sarah.json"),
         root / "author.extension" / "package.json", false);
     Check(wrongExtension.HasFatalError(), "non-npc preset rejected");
 
     const auto wrongScope = NA::ParsePackageManifest(
-        Manifest("author.scope", 0, "Companion_SarahMorgan", "Sarah.npc", "faceOnly"),
+        Manifest(0, "Companion_SarahMorgan", "Sarah.npc", "faceOnly"),
         root / "author.scope" / "package.json", false);
     Check(wrongScope.HasFatalError(), "unproven scope rejected");
 
     const auto badEditorID = NA::ParsePackageManifest(
-        Manifest("author.editor", 0, "Companion Sarah/Morgan"),
+        Manifest(0, "Companion Sarah/Morgan"),
         root / "author.editor" / "package.json", false);
     Check(badEditorID.HasFatalError(), "invalid EditorID rejected");
 
     const auto badPriority = NA::ParsePackageManifest(
-        Manifest("author.priority", NA::kMaxPriority + 1),
+        Manifest(NA::kMaxPriority + 1),
         root / "author.priority" / "package.json", false);
     Check(badPriority.HasFatalError(), "out-of-range priority rejected");
 
     const auto unknownVersion = NA::ParsePackageManifest(
-        R"({"schemaVersion":2,"packageId":"author.version","priority":0,"requires":{"plugins":[],"assets":[]},"assignments":[]})",
+        R"({"schemaVersion":2,"priority":0,"requires":{"plugins":[],"assets":[]},"assignments":[]})",
         root / "version" / "package.json", false);
     Check(unknownVersion.HasFatalError(), "unknown schema rejected");
 
     const auto unknownProperty = NA::ParsePackageManifest(
-        R"({"schemaVersion":1,"packageId":"author.unknown","priority":0,"requires":{"plugins":[],"assets":[]},"assignments":[],"surprise":true})",
+        R"({"schemaVersion":1,"priority":0,"requires":{"plugins":[],"assets":[]},"assignments":[],"surprise":true})",
         root / "unknown" / "package.json", false);
     Check(unknownProperty.HasFatalError(), "unknown root property rejected");
 
+    const auto manifestPackageID = NA::ParsePackageManifest(
+        R"({"schemaVersion":1,"packageId":"legacy.override","priority":0,"requires":{"plugins":[],"assets":[]},"assignments":[]})",
+        root / "folder-is-authoritative" / "package.json", false);
+    Check(manifestPackageID.HasFatalError(),
+          "manifest packageId override is rejected because the folder is authoritative");
+
     const auto missingFormat = NA::ParsePackageManifest(
-        R"({"schemaVersion":1,"packageId":"author.no-format","priority":0,"requires":{"plugins":[],"assets":[]}})",
+        R"({"schemaVersion":1,"priority":0,"requires":{"plugins":[],"assets":[]}})",
         root / "no-format" / "package.json", false);
     Check(missingFormat.HasFatalError(), "package requires exactly one authoring format");
 
     const auto mixedFormats = NA::ParsePackageManifest(
-        R"({"schemaVersion":1,"packageId":"author.mixed","priority":0,"requires":{"plugins":[],"assets":[]},"presetConvention":"editorIdFilename","assignments":[{"target":{"editorId":"Companion_SarahMorgan"},"preset":"Sarah.npc","scope":"faceAndBody"}]})",
+        R"({"schemaVersion":1,"priority":0,"requires":{"plugins":[],"assets":[]},"presetConvention":"editorIdFilename","assignments":[{"target":{"editorId":"Companion_SarahMorgan"},"preset":"Sarah.npc","scope":"faceAndBody"}]})",
         root / "mixed-format" / "package.json", false);
     Check(mixedFormats.HasFatalError(), "explicit and convention formats cannot be mixed");
 
     const auto unknownConvention = NA::ParsePackageManifest(
-        R"({"schemaVersion":1,"packageId":"author.convention","priority":0,"requires":{"plugins":[],"assets":[]},"presetConvention":"pluginFolderLocalFormId"})",
+        R"({"schemaVersion":1,"priority":0,"requires":{"plugins":[],"assets":[]},"presetConvention":"pluginFolderLocalFormId"})",
         root / "unknown-convention" / "package.json", false);
     Check(unknownConvention.HasFatalError(), "unknown preset convention rejected");
 
     const auto malformed = NA::ParsePackageManifest(
-        R"({"schemaVersion":1,"packageId":)", root / "malformed" / "package.json", false);
+        R"({"schemaVersion":)", root / "malformed" / "package.json", false);
     Check(malformed.HasFatalError(), "truncated JSON rejected");
 
     std::string oversized(NA::kMaxManifestBytes + 1, ' ');
@@ -178,14 +185,14 @@ int main()
     Check(invalidSize.HasFatalError(), "manifest byte bound enforced");
 
     const std::string duplicateTargetJson =
-        R"({"schemaVersion":1,"packageId":"author.duplicate-target","priority":0,"requires":{"plugins":[],"assets":[]},"assignments":[{"target":{"editorId":"Companion_SarahMorgan"},"preset":"a.npc","scope":"faceAndBody"},{"target":{"editorId":"companion_sarahmorgan"},"preset":"b.npc","scope":"faceAndBody"}]})";
+        R"({"schemaVersion":1,"priority":0,"requires":{"plugins":[],"assets":[]},"assignments":[{"target":{"editorId":"Companion_SarahMorgan"},"preset":"a.npc","scope":"faceAndBody"},{"target":{"editorId":"companion_sarahmorgan"},"preset":"b.npc","scope":"faceAndBody"}]})";
     const auto duplicateTarget = NA::ParsePackageManifest(
         duplicateTargetJson, root / "duplicate-target" / "package.json", false);
     Check(duplicateTarget.HasFatalError(), "duplicate target rejects package");
 
     const auto conventionRoot = root / "convention";
     Write(conventionRoot / "package.json",
-          R"({"schemaVersion":1,"packageId":"project.community","priority":100,"requires":{"plugins":["SharedAssets.esm"],"assets":["Textures/Shared.dds"]},"presetConvention":"editorIdFilename"})");
+          R"({"schemaVersion":1,"priority":100,"requires":{"plugins":["SharedAssets.esm"],"assets":["Textures/Shared.dds"]},"presetConvention":"editorIdFilename"})");
     Write(conventionRoot / "Crew_ConstellationDaniel.npc", "fixture");
     Write(conventionRoot / "Crew_ConstellationDaniel.identity.json",
           R"({"schemaVersion":1,"requires":{"plugins":["ExampleHairMod.esm"],"assets":["Meshes/Hair/Example.mesh"]}})");
@@ -207,7 +214,7 @@ int main()
 
     const auto isolatedRoot = root / "isolated-invalid";
     Write(isolatedRoot / "package.json",
-          R"({"schemaVersion":1,"packageId":"project.isolated","priority":0,"requires":{"plugins":[],"assets":[]},"presetConvention":"editorIdFilename"})");
+          R"({"schemaVersion":1,"priority":0,"requires":{"plugins":[],"assets":[]},"presetConvention":"editorIdFilename"})");
     Write(isolatedRoot / "BrokenSidecar.npc", "fixture");
     Write(isolatedRoot / "BrokenSidecar.identity.json", "{");
     Write(isolatedRoot / "ValidEditorID.npc", "fixture");
@@ -226,7 +233,7 @@ int main()
           "convention diagnostics cover malformed, orphaned, and nested entries");
 
     const auto missingPackageRoot = NA::ParsePackageManifest(
-        R"({"schemaVersion":1,"packageId":"project.empty","priority":0,"requires":{"plugins":[],"assets":[]},"presetConvention":"editorIdFilename"})",
+        R"({"schemaVersion":1,"priority":0,"requires":{"plugins":[],"assets":[]},"presetConvention":"editorIdFilename"})",
         root / "missing-preset-root" / "package.json", true);
     Check(missingPackageRoot.manifest && missingPackageRoot.manifest->assignments.empty() &&
               HasIssue(missingPackageRoot.issues, "package_root_missing"),
@@ -234,7 +241,7 @@ int main()
 
     const auto limitRoot = root / "convention-limit";
     Write(limitRoot / "package.json",
-          R"({"schemaVersion":1,"packageId":"project.limit","priority":0,"requires":{"plugins":[],"assets":[]},"presetConvention":"editorIdFilename"})");
+          R"({"schemaVersion":1,"priority":0,"requires":{"plugins":[],"assets":[]},"presetConvention":"editorIdFilename"})");
     for (std::uint32_t i = 0; i <= NA::kMaxAssignments; ++i) {
         Write(limitRoot / std::format("Npc_{:08X}.npc", i + 1),
               "fixture");
@@ -252,15 +259,15 @@ int main()
           "checked-in convention example matches runtime schema");
 
     const auto low = NA::ParsePackageManifest(
-        Manifest("author.low", 10), root / "low" / "package.json", false);
+        Manifest(10), root / "author.low" / "package.json", false);
     const auto highZ = NA::ParsePackageManifest(
-        Manifest("author.z-high", 20), root / "high-z" / "package.json", false);
+        Manifest(20), root / "author.z-high" / "package.json", false);
     const auto highA = NA::ParsePackageManifest(
-        Manifest("author.a-high", 20), root / "high-a" / "package.json", false);
+        Manifest(20), root / "Author A High!" / "package.json", false);
     std::vector<NA::PackageManifest> packages{ *low.manifest, *highZ.manifest, *highA.manifest };
     const auto selection = NA::SelectAssignments(packages);
-    Check(selection.winners.size() == 1 && selection.winners[0].packageID == "author.a-high",
-          "highest priority then ascending packageId wins");
+    Check(selection.winners.size() == 1 && selection.winners[0].packageID == "Author A High!",
+          "highest priority then case-insensitive ascending folder name wins");
     Check(selection.decisions.size() == 3, "all conflict decisions reported");
     auto invalidHigh = *highA.manifest;
     invalidHigh.assignments.clear();
@@ -270,16 +277,19 @@ int main()
           "removing an invalid high-priority candidate promotes a valid lower candidate");
 
     const auto discoveryRoot = root / "discovery";
-    Write(discoveryRoot / "duplicate-a" / "package.json", Manifest("author.duplicate", 1));
-    Write(discoveryRoot / "duplicate-a" / "Sarah.npc", "fixture");
-    Write(discoveryRoot / "duplicate-b" / "package.json", Manifest("author.duplicate", 2));
-    Write(discoveryRoot / "duplicate-b" / "Sarah.npc", "fixture");
-    Write(discoveryRoot / "unique" / "package.json", Manifest("author.unique", 3));
-    Write(discoveryRoot / "unique" / "Sarah.npc", "fixture");
+    Write(discoveryRoot / "Duplicate A!" / "package.json", Manifest(1));
+    Write(discoveryRoot / "Duplicate A!" / "Sarah.npc", "fixture");
+    Write(discoveryRoot / "Duplicate B (Alternate)" / "package.json", Manifest(2));
+    Write(discoveryRoot / "Duplicate B (Alternate)" / "Sarah.npc", "fixture");
+    Write(discoveryRoot / "Unique Pack #3" / "package.json", Manifest(3));
+    Write(discoveryRoot / "Unique Pack #3" / "Sarah.npc", "fixture");
     const auto discovery = NA::DiscoverPackages(discoveryRoot, true);
-    Check(discovery.packages.size() == 1 && discovery.packages[0].packageID == "author.unique",
-          "all duplicate packageIds rejected independently");
-    Check(discovery.issues.size() == 2, "duplicate package diagnostics emitted");
+    Check(discovery.packages.size() == 3 &&
+              std::ranges::any_of(discovery.packages, [](const auto& a_package) {
+                  return a_package.packageID == "Unique Pack #3";
+              }),
+          "arbitrary manifest pack folder names become their package IDs");
+    Check(discovery.issues.empty(), "distinct folder-derived package IDs need no manifest IDs");
     Check(!discovery.packages.empty() && !discovery.packages[0].implicitManifest,
           "package with a package.json is not reported as implicit");
 
@@ -292,41 +302,42 @@ int main()
     Write(implicitRoot / "author.stray-json" / "notes.json", "{}");
     Write(implicitRoot / "author.stray-json" / "Companion_SarahMorgan.npc",
           "fixture");
-    Write(implicitRoot / "author.nested" / "inner" / "package.json", Manifest("author.nested-inner"));
+    Write(implicitRoot / "author.nested" / "inner" / "package.json", Manifest());
     Write(implicitRoot / "author.nested" / "inner" / "Sarah.npc", "fixture");
     std::filesystem::create_directories(implicitRoot / "author.empty");
     Write(implicitRoot / "loose-note.txt", "stray");
     const auto implicitDiscovery = NA::DiscoverPackages(implicitRoot, true);
     const auto implicitPack = std::ranges::find_if(
         implicitDiscovery.packages, [](const auto& a_package) {
-            return a_package.packageID == "author.mypack";
+            return a_package.packageID == "Author.MyPack";
         });
     Check(implicitPack != implicitDiscovery.packages.end() &&
               implicitPack->implicitManifest && implicitPack->priority == 0 &&
               implicitPack->format == NA::PackageFormat::kEditorIDFilename &&
               implicitPack->assignments.size() == 1 &&
               implicitPack->assignments[0].target.CanonicalKey() == "crew_constellationdaniel",
-          "manifest-less package folds its folder name to a packageId at priority 0");
-    Check(implicitDiscovery.packages.size() == 2 &&
+          "manifest-less package preserves its folder name as the package ID at priority 0");
+    Check(implicitDiscovery.packages.size() == 4 &&
               std::ranges::any_of(implicitDiscovery.packages, [](const auto& a_package) {
                   return a_package.packageID == "author.empty" && a_package.assignments.empty();
+              }) &&
+              std::ranges::any_of(implicitDiscovery.packages, [](const auto& a_package) {
+                  return a_package.packageID == "My Cool Pack!";
+              }) &&
+              std::ranges::any_of(implicitDiscovery.packages, [](const auto& a_package) {
+                  return a_package.packageID == "ab";
               }),
-          "only valid manifest-less folders are discovered; an empty one stays non-mutating");
-    Check(HasIssue(implicitDiscovery.issues, "invalid_package_folder_name") &&
-              HasIssue(implicitDiscovery.issues, "suspect_package_root_file") &&
+          "arbitrary and short manifest-less folder names are accepted; an empty pack stays non-mutating");
+    Check(HasIssue(implicitDiscovery.issues, "suspect_package_root_file") &&
               HasIssue(implicitDiscovery.issues, "manifest_not_at_package_root") &&
               HasIssue(implicitDiscovery.issues, "stray_package_root_file"),
-          "manifest-less discovery diagnoses bad folder names, near-miss and stray files, and nested manifests");
-    Check(std::ranges::count_if(implicitDiscovery.issues, [](const auto& a_issue) {
-              return a_issue.code == "invalid_package_folder_name";
-          }) == 2,
-          "both an illegal-character folder and a too-short folder are rejected");
+          "manifest-less discovery diagnoses near-miss and stray files, and nested manifests");
 
     const auto mixedRoot = root / "implicit-vs-explicit";
     Write(mixedRoot / "author.implicit-pack" / "Companion_SarahMorgan.npc",
           "fixture");
     Write(mixedRoot / "author.explicit-pack" / "package.json",
-          R"({"schemaVersion":1,"packageId":"author.explicit-pack","priority":100,"requires":{"plugins":[],"assets":[]},"presetConvention":"editorIdFilename"})");
+          R"({"schemaVersion":1,"priority":100,"requires":{"plugins":[],"assets":[]},"presetConvention":"editorIdFilename"})");
     Write(mixedRoot / "author.explicit-pack" / "Companion_SarahMorgan.npc",
           "fixture");
     const auto mixedDiscovery = NA::DiscoverPackages(mixedRoot, true);
@@ -334,18 +345,6 @@ int main()
     Check(mixedDiscovery.packages.size() == 2 && mixedSelection.winners.size() == 1 &&
               mixedSelection.winners[0].packageID == "author.explicit-pack",
           "an explicit manifest priority outranks a manifest-less package at the same target");
-
-    const auto collisionRoot = root / "implicit-collision";
-    Write(collisionRoot / "Author.Collide" / "Companion_SarahMorgan.npc",
-          "fixture");
-    Write(collisionRoot / "explicit" / "package.json", Manifest("author.collide"));
-    Write(collisionRoot / "explicit" / "Sarah.npc", "fixture");
-    const auto collision = NA::DiscoverPackages(collisionRoot, true);
-    Check(collision.packages.empty() &&
-              std::ranges::count_if(collision.issues, [](const auto& a_issue) {
-                  return a_issue.code == "duplicate_package_id";
-              }) == 2,
-          "a folded folder name colliding with an explicit packageId rejects both");
 
     const auto checkedInPacks =
         NA::DiscoverPackages("fixtures/osf-identity/Packs", false);

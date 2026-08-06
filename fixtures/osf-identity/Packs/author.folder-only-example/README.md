@@ -1,7 +1,7 @@
 # Manifest-less preset slot
 
 This example pack has no `package.json`. The folder name
-`author.folder-only-example` becomes the packageId (lowercased) and the pack
+`author.folder-only-example` is the pack ID and the pack
 runs at priority `0`.
 
 Place a producer-round-tripped preset directly in this directory as

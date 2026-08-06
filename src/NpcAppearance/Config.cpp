@@ -3,7 +3,6 @@
 #include "NpcAppearance/Json.h"
 
 #include <algorithm>
-#include <cctype>
 #include <cwchar>
 #include <fstream>
 #include <format>
@@ -91,17 +90,6 @@ namespace NpcAppearance
             }
             const auto folded = FoldASCII(a_name);
             return folded.ends_with(".esm") || folded.ends_with(".esp") || folded.ends_with(".esl");
-        }
-
-        [[nodiscard]] bool IsPackageID(const std::string_view a_id)
-        {
-            if (a_id.size() < 3 || a_id.size() > 128 || !std::isalnum(static_cast<unsigned char>(a_id.front()))) {
-                return false;
-            }
-            return std::ranges::all_of(a_id, [](const unsigned char a_ch) {
-                return (a_ch >= 'a' && a_ch <= 'z') || (a_ch >= '0' && a_ch <= '9') ||
-                       a_ch == '.' || a_ch == '_' || a_ch == '-';
-            });
         }
 
         [[nodiscard]] bool IsEditorID(const std::string_view a_text)
@@ -615,19 +603,10 @@ namespace NpcAppearance
         {
             ManifestResult result;
             const auto folderName = a_packageDirectory.filename().string();
-            const auto packageID = FoldASCII(folderName);
-            if (!IsPackageID(packageID)) {
-                AddIssue(result, a_packageDirectory, 0, "invalid_package_folder_name",
-                         "pack folder name '" + folderName +
-                             "' cannot be used as a packageId; rename the folder to 3-128 ASCII "
-                             "letters, digits, '.', '_' or '-' starting with a letter or digit, or "
-                             "add a package.json");
-                return result;
-            }
 
             PackageManifest manifest;
             manifest.schemaVersion = 1;
-            manifest.packageID = packageID;
+            manifest.packageID = folderName;
             manifest.priority = 0;
             manifest.manifestPath = a_packageDirectory / "package.json";
             manifest.format = PackageFormat::kEditorIDFilename;
@@ -712,7 +691,7 @@ namespace NpcAppearance
             AddIssue(result, a_manifestPath, root.offset, "wrong_type", "manifest root must be an object");
             return result;
         }
-        if (!HasOnlyProperties(root, { "$schema", "schemaVersion", "packageId", "priority",
+        if (!HasOnlyProperties(root, { "$schema", "schemaVersion", "priority",
                                        "requires", "assignments", "presetConvention" },
                                 result, a_manifestPath)) {
             return result;
@@ -725,12 +704,11 @@ namespace NpcAppearance
         }
 
         const auto* schema = Require(root, "schemaVersion", JsonValue::Kind::kNumber, result, a_manifestPath);
-        const auto* packageID = Require(root, "packageId", JsonValue::Kind::kString, result, a_manifestPath);
         const auto* priority = Require(root, "priority", JsonValue::Kind::kNumber, result, a_manifestPath);
         const auto* requirementsNode = Require(root, "requires", JsonValue::Kind::kObject, result, a_manifestPath);
         const auto* assignments = root.Find("assignments");
         const auto* convention = root.Find("presetConvention");
-        if (!schema || !packageID || !priority || !requirementsNode) {
+        if (!schema || !priority || !requirementsNode) {
             return result;
         }
         if ((assignments == nullptr) == (convention == nullptr)) {
@@ -753,11 +731,6 @@ namespace NpcAppearance
                      "unsupported schemaVersion " + std::to_string(schema->integer));
             return result;
         }
-        if (!IsPackageID(packageID->string)) {
-            AddIssue(result, a_manifestPath, packageID->offset, "invalid_package_id",
-                     "packageId must be 3-128 lowercase ASCII letters, digits, '.', '_' or '-'");
-            return result;
-        }
         if (priority->integer < kMinPriority || priority->integer > kMaxPriority) {
             AddIssue(result, a_manifestPath, priority->offset, "invalid_priority", "priority is outside the accepted range");
             return result;
@@ -776,7 +749,7 @@ namespace NpcAppearance
 
         PackageManifest manifest;
         manifest.schemaVersion = 1;
-        manifest.packageID = packageID->string;
+        manifest.packageID = a_manifestPath.parent_path().filename().string();
         manifest.priority = static_cast<std::int32_t>(priority->integer);
         manifest.manifestPath = a_manifestPath;
         manifest.format = convention ? PackageFormat::kEditorIDFilename :
@@ -936,7 +909,8 @@ namespace NpcAppearance
                 return false;
             }
             result.issues.push_back({ package.DiagnosticPath(), 0, "duplicate_package_id",
-                                      "every pack using duplicate packageId '" + package.packageID + "' was rejected" });
+                                      "every pack whose folder name collides case-insensitively with '" +
+                                          package.packageID + "' was rejected" });
             return true;
         });
         return result;
@@ -987,7 +961,10 @@ namespace NpcAppearance
                 if (a_left.package->priority != a_right.package->priority) {
                     return a_left.package->priority > a_right.package->priority;
                 }
-                return a_left.package->packageID < a_right.package->packageID;
+                const auto leftID = FoldASCII(a_left.package->packageID);
+                const auto rightID = FoldASCII(a_right.package->packageID);
+                return leftID != rightID ? leftID < rightID :
+                    a_left.package->packageID < a_right.package->packageID;
             });
             const auto& winner = candidates.front();
             result.winners.push_back({ winner.assignment->target, winner.assignment->presetPath,

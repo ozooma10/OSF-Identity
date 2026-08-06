@@ -8,7 +8,7 @@ holding one preset file per target NPC — no manifest required:
 
 ```text
 Data/SFSE/Plugins/OSFIdentity/Packs/
-  author.my-pack/                 # folder name is the packageId
+  Sarah Reimagined/               # folder name is the pack ID
     Companion_SarahMorgan.npc     # target NPC's EditorID
     Companion_SarahMorgan.identity.json  # optional per-preset dependencies
 ```
@@ -21,19 +21,18 @@ To build one:
 2. **Name it after the target.** The filename stem must be the target NPC's
    exact EditorID, using 1-128 ASCII letters, digits, or underscores. Presets
    sit directly in the pack folder; nested folders are not scanned.
-3. **Name the pack folder.** Lowercased, it becomes your `packageId`, so it
-   must be 3-128 ASCII letters, digits, `.`, `_`, or `-`, starting with a
-   letter or digit. `Author.MyPack` becomes `author.mypack`; a folder with
-   spaces, punctuation, or non-ASCII characters is rejected with
-   `invalid_package_folder_name` and you must rename it or add a manifest. A
-   stray `package.jsn`, `notes.json`, or a `package.json` buried in a subfolder
-   rejects the whole pack rather than being ignored.
+3. **Name the pack folder.** Its name is the pack ID, exactly as written, and
+   can be any folder name accepted by the filesystem. Spaces, capitalization,
+   and ordinary punctuation are supported. IDs are compared case-insensitively
+   for conflicts and tie-breaking. A stray `package.jsn`, `notes.json`, or a
+   `package.json` buried in a subfolder rejects the whole pack rather than being
+   ignored.
 4. **Declare dependencies.** Optional hair, beard, or asset mods go in a
    sidecar (per preset, below) or in a manifest `requires` (pack-wide).
    Undeclared dependencies are the top cause of "works on my machine" — users
    without them load a broken preset.
 5. **Restart Starfield through SFSE.** Packs are scanned once after game
-   data load; a quickload will not pick up changes. Confirm your `packageId`
+   data load; a quickload will not pick up changes. Confirm your pack ID
    appears as the winner in
    `Documents\My Games\Starfield\SFSE\Logs\osf-identity.log` — failures are
    silent in-game and explained only in the log.
@@ -47,31 +46,28 @@ priority, `requires` shared by every preset, or explicit assignments:
 ```json
 {
   "schemaVersion": 1,
-  "packageId": "author.my-pack",
   "priority": 100,
   "requires": { "plugins": [], "assets": [] },
   "presetConvention": "editorIdFilename"
 }
 ```
 
-A manifest overrides the folder name, so `packageId` no longer has to match it.
+The folder name remains the pack ID even when a manifest is present. Renaming
+the folder intentionally changes the ID.
 
 ## Manifest reference
 
-- `packageId` - stable lowercase identifier, 3-128 characters. Defaults to the
-  lowercased folder name when there is no manifest.
 - `priority` - `-1000000` to `1000000`, defaulting to `0`. When several valid
   packs target the same NPC, the highest priority wins; ties go to ascending
-  `packageId`. Mod-manager order is irrelevant. The `100` used in these
-  examples outranks every manifest-less pack.
+  case-insensitive pack folder name. Mod-manager order is irrelevant. The
+  `100` used in these examples outranks every manifest-less pack.
 - `requires` - plugins and loose Data-relative assets every preset needs. A
   missing pack-wide requirement disables the whole pack.
 - Exactly one of `presetConvention: "editorIdFilename"` or
   `assignments`.
 
-Two packs that resolve to the same `packageId` — including a folder name
-that folds onto another pack's explicit `packageId` — are both rejected with
-`duplicate_package_id`.
+Two folder names that resolve to the same case-insensitive pack ID are both
+rejected with `duplicate_package_id`.
 
 `package.schema.json` and `preset-metadata.schema.json` give editor
 validation for the files they describe; both files are optional. The runtime
@@ -106,7 +102,6 @@ directly, with per-assignment `requires`:
 ```json
 {
   "schemaVersion": 1,
-  "packageId": "author.sarah-example",
   "priority": 100,
   "requires": { "plugins": [], "assets": [] },
   "assignments": [

@@ -2,12 +2,11 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:osf-identity:package:v1",
   "title": "OSF Identity appearance pack manifest",
-  "description": "Optional pack manifest. A pack without a package.json is discovered from its folder name (lowercased) at priority 0 using flat EditorID filenames; add this file only to set a priority, share requires across presets, or use explicit assignments.",
+  "description": "Optional pack manifest. The containing folder name is always the pack ID. A pack without a package.json runs at priority 0 using flat EditorID filenames; add this file only to set a priority, share requires across presets, or use explicit assignments.",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "schemaVersion",
-    "packageId",
     "priority",
     "requires"
   ],
@@ -27,10 +26,6 @@
     },
     "schemaVersion": {
       "const": 1
-    },
-    "packageId": {
-      "type": "string",
-      "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$"
     },
     "priority": {
       "type": "integer",

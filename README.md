@@ -26,7 +26,7 @@ as separate mods:
 
 ```text
 Data/SFSE/Plugins/OSFIdentity/Packs/
-  author.package-id/
+  Sarah Reimagined/       # arbitrary folder name; this is the pack ID
     package.json          # optional
     Companion_SarahMorgan.npc
     Companion_SarahMorgan.identity.json
@@ -38,10 +38,10 @@ appearance. See the [Player Guide](docs/PLAYER_GUIDE.md).
 ## How packs are chosen
 
 Presets sit directly in their pack folder and target an NPC by EditorID
-filename. Without a manifest, the pack folder name, lowercased, becomes the
-`packageId` and the pack runs at the default `priority` of `0`. When several valid
-packs target the same NPC, the highest `priority` wins; ties go to the
-lexically smaller `packageId`. Mod-manager load order is irrelevant. A
+filename. Without a manifest, the pack runs at the default `priority` of `0`.
+When several valid packs target the same NPC, the highest `priority` wins;
+ties go to the case-insensitively alphabetical pack folder name. Mod-manager
+load order is irrelevant. A
 candidate with a missing plugin or asset is skipped — never partially
 applied — and the next valid pack wins instead.
 

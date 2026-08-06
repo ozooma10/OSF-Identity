@@ -2323,7 +2323,7 @@ namespace NpcAppearance
             };
 
             const auto valid = ParsePackageManifest(
-                R"({"schemaVersion":1,"packageId":"author.sarah","priority":100,"requires":{"plugins":["Starfield.esm"],"assets":[]},"assignments":[{"target":{"editorId":"Companion_SarahMorgan"},"preset":"Sarah.npc","scope":"faceAndBody"}]})",
+                R"({"schemaVersion":1,"priority":100,"requires":{"plugins":["Starfield.esm"],"assets":[]},"assignments":[{"target":{"editorId":"Companion_SarahMorgan"},"preset":"Sarah.npc","scope":"faceAndBody"}]})",
                 manifestPath, false);
             check(valid.manifest && valid.manifest->assignments.size() == 1 && valid.issues.empty(),
                   "valid production manifest");
@@ -2332,27 +2332,27 @@ namespace NpcAppearance
                   "canonical case-insensitive EditorID target");
 
             const auto traversal = ParsePackageManifest(
-                R"({"schemaVersion":1,"packageId":"author.traversal","priority":0,"requires":{"plugins":[],"assets":[]},"assignments":[{"target":{"editorId":"Companion_SarahMorgan"},"preset":"../escape.npc","scope":"faceAndBody"}]})",
+                R"({"schemaVersion":1,"priority":0,"requires":{"plugins":[],"assets":[]},"assignments":[{"target":{"editorId":"Companion_SarahMorgan"},"preset":"../escape.npc","scope":"faceAndBody"}]})",
                 manifestPath, false);
             check(traversal.HasFatalError(), "parent traversal rejected");
 
             const auto unsupportedScope = ParsePackageManifest(
-                R"({"schemaVersion":1,"packageId":"author.scope","priority":0,"requires":{"plugins":[],"assets":[]},"assignments":[{"target":{"editorId":"Companion_SarahMorgan"},"preset":"Sarah.npc","scope":"faceOnly"}]})",
+                R"({"schemaVersion":1,"priority":0,"requires":{"plugins":[],"assets":[]},"assignments":[{"target":{"editorId":"Companion_SarahMorgan"},"preset":"Sarah.npc","scope":"faceOnly"}]})",
                 manifestPath, false);
             check(unsupportedScope.HasFatalError(), "unproven scope rejected");
 
             const auto unsupported = ParsePackageManifest(
-                R"({"schemaVersion":2,"packageId":"author.version","priority":0,"requires":{"plugins":[],"assets":[]},"assignments":[]})",
+                R"({"schemaVersion":2,"priority":0,"requires":{"plugins":[],"assets":[]},"assignments":[]})",
                 manifestPath, false);
             check(unsupported.HasFatalError(), "unknown schema version rejected");
 
             const auto unknownProperty = ParsePackageManifest(
-                R"({"schemaVersion":1,"packageId":"author.unknown","priority":0,"requires":{"plugins":[],"assets":[]},"assignments":[],"surprise":true})",
+                R"({"schemaVersion":1,"priority":0,"requires":{"plugins":[],"assets":[]},"assignments":[],"surprise":true})",
                 manifestPath, false);
             check(unknownProperty.HasFatalError(), "unknown root property rejected");
 
             const auto malformed = ParsePackageManifest(
-                R"({"schemaVersion":1,"packageId":)", manifestPath, false);
+                R"({"schemaVersion":)", manifestPath, false);
             check(malformed.HasFatalError(), "truncated JSON rejected");
 
             std::string oversized(kMaxManifestBytes + 1, ' ');
