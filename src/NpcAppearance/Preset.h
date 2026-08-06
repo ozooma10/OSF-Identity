@@ -8,7 +8,7 @@
 #include <string_view>
 #include <vector>
 
-namespace Probe::NpcAppearance
+namespace NpcAppearance
 {
     inline constexpr std::uint32_t kCkPresetSchemaVersion = 1;
     inline constexpr std::string_view kCkPresetProducer = "Creation Kit 1.16.244";

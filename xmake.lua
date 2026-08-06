@@ -19,10 +19,10 @@ target("OSF Identity")
 
     add_files(
         "src/main.cpp",
-        "src/Probe/NpcAppearanceConfig.cpp",
-        "src/Probe/NpcAppearancePreset.cpp",
-        "src/Probe/NpcAppearanceResolver.cpp",
-        "src/Probe/NpcAppearanceProbe.cpp",
+        "src/NpcAppearance/Config.cpp",
+        "src/NpcAppearance/Preset.cpp",
+        "src/NpcAppearance/Resolver.cpp",
+        "src/NpcAppearance/Runtime.cpp",
         "src/Util/NativeMainThreadQueue.cpp"
     )
     add_headerfiles("src/**.h")
@@ -71,12 +71,12 @@ target("npc-appearance-config-tests")
     set_kind("binary")
     set_default(false)
     set_rundir(os.projectdir())
-    add_files("tools/tests/npc_appearance_config_tests.cpp", "src/Probe/NpcAppearanceConfig.cpp")
+    add_files("tools/tests/npc_appearance_config_tests.cpp", "src/NpcAppearance/Config.cpp")
     add_includedirs("src")
 
 target("npc-appearance-preset-tests")
     set_kind("binary")
     set_default(false)
     set_rundir(os.projectdir())
-    add_files("tools/tests/npc_appearance_preset_tests.cpp", "src/Probe/NpcAppearancePreset.cpp")
+    add_files("tools/tests/npc_appearance_preset_tests.cpp", "src/NpcAppearance/Preset.cpp")
     add_includedirs("src")

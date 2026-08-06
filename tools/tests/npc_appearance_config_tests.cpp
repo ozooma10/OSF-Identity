@@ -1,4 +1,4 @@
-#include "Probe/NpcAppearanceConfig.h"
+#include "NpcAppearance/Config.h"
 
 #include <algorithm>
 #include <filesystem>
@@ -39,7 +39,7 @@ namespace
         stream.write(a_text.data(), static_cast<std::streamsize>(a_text.size()));
     }
 
-    bool HasPlugin(const Probe::NpcAppearance::Requirements& a_requirements,
+    bool HasPlugin(const NpcAppearance::Requirements& a_requirements,
                    const std::string_view a_plugin)
     {
         return std::ranges::any_of(a_requirements.plugins, [&](const auto& a_candidate) {
@@ -47,7 +47,7 @@ namespace
         });
     }
 
-    bool HasIssue(const std::vector<Probe::NpcAppearance::ManifestIssue>& a_issues,
+    bool HasIssue(const std::vector<NpcAppearance::ManifestIssue>& a_issues,
                   const std::string_view a_code)
     {
         return std::ranges::any_of(a_issues, [&](const auto& a_issue) {
@@ -58,7 +58,7 @@ namespace
 
 int main()
 {
-    namespace NA = Probe::NpcAppearance;
+    namespace NA = NpcAppearance;
     const auto root = std::filesystem::absolute("tmp/npc-appearance-config-tests");
     std::filesystem::remove_all(root);
     const auto manifestPath = root / "author.sarah" / "package.json";

@@ -1,4 +1,4 @@
-#include "Probe/NpcAppearanceResolver.h"
+#include "NpcAppearance/Resolver.h"
 
 #include "pch.h"
 
@@ -14,7 +14,7 @@
 #include <string_view>
 #include <unordered_set>
 
-namespace Probe::NpcAppearance
+namespace NpcAppearance
 {
     namespace
     {

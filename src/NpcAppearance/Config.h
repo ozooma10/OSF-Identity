@@ -8,7 +8,7 @@
 #include <string_view>
 #include <vector>
 
-namespace Probe::NpcAppearance
+namespace NpcAppearance
 {
     inline constexpr std::size_t kMaxManifestBytes = 1024 * 1024;
     inline constexpr std::size_t kMaxAssignments = 1024;

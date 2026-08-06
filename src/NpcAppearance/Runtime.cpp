@@ -1,8 +1,8 @@
-#include "Probe/NpcAppearanceProbe.h"
+#include "NpcAppearance/Runtime.h"
 
-#include "Probe/NpcAppearanceConfig.h"
-#include "Probe/NpcAppearancePreset.h"
-#include "Probe/NpcAppearanceResolver.h"
+#include "NpcAppearance/Config.h"
+#include "NpcAppearance/Preset.h"
+#include "NpcAppearance/Resolver.h"
 #include "pch.h"
 
 #include "Util/NativeMainThreadQueue.h"
@@ -31,7 +31,7 @@
 #include <utility>
 #include <vector>
 
-namespace Probe::NpcAppearance
+namespace NpcAppearance
 {
     namespace
     {

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Probe/NpcAppearancePreset.h"
+#include "NpcAppearance/Preset.h"
 
 #include <cstddef>
 #include <string>
@@ -13,7 +13,7 @@ namespace RE
     class TESRace;
 }
 
-namespace Probe::NpcAppearance
+namespace NpcAppearance
 {
     struct DependencyIssue
     {

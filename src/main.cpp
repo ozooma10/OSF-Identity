@@ -1,4 +1,4 @@
-#include "Probe/NpcAppearanceProbe.h"
+#include "NpcAppearance/Runtime.h"
 #include "pch.h"
 
 namespace
@@ -6,7 +6,7 @@ namespace
     void OnDataLoaded()
     {
         REX::INFO("=== OSF Identity: data loaded ===");
-        Probe::NpcAppearance::Initialize();
+        NpcAppearance::Initialize();
 
         const auto* tasks = SFSE::GetTaskInterface();
         if (!tasks) {
@@ -18,7 +18,7 @@ namespace
         if (!installed) {
             installed = true;
             tasks->AddPermanentTask([] {
-                Probe::NpcAppearance::OnFrame();
+                NpcAppearance::OnFrame();
             });
         }
 

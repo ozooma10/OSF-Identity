@@ -30,7 +30,7 @@
 // nonvisual base data before/after, but intentionally mutates the target base in
 // the current game session. The file importer remains fail-closed until `.npc`
 // ownership and decoding are proven.
-namespace Probe::NpcAppearance
+namespace NpcAppearance
 {
     using LineSink = std::function<void(const std::string&)>;
 

@@ -1,6 +1,6 @@
-#include "Probe/NpcAppearancePreset.h"
+#include "NpcAppearance/Preset.h"
 
-#include "Probe/NpcAppearanceConfig.h"
+#include "NpcAppearance/Config.h"
 
 #include <algorithm>
 #include <charconv>
@@ -14,7 +14,7 @@
 #include <unordered_set>
 #include <utility>
 
-namespace Probe::NpcAppearance
+namespace NpcAppearance
 {
     namespace
     {
