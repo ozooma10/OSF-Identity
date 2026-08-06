@@ -32,6 +32,10 @@ xmake build "OSF Identity"
 Set `XSE_SF_MODS_PATH` to deploy into a matching MO2 mod folder, or
 `XSE_SF_GAME_PATH` to deploy into the game Data directory.
 
+On non-Windows machines, `./tools/verify-host.sh` runs the host-side subset
+(both host test suites, fixture validator tests, provenance gate); the game
+plugin itself still requires the Windows toolchain.
+
 ## Evidence boundary
 
 Host tests and successful compilation do not prove the game-side lifecycle.
