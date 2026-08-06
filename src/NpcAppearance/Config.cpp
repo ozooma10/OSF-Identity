@@ -150,6 +150,14 @@ namespace NpcAppearance
                 a_error = "path is empty";
                 return false;
             }
+            // Reject Windows-style roots (drive letters, leading separators)
+            // explicitly so validation behaves identically on every host and
+            // the host test suite is portable; std::filesystem only recognizes
+            // them on Windows.
+            if (a_text.contains(':') || a_text.front() == '/' || a_text.front() == '\\') {
+                a_error = "path must be relative";
+                return false;
+            }
             const std::filesystem::path relative{ a_text };
             if (relative.is_absolute() || relative.has_root_name() || relative.has_root_directory()) {
                 a_error = "path must be relative";

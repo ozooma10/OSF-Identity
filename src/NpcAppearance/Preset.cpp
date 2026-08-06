@@ -403,7 +403,8 @@ namespace NpcAppearance
                              "duplicate tint layer name '" + name->string + "'");
                     return false;
                 }
-                PresetTintLayer decoded{ .name = name->string };
+                PresetTintLayer decoded;
+                decoded.name = name->string;
                 if (!ReadBoundedNumber(*intensity, 0.0, a_charGenMenu ? 0.5 : 1.0,
                                        decoded.intensity, a_result, a_path,
                                        "tint layer intensity") ||
