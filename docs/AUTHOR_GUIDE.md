@@ -2,12 +2,13 @@
 
 ## Quickstart
 
-An appearance package replaces the face and body of unique human NPCs with presets you export from Creation Kit or CharGenMenu. It is a plain mod folder containing one manifest plus one preset file per target NPC:
+An appearance package replaces the face and body of unique human NPCs with
+presets you export from Creation Kit or CharGenMenu. It is a plain mod folder
+holding one preset file per target NPC — no manifest required:
 
 ```text
 Data/SFSE/Plugins/OSFIdentity/Packages/
-  author.my-pack/
-    package.json                  # id, priority, shared dependencies
+  author.my-pack/                 # folder name is the packageId
     Presets/
       Starfield.esm/              # plugin that owns the base NPC
         00005983.npc              # that plugin's local FormID (Sarah)
@@ -22,43 +23,64 @@ To build one:
 2. **Name it after the target.** Directory = owning plugin, filename = that
    plugin's local FormID (8-digit hex, load-order index zeroed out). Presets
    must sit directly in the plugin directory — nested folders are not scanned.
-3. **Write `package.json`** at the package root:
-
-   ```json
-   {
-     "schemaVersion": 1,
-     "packageId": "author.my-pack",
-     "priority": 100,
-     "requires": { "plugins": [], "assets": [] },
-     "presetConvention": "pluginFolderLocalFormId"
-   }
-   ```
-
-4. **Declare dependencies.** Optional hair, beard, or asset mods go in the
-   manifest `requires` (package-wide) or a sidecar (per preset, below).
-   Undeclared dependencies are the top cause of "works on my machine."
+3. **Name the package folder.** Lowercased, it becomes your `packageId`, so it
+   must be 3-128 ASCII letters, digits, `.`, `_`, or `-`, starting with a
+   letter or digit. `Author.MyPack` becomes `author.mypack`; a folder with
+   spaces, punctuation, or non-ASCII characters is rejected with
+   `invalid_package_folder_name` and you must rename it or add a manifest.
+   A manifest-less package may contain nothing but `Presets/` — a stray
+   `package.jsn`, `notes.json`, or a `package.json` buried in a subfolder
+   rejects the whole package rather than being ignored.
+4. **Declare dependencies.** Optional hair, beard, or asset mods go in a
+   sidecar (per preset, below) or in a manifest `requires` (package-wide).
+   Undeclared dependencies are the top cause of "works on my machine" — users
+   without them load a broken preset.
 5. **Restart Starfield through SFSE.** Packages are scanned once after game
    data load; a quickload will not pick up changes. Confirm your `packageId`
    appears as the winner in
    `Documents\My Games\Starfield\SFSE\Logs\osf-identity.log` — failures are
    silent in-game and explained only in the log.
 
+## When you need a manifest
+
+A manifest-less package runs at priority `0` with no package-wide
+requirements. Add `package.json` at the package root when you need a different
+priority, `requires` shared by every preset, or explicit assignments:
+
+```json
+{
+  "schemaVersion": 1,
+  "packageId": "author.my-pack",
+  "priority": 100,
+  "requires": { "plugins": [], "assets": [] },
+  "presetConvention": "pluginFolderLocalFormId"
+}
+```
+
+A manifest overrides the folder name, so `packageId` no longer has to match it.
 
 ## Manifest reference
 
-- `packageId` - stable lowercase identifier, 3-128 characters.
-- `priority` - `-1000000` to `1000000`. When several valid packages target the
-  same NPC, the highest priority wins; ties go to ascending `packageId`.
-  Mod-manager order is irrelevant.
+- `packageId` - stable lowercase identifier, 3-128 characters. Defaults to the
+  lowercased folder name when there is no manifest.
+- `priority` - `-1000000` to `1000000`, defaulting to `0`. When several valid
+  packages target the same NPC, the highest priority wins; ties go to ascending
+  `packageId`. Mod-manager order is irrelevant. The `100` used in these
+  examples outranks every manifest-less package.
 - `requires` - plugins and loose Data-relative assets every preset needs. The
   owning plugin of each preset is always an implicit requirement. A missing
   package-wide requirement disables the whole package.
 - Exactly one of `presetConvention: "pluginFolderLocalFormId"` or
   `assignments`.
 
+Two packages that resolve to the same `packageId` — including a folder name
+that folds onto another package's explicit `packageId` — are both rejected with
+`duplicate_package_id`.
+
 `package.schema.json` and `preset-metadata.schema.json` give editor
-validation; the runtime parser is authoritative and rejects unknown
-properties, duplicate targets, path traversal, and absolute preset paths.
+validation for the files they describe; both files are optional. The runtime
+parser is authoritative and rejects unknown properties, duplicate targets, path
+traversal, and absolute preset paths.
 
 ## Per-preset dependencies
 

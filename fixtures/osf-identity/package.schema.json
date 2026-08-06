@@ -2,6 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:osf-identity:package:v1",
   "title": "OSF Identity appearance package",
+  "description": "Optional package manifest. A package without a package.json is discovered from its folder name (lowercased) at priority 0 using the pluginFolderLocalFormId convention; add this file only to set a priority, share requires across presets, or use explicit assignments.",
   "type": "object",
   "additionalProperties": false,
   "required": [

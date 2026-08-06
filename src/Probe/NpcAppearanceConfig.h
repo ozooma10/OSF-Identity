@@ -73,6 +73,19 @@ namespace Probe::NpcAppearance
         std::vector<Assignment> assignments;
         std::filesystem::path manifestPath;
         PackageFormat format{ PackageFormat::kExplicitAssignments };
+        bool implicitManifest{ false };
+
+        // Package root directory. For an implicit package `manifestPath` names the
+        // manifest the author never wrote, so it is only ever an anchor.
+        [[nodiscard]] std::filesystem::path PackageRoot() const
+        {
+            return manifestPath.parent_path();
+        }
+
+        [[nodiscard]] std::filesystem::path DiagnosticPath() const
+        {
+            return implicitManifest ? manifestPath.parent_path() : manifestPath;
+        }
     };
 
     struct ManifestIssue

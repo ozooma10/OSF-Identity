@@ -2399,8 +2399,17 @@ namespace Probe::NpcAppearance
             }
 
             std::size_t decodedPresets = 0;
+            std::size_t implicitPackages = 0;
             std::vector<PackageManifest> validatedPackages;
             for (const auto& package : discovery.packages) {
+                if (package.implicitManifest) {
+                    ++implicitPackages;
+                }
+                a_out(std::format("package '{}' discovery={} priority={} root={} assignments={}",
+                                  package.packageID,
+                                  package.implicitManifest ? "implicit" : "manifest",
+                                  package.priority, package.PackageRoot().string(),
+                                  package.assignments.size()));
                 bool packageRequirementsComplete = true;
                 for (const auto& plugin : package.requirements.plugins) {
                     if (!FindLoadedPlugin(plugin)) {
@@ -2518,9 +2527,10 @@ namespace Probe::NpcAppearance
             }
             g_sceneDispatchObserveArmed.store(false, std::memory_order_release);
             g_sceneAutoTrialArmed.store(false, std::memory_order_release);
-            a_out(std::format("scan: discoveredPackages={} validPackages={} decodedPresets={} validCandidates={} winners={} resolvedTargets={}; validation only, owned population/application gate prevents mutation",
-                              discovery.packages.size(), validatedPackages.size(), decodedPresets,
-                              selection.decisions.size(), selection.winners.size(), resolvedCount));
+            a_out(std::format("scan: discoveredPackages={} implicitPackages={} validPackages={} decodedPresets={} validCandidates={} winners={} resolvedTargets={}; validation only, owned population/application gate prevents mutation",
+                              discovery.packages.size(), implicitPackages, validatedPackages.size(),
+                              decodedPresets, selection.decisions.size(), selection.winners.size(),
+                              resolvedCount));
         }
 
         void RunEvent(const LineSink& a_out, const std::vector<std::string>& a_args)

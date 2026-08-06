@@ -36,6 +36,16 @@ Documents\My Games\Starfield\SFSE\Logs\osf-identity.log
 
 - `package directory absent` - no appearance package is installed
 - `no fully validated winning assignments` - every candidate failed validation
+- `invalid_package_folder_name` - a package folder needs renaming; ask the
+  author, or rename it to letters, digits, `.`, `_`, or `-` only
+- `suspect_package_root_file` - a package with no `package.json` has a
+  stray or misnamed JSON file at its root, so it was rejected
+- `manifest_not_at_package_root` - the package's `package.json` sits in a
+  subfolder instead of the package root
+- `stray_package_root_file` - a loose file was dropped straight into
+  `Packages/` instead of a package folder, and was ignored
+- `duplicate_package_id` - two packages claim the same id, so both were
+  rejected; rename one folder
 - `required package plugin or asset missing` - that package is disabled
 - `required preset plugin or asset missing` - only that preset is disabled; a lower-priority candidate may win
 - `preset rejected` - malformed file or unsupported producer

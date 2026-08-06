@@ -917,6 +917,116 @@ namespace Probe::NpcAppearance
                 a_manifest.assignments.push_back(std::move(candidate.assignment));
             }
         }
+
+        // A manifest-less package may only contain Presets/. Anything at its root that
+        // looks like a manifest the runtime failed to recognize is a near-miss worth
+        // diagnosing instead of silently treating the package as convention-only.
+        [[nodiscard]] bool IsSuspectRootFile(const std::filesystem::path& a_file)
+        {
+            const auto filename = FoldASCII(a_file.filename().string());
+            if (filename == "package.json") {
+                return false;
+            }
+            const auto extension = FoldASCII(a_file.extension().string());
+            return extension == ".json" || extension == ".jsonc" ||
+                filename.starts_with("package.");
+        }
+
+        [[nodiscard]] bool FindNestedManifest(
+            const std::filesystem::path& a_packageDirectory,
+            std::filesystem::path& a_out)
+        {
+            std::error_code ec;
+            std::filesystem::recursive_directory_iterator it{
+                a_packageDirectory, std::filesystem::directory_options::skip_permission_denied, ec };
+            const std::filesystem::recursive_directory_iterator end;
+            for (; !ec && it != end; it.increment(ec)) {
+                if (it->is_regular_file(ec) && !ec &&
+                    FoldASCII(it->path().filename().string()) == "package.json") {
+                    a_out = it->path();
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        [[nodiscard]] ManifestResult BuildImplicitPackage(
+            const std::filesystem::path& a_packageDirectory,
+            const bool a_requirePresetFiles)
+        {
+            ManifestResult result;
+            const auto folderName = a_packageDirectory.filename().string();
+            const auto packageID = FoldASCII(folderName);
+            if (!IsPackageID(packageID)) {
+                AddIssue(result, a_packageDirectory, 0, "invalid_package_folder_name",
+                         "package folder name '" + folderName +
+                             "' cannot be used as a packageId; rename the folder to 3-128 ASCII "
+                             "letters, digits, '.', '_' or '-' starting with a letter or digit, or "
+                             "add a package.json");
+                return result;
+            }
+
+            PackageManifest manifest;
+            manifest.schemaVersion = 1;
+            manifest.packageID = packageID;
+            manifest.priority = 0;
+            manifest.manifestPath = a_packageDirectory / "package.json";
+            manifest.format = PackageFormat::kPluginFolderLocalFormID;
+            manifest.implicitManifest = true;
+            DiscoverConventionAssignments(manifest, result, a_requirePresetFiles);
+            result.manifest = std::move(manifest);
+            return result;
+        }
+
+        [[nodiscard]] ManifestResult LoadPackageDirectory(
+            const std::filesystem::path& a_packageDirectory,
+            const bool a_requirePresetFiles)
+        {
+            ManifestResult result;
+            std::optional<std::filesystem::path> manifestPath;
+            std::vector<std::filesystem::path> suspects;
+            std::error_code ec;
+            std::filesystem::directory_iterator it{
+                a_packageDirectory, std::filesystem::directory_options::skip_permission_denied, ec };
+            const std::filesystem::directory_iterator end;
+            for (; !ec && it != end; it.increment(ec)) {
+                if (!it->is_regular_file(ec) || ec) {
+                    continue;
+                }
+                if (FoldASCII(it->path().filename().string()) == "package.json") {
+                    manifestPath = it->path();
+                } else if (IsSuspectRootFile(it->path())) {
+                    suspects.push_back(it->path());
+                }
+            }
+            if (ec) {
+                AddIssue(result, a_packageDirectory, 0, "package_scan_failed", ec.message());
+                return result;
+            }
+
+            if (manifestPath) {
+                return LoadPackageManifest(*manifestPath, a_requirePresetFiles);
+            }
+            if (!suspects.empty()) {
+                std::ranges::sort(suspects, [](const auto& a_left, const auto& a_right) {
+                    return FoldASCII(a_left.filename().string()) <
+                        FoldASCII(a_right.filename().string());
+                });
+                AddIssue(result, suspects.front(), 0, "suspect_package_root_file",
+                         "package has no package.json; rename '" +
+                             suspects.front().filename().string() +
+                             "' to 'package.json' or remove it, because a manifest-less package may "
+                             "only contain Presets/");
+                return result;
+            }
+            if (std::filesystem::path nested; FindNestedManifest(a_packageDirectory, nested)) {
+                AddIssue(result, nested, 0, "manifest_not_at_package_root",
+                         "package.json must sit at the package root; move it to '" +
+                             (a_packageDirectory / "package.json").string() + "'");
+                return result;
+            }
+            return BuildImplicitPackage(a_packageDirectory, a_requirePresetFiles);
+        }
     }
 
     std::string Target::CanonicalKey() const
@@ -1145,28 +1255,31 @@ namespace Probe::NpcAppearance
             result.issues.push_back({ a_packagesRoot, 0, "package_root_missing", "package root is missing or is not a directory" });
             return result;
         }
-        std::vector<std::filesystem::path> manifests;
-        std::filesystem::recursive_directory_iterator it{ a_packagesRoot,
+        std::vector<std::filesystem::path> packageDirectories;
+        std::filesystem::directory_iterator it{ a_packagesRoot,
             std::filesystem::directory_options::skip_permission_denied, ec };
-        const std::filesystem::recursive_directory_iterator end;
+        const std::filesystem::directory_iterator end;
         for (; !ec && it != end; it.increment(ec)) {
-            if (it->is_regular_file(ec) && !ec && FoldASCII(it->path().filename().string()) == "package.json") {
-                manifests.push_back(it->path());
-                if (manifests.size() > kMaxPackages) {
+            if (it->is_directory(ec) && !ec) {
+                packageDirectories.push_back(it->path());
+                if (packageDirectories.size() > kMaxPackages) {
                     result.issues.push_back({ a_packagesRoot, 0, "package_limit_exceeded", "package count exceeds safety limit" });
                     return result;
                 }
+            } else if (!ec) {
+                result.issues.push_back({ it->path(), 0, "stray_package_root_file",
+                                          "files directly under the package root are ignored; every package must be its own folder" });
             }
         }
         if (ec) {
             result.issues.push_back({ a_packagesRoot, 0, "package_scan_failed", ec.message() });
             return result;
         }
-        std::ranges::sort(manifests, [](const auto& a_left, const auto& a_right) {
+        std::ranges::sort(packageDirectories, [](const auto& a_left, const auto& a_right) {
             return FoldASCII(a_left.generic_string()) < FoldASCII(a_right.generic_string());
         });
-        for (const auto& manifestPath : manifests) {
-            auto parsed = LoadPackageManifest(manifestPath, a_requirePresetFiles);
+        for (const auto& packageDirectory : packageDirectories) {
+            auto parsed = LoadPackageDirectory(packageDirectory, a_requirePresetFiles);
             result.issues.insert(result.issues.end(),
                                  std::make_move_iterator(parsed.issues.begin()),
                                  std::make_move_iterator(parsed.issues.end()));
@@ -1183,7 +1296,7 @@ namespace Probe::NpcAppearance
             if (counts[FoldASCII(package.packageID)] == 1) {
                 return false;
             }
-            result.issues.push_back({ package.manifestPath, 0, "duplicate_package_id",
+            result.issues.push_back({ package.DiagnosticPath(), 0, "duplicate_package_id",
                                       "every package using duplicate packageId '" + package.packageID + "' was rejected" });
             return true;
         });

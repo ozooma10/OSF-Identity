@@ -1,5 +1,6 @@
 #include "Probe/NpcAppearanceConfig.h"
 
+#include <algorithm>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -297,6 +298,83 @@ int main()
     Check(discovery.packages.size() == 1 && discovery.packages[0].packageID == "author.unique",
           "all duplicate packageIds rejected independently");
     Check(discovery.issues.size() == 2, "duplicate package diagnostics emitted");
+    Check(!discovery.packages.empty() && !discovery.packages[0].implicitManifest,
+          "package with a package.json is not reported as implicit");
+
+    const auto implicitRoot = root / "implicit-discovery";
+    Write(implicitRoot / "Author.MyPack" / "Presets" / "Starfield.esm" / "0029A8EB.npc", "fixture");
+    Write(implicitRoot / "My Cool Pack!" / "Presets" / "Starfield.esm" / "00005983.npc", "fixture");
+    Write(implicitRoot / "ab" / "Presets" / "Starfield.esm" / "00005983.npc", "fixture");
+    Write(implicitRoot / "author.suspect" / "package.jsn", "{}");
+    Write(implicitRoot / "author.suspect" / "Presets" / "Starfield.esm" / "00005983.npc", "fixture");
+    Write(implicitRoot / "author.stray-json" / "notes.json", "{}");
+    Write(implicitRoot / "author.stray-json" / "Presets" / "Starfield.esm" / "00005983.npc",
+          "fixture");
+    Write(implicitRoot / "author.nested" / "inner" / "package.json", Manifest("author.nested-inner"));
+    Write(implicitRoot / "author.nested" / "inner" / "Presets" / "Sarah.npc", "fixture");
+    std::filesystem::create_directories(implicitRoot / "author.empty");
+    Write(implicitRoot / "loose-note.txt", "stray");
+    const auto implicitDiscovery = NA::DiscoverPackages(implicitRoot, true);
+    const auto implicitPack = std::ranges::find_if(
+        implicitDiscovery.packages, [](const auto& a_package) {
+            return a_package.packageID == "author.mypack";
+        });
+    Check(implicitPack != implicitDiscovery.packages.end() &&
+              implicitPack->implicitManifest && implicitPack->priority == 0 &&
+              implicitPack->format == NA::PackageFormat::kPluginFolderLocalFormID &&
+              implicitPack->assignments.size() == 1 &&
+              implicitPack->assignments[0].target.CanonicalKey() == "starfield.esm:0029a8eb",
+          "manifest-less package folds its folder name to a packageId at priority 0");
+    Check(implicitDiscovery.packages.size() == 2 &&
+              std::ranges::any_of(implicitDiscovery.packages, [](const auto& a_package) {
+                  return a_package.packageID == "author.empty" && a_package.assignments.empty();
+              }),
+          "only valid manifest-less folders are discovered; an empty one stays non-mutating");
+    Check(HasIssue(implicitDiscovery.issues, "invalid_package_folder_name") &&
+              HasIssue(implicitDiscovery.issues, "suspect_package_root_file") &&
+              HasIssue(implicitDiscovery.issues, "manifest_not_at_package_root") &&
+              HasIssue(implicitDiscovery.issues, "stray_package_root_file") &&
+              HasIssue(implicitDiscovery.issues, "preset_root_missing"),
+          "manifest-less discovery diagnoses bad folder names, near-miss and stray files, and nested manifests");
+    Check(std::ranges::count_if(implicitDiscovery.issues, [](const auto& a_issue) {
+              return a_issue.code == "invalid_package_folder_name";
+          }) == 2,
+          "both an illegal-character folder and a too-short folder are rejected");
+
+    const auto mixedRoot = root / "implicit-vs-explicit";
+    Write(mixedRoot / "author.implicit-pack" / "Presets" / "Starfield.esm" / "00005983.npc",
+          "fixture");
+    Write(mixedRoot / "author.explicit-pack" / "package.json",
+          R"({"schemaVersion":1,"packageId":"author.explicit-pack","priority":100,"requires":{"plugins":[],"assets":[]},"presetConvention":"pluginFolderLocalFormId"})");
+    Write(mixedRoot / "author.explicit-pack" / "Presets" / "Starfield.esm" / "00005983.npc",
+          "fixture");
+    const auto mixedDiscovery = NA::DiscoverPackages(mixedRoot, true);
+    const auto mixedSelection = NA::SelectAssignments(mixedDiscovery.packages);
+    Check(mixedDiscovery.packages.size() == 2 && mixedSelection.winners.size() == 1 &&
+              mixedSelection.winners[0].packageID == "author.explicit-pack",
+          "an explicit manifest priority outranks a manifest-less package at the same target");
+
+    const auto collisionRoot = root / "implicit-collision";
+    Write(collisionRoot / "Author.Collide" / "Presets" / "Starfield.esm" / "00005983.npc",
+          "fixture");
+    Write(collisionRoot / "explicit" / "package.json", Manifest("author.collide"));
+    Write(collisionRoot / "explicit" / "Presets" / "Sarah.npc", "fixture");
+    const auto collision = NA::DiscoverPackages(collisionRoot, true);
+    Check(collision.packages.empty() &&
+              std::ranges::count_if(collision.issues, [](const auto& a_issue) {
+                  return a_issue.code == "duplicate_package_id";
+              }) == 2,
+          "a folded folder name colliding with an explicit packageId rejects both");
+
+    const auto checkedInPackages =
+        NA::DiscoverPackages("fixtures/osf-identity/Packages", false);
+    Check(checkedInPackages.packages.size() == 3 &&
+              std::ranges::any_of(checkedInPackages.packages, [](const auto& a_package) {
+                  return a_package.packageID == "author.folder-only-example" &&
+                      a_package.implicitManifest;
+              }) &&
+              checkedInPackages.issues.empty(),
+          "checked-in example packages discover cleanly, including the manifest-less one");
 
     std::cout << "RESULT failed=" << g_failed << '\n';
     return g_failed == 0 ? 0 : 1;

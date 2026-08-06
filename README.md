@@ -25,7 +25,7 @@ packages as separate mods:
 ```text
 Data/SFSE/Plugins/OSFIdentity/Packages/
   author.package-id/
-    package.json
+    package.json          # optional
     Presets/
       Starfield.esm/
         0029A8EB.npc
@@ -38,10 +38,12 @@ appearance. See the [Player Guide](docs/PLAYER_GUIDE.md).
 ## How packages are chosen
 
 Presets target an NPC by owning-plugin directory and plugin-local FormID
-filename. When several valid packages target the same NPC, the highest
-`priority` wins; ties go to the lexically smaller `packageId`. Mod-manager
-load order is irrelevant. A candidate with a missing plugin or asset is
-skipped — never partially applied — and the next valid package wins instead.
+filename. A package needs no manifest: its folder name, lowercased, becomes the
+`packageId` and it runs at the default `priority` of `0`. When several valid
+packages target the same NPC, the highest `priority` wins; ties go to the
+lexically smaller `packageId`. Mod-manager load order is irrelevant. A
+candidate with a missing plugin or asset is skipped — never partially
+applied — and the next valid package wins instead.
 
 See the [Author Guide](docs/AUTHOR_GUIDE.md) for the package format and
 [Compatibility](docs/COMPATIBILITY.md) for runtime boundaries. Example
