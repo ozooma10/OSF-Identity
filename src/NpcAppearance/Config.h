@@ -151,7 +151,7 @@ namespace NpcAppearance
         bool a_requirePresetFiles = true);
 
     [[nodiscard]] DiscoveryResult DiscoverPackages(
-        const std::filesystem::path& a_packagesRoot,
+        const std::filesystem::path& a_packsRoot,
         bool a_requirePresetFiles = true);
 
     [[nodiscard]] AssetRequirementResult CheckRequiredAssets(

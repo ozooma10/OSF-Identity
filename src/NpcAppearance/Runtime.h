@@ -11,7 +11,7 @@
 //
 //   npcapp status
 //   npcapp selftest
-//   npcapp scan [packagesRoot]
+//   npcapp scan [packsRoot]
 //   npcapp inspect <preset.npc>
 //   npcapp resolve <plugin> <localFormID>
 //   npcapp refs <plugin> <localFormID> <preset.npc>

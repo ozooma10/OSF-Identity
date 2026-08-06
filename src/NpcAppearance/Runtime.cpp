@@ -166,7 +166,7 @@ namespace NpcAppearance
         std::atomic<bool>             g_sceneDispatchObserveArmed{ false };
         std::atomic<bool>             g_sceneAutoTrialArmed{ false };
         std::atomic<bool>             g_scenePersistentEnabled{ false };
-        std::atomic<bool>             g_startupPackagesPresent{ false };
+        std::atomic<bool>             g_startupPacksPresent{ false };
         std::atomic<bool>             g_startupPersistentArmed{ false };
         std::atomic<std::uint64_t>    g_sceneSet3dCount{ 0 };
         std::atomic<std::uint64_t>    g_sceneDetachCount{ 0 };
@@ -546,9 +546,9 @@ namespace NpcAppearance
             return GetThisDllDirectory() / L"OSFIdentity";
         }
 
-        [[nodiscard]] std::filesystem::path DefaultPackagesDirectory()
+        [[nodiscard]] std::filesystem::path DefaultPacksDirectory()
         {
-            return DefaultPluginDirectory() / L"Packages";
+            return DefaultPluginDirectory() / L"Packs";
         }
 
         [[nodiscard]] std::filesystem::path DefaultDataDirectory()
@@ -2310,7 +2310,7 @@ namespace NpcAppearance
             const auto root = DefaultPluginDirectory();
             a_out("OSF Identity diagnostics: disabled-by-default / explicit commands only");
             a_out(std::format("pluginDirectory={}", root.string()));
-            a_out(std::format("packagesDirectory={}", DefaultPackagesDirectory().string()));
+            a_out(std::format("packsDirectory={}", DefaultPacksDirectory().string()));
             a_out("manifestParser=implemented (strict package schema v1, plugin+localFormId targeting, containment, deterministic conflicts)");
             a_out("npcDecoder=implemented (strict CK 1.16.244 JSON contract; golden matrix and adversarial corpus pass)");
             a_out("dependencyResolver=RUNTIME-PROVEN read-only on Sarah (forms/headparts + facial shape/bone + FaceDB color/teeth/AVM catalogs)");
@@ -2326,8 +2326,8 @@ namespace NpcAppearance
                               g_debouncedLoadCount.load(std::memory_order_relaxed),
                               g_queuedApplyCount.load(std::memory_order_relaxed),
                               g_ranApplyCount.load(std::memory_order_relaxed)));
-            a_out(std::format("sceneLifecycle=ReferenceSet3d ID 49237 + ReferenceDetach ID 40306 -> BSService::TaskQueue IDs 883606/100121 with drain-owner ID 923104; startupPackagesPresent={} startupPersistentArmed={} sinkRegistered={} observeArmed={} autoTrialArmed={} persistentEnabled={} persistentTracked={} set3d={} detach={} matchingSet3d={} matchingDetach={} selfRefreshSuppressedSet3d={} selfRefreshSuppressedDetach={} debounced={} published={} nativeReady={} nativeObservePass={} nativeLoadingDeferrals={} nativeFrames={} nativeTid={} nativeInFlight={} autoAttempts={} autoApplies={} persistentAttempts={} persistentApplies={} persistentRemovals={}",
-                              g_startupPackagesPresent.load(std::memory_order_relaxed),
+            a_out(std::format("sceneLifecycle=ReferenceSet3d ID 49237 + ReferenceDetach ID 40306 -> BSService::TaskQueue IDs 883606/100121 with drain-owner ID 923104; startupPacksPresent={} startupPersistentArmed={} sinkRegistered={} observeArmed={} autoTrialArmed={} persistentEnabled={} persistentTracked={} set3d={} detach={} matchingSet3d={} matchingDetach={} selfRefreshSuppressedSet3d={} selfRefreshSuppressedDetach={} debounced={} published={} nativeReady={} nativeObservePass={} nativeLoadingDeferrals={} nativeFrames={} nativeTid={} nativeInFlight={} autoAttempts={} autoApplies={} persistentAttempts={} persistentApplies={} persistentRemovals={}",
+                              g_startupPacksPresent.load(std::memory_order_relaxed),
                               g_startupPersistentArmed.load(std::memory_order_relaxed),
                               g_sceneRegistered.load(std::memory_order_relaxed),
                               g_sceneDispatchObserveArmed.load(std::memory_order_relaxed),
@@ -2372,7 +2372,7 @@ namespace NpcAppearance
             };
 
             const auto valid = ParsePackageManifest(
-                R"({"schemaVersion":1,"packageId":"author.sarah","priority":100,"requires":{"plugins":["Starfield.esm"],"assets":[]},"assignments":[{"target":{"plugin":"Starfield.esm","localFormId":"00005983"},"preset":"Presets/Sarah.npc","scope":"faceAndBody"}]})",
+                R"({"schemaVersion":1,"packageId":"author.sarah","priority":100,"requires":{"plugins":["Starfield.esm"],"assets":[]},"assignments":[{"target":{"plugin":"Starfield.esm","localFormId":"00005983"},"preset":"Sarah.npc","scope":"faceAndBody"}]})",
                 manifestPath, false);
             check(valid.manifest && valid.manifest->assignments.size() == 1 && valid.issues.empty(),
                   "valid production manifest");
@@ -2426,28 +2426,28 @@ namespace NpcAppearance
                 a_out("scan: refused while persistent assignment is enabled or tracked; run npcapp scene persistent off first");
                 return;
             }
-            std::filesystem::path packagesRoot;
+            std::filesystem::path packsRoot;
             if (a_args.size() > 2) {
-                packagesRoot = std::filesystem::path{ JoinArguments(a_args, 2) };
+                packsRoot = std::filesystem::path{ JoinArguments(a_args, 2) };
             } else {
-                packagesRoot = DefaultPackagesDirectory();
+                packsRoot = DefaultPacksDirectory();
             }
 
-            a_out(std::format("scan packagesRoot={}", packagesRoot.string()));
-            auto discovery = DiscoverPackages(packagesRoot, true);
+            a_out(std::format("scan packsRoot={}", packsRoot.string()));
+            auto discovery = DiscoverPackages(packsRoot, true);
             for (const auto& issue : discovery.issues) {
-                a_out(std::format("package issue code={} path={} @{}: {}",
+                a_out(std::format("pack issue code={} path={} @{}: {}",
                                   issue.code, issue.path.string(), issue.offset, issue.message));
             }
 
             std::size_t decodedPresets = 0;
-            std::size_t implicitPackages = 0;
-            std::vector<PackageManifest> validatedPackages;
+            std::size_t implicitPacks = 0;
+            std::vector<PackageManifest> validatedPacks;
             for (const auto& package : discovery.packages) {
                 if (package.implicitManifest) {
-                    ++implicitPackages;
+                    ++implicitPacks;
                 }
-                a_out(std::format("package '{}' discovery={} priority={} root={} assignments={}",
+                a_out(std::format("pack '{}' discovery={} priority={} root={} assignments={}",
                                   package.packageID,
                                   package.implicitManifest ? "implicit" : "manifest",
                                   package.priority, package.PackageRoot().string(),
@@ -2455,7 +2455,7 @@ namespace NpcAppearance
                 bool packageRequirementsComplete = true;
                 for (const auto& plugin : package.requirements.plugins) {
                     if (!FindLoadedPlugin(plugin)) {
-                        a_out(std::format("package '{}' rejected: required plugin '{}' is not loaded",
+                        a_out(std::format("pack '{}' rejected: required plugin '{}' is not loaded",
                                           package.packageID, plugin));
                         packageRequirementsComplete = false;
                     }
@@ -2465,7 +2465,7 @@ namespace NpcAppearance
                 if (!packageAssets.Complete()) {
                     packageRequirementsComplete = false;
                     for (const auto& asset : packageAssets.missing) {
-                        a_out(std::format("package '{}' rejected: required Data asset '{}' is missing or is not a regular file",
+                        a_out(std::format("pack '{}' rejected: required Data asset '{}' is missing or is not a regular file",
                                           package.packageID, asset.generic_string()));
                     }
                 }
@@ -2479,7 +2479,7 @@ namespace NpcAppearance
                     bool assignmentRequirementsComplete = true;
                     for (const auto& plugin : assignment.requirements.plugins) {
                         if (!FindLoadedPlugin(plugin)) {
-                            a_out(std::format("candidate package='{}' target={} rejected: required plugin '{}' is not loaded",
+                            a_out(std::format("candidate pack='{}' target={} rejected: required plugin '{}' is not loaded",
                                               package.packageID,
                                               assignment.target.CanonicalKey(), plugin));
                             assignmentRequirementsComplete = false;
@@ -2490,7 +2490,7 @@ namespace NpcAppearance
                     if (!assignmentAssets.Complete()) {
                         assignmentRequirementsComplete = false;
                         for (const auto& asset : assignmentAssets.missing) {
-                            a_out(std::format("candidate package='{}' target={} rejected: required Data asset '{}' is missing or is not a regular file",
+                            a_out(std::format("candidate pack='{}' target={} rejected: required Data asset '{}' is missing or is not a regular file",
                                               package.packageID,
                                               assignment.target.CanonicalKey(),
                                               asset.generic_string()));
@@ -2502,7 +2502,7 @@ namespace NpcAppearance
 
                     const auto decoded = LoadCkPreset(assignment.presetPath);
                     if (!decoded.preset) {
-                        a_out(std::format("candidate package='{}' target={} rejected: preset '{}' does not satisfy a supported 1.16.244 producer contract",
+                        a_out(std::format("candidate pack='{}' target={} rejected: preset '{}' does not satisfy a supported 1.16.244 producer contract",
                                           package.packageID,
                                           assignment.target.CanonicalKey(),
                                           assignment.presetPath.string()));
@@ -2517,7 +2517,7 @@ namespace NpcAppearance
 
                     auto* npc = ResolveEligibleTarget(a_out, assignment.target);
                     if (!npc) {
-                        a_out(std::format("candidate package='{}' target={} rejected: target is absent or ineligible",
+                        a_out(std::format("candidate pack='{}' target={} rejected: target is absent or ineligible",
                                           package.packageID,
                                           assignment.target.CanonicalKey()));
                         continue;
@@ -2525,7 +2525,7 @@ namespace NpcAppearance
                     const auto resolved = ResolveAppearanceDependencies(*decoded.preset, npc);
                     ReportDependencyResolution(a_out, resolved);
                     if (!resolved.Complete()) {
-                        a_out(std::format("candidate package='{}' target={} rejected: preset appearance references are incomplete",
+                        a_out(std::format("candidate pack='{}' target={} rejected: preset appearance references are incomplete",
                                           package.packageID,
                                           assignment.target.CanonicalKey()));
                         continue;
@@ -2533,13 +2533,13 @@ namespace NpcAppearance
                     validatedPackage.assignments.push_back(assignment);
                 }
                 if (!validatedPackage.assignments.empty()) {
-                    validatedPackages.push_back(std::move(validatedPackage));
+                    validatedPacks.push_back(std::move(validatedPackage));
                 }
             }
 
-            const auto selection = SelectAssignments(validatedPackages);
+            const auto selection = SelectAssignments(validatedPacks);
             for (const auto& decision : selection.decisions) {
-                a_out(std::format("conflict target={} package='{}' priority={} result={} reason={}",
+                a_out(std::format("conflict target={} pack='{}' priority={} result={} reason={}",
                                   decision.targetKey, decision.packageID, decision.priority,
                                   decision.winner ? "winner" : "loser", decision.reason));
             }
@@ -2552,7 +2552,7 @@ namespace NpcAppearance
                     resolvedBaseIDs.insert(npc->GetFormID());
                     resolvedAssignments.emplace(npc->GetFormID(), assignment);
                 }
-                a_out(std::format("  winner package='{}' priority={} target={} preset={} targetResolved={}",
+                a_out(std::format("  winner pack='{}' priority={} target={} preset={} targetResolved={}",
                                   assignment.packageID, assignment.priority,
                                   assignment.target.CanonicalKey(), assignment.presetPath.string(),
                                   static_cast<void*>(npc)));
@@ -2569,8 +2569,8 @@ namespace NpcAppearance
             }
             g_sceneDispatchObserveArmed.store(false, std::memory_order_release);
             g_sceneAutoTrialArmed.store(false, std::memory_order_release);
-            a_out(std::format("scan: discoveredPackages={} implicitPackages={} validPackages={} decodedPresets={} validCandidates={} winners={} resolvedTargets={}; validation only, owned population/application gate prevents mutation",
-                              discovery.packages.size(), implicitPackages, validatedPackages.size(),
+            a_out(std::format("scan: discoveredPacks={} implicitPacks={} validPacks={} decodedPresets={} validCandidates={} winners={} resolvedTargets={}; validation only, owned population/application gate prevents mutation",
+                              discovery.packages.size(), implicitPacks, validatedPacks.size(),
                               decodedPresets, selection.decisions.size(), selection.winners.size(),
                               resolvedCount));
         }
@@ -2713,8 +2713,8 @@ namespace NpcAppearance
                     persistentTracked = g_persistentAppliedRefs.size();
                     pending = g_pendingSceneApply.has_value();
                 }
-                a_out(std::format("scene: startupPackagesPresent={} startupPersistentArmed={} registered={} observeArmed={} autoTrialArmed={} persistentEnabled={} persistentTracked={} targetBases={} assignments={} trackedRefs={} pending={} set3dTotal={} detachTotal={} matchingSet3d={} matchingDetach={} selfRefreshSuppressedSet3d={} selfRefreshSuppressedDetach={} debounced={} published={} nativeReady={} nativeObservePass={} nativeLoadingDeferrals={} nativeFrames={} nativeTid={} nativeInFlight={} autoAttempts={} autoApplies={} persistentAttempts={} persistentApplies={} persistentRemovals={}",
-                                  g_startupPackagesPresent.load(std::memory_order_relaxed),
+                a_out(std::format("scene: startupPacksPresent={} startupPersistentArmed={} registered={} observeArmed={} autoTrialArmed={} persistentEnabled={} persistentTracked={} targetBases={} assignments={} trackedRefs={} pending={} set3dTotal={} detachTotal={} matchingSet3d={} matchingDetach={} selfRefreshSuppressedSet3d={} selfRefreshSuppressedDetach={} debounced={} published={} nativeReady={} nativeObservePass={} nativeLoadingDeferrals={} nativeFrames={} nativeTid={} nativeInFlight={} autoAttempts={} autoApplies={} persistentAttempts={} persistentApplies={} persistentRemovals={}",
+                                  g_startupPacksPresent.load(std::memory_order_relaxed),
                                   g_startupPersistentArmed.load(std::memory_order_relaxed),
                                   g_sceneRegistered.load(std::memory_order_relaxed),
                                   g_sceneDispatchObserveArmed.load(std::memory_order_relaxed),
@@ -4495,22 +4495,22 @@ namespace NpcAppearance
 
         // ==================================================================
         // Startup
-        // Fail-closed arming sequence: packages directory -> scan ->
+        // Fail-closed arming sequence: packs directory -> scan ->
         // validated winners -> scene sinks -> persistent manager.
         // ==================================================================
         void OnNpcAppearanceDataLoaded()
         {
-            g_startupPackagesPresent.store(false, std::memory_order_release);
+            g_startupPacksPresent.store(false, std::memory_order_release);
             g_startupPersistentArmed.store(false, std::memory_order_release);
 
-            const auto packagesRoot = DefaultPackagesDirectory();
+            const auto packsRoot = DefaultPacksDirectory();
             std::error_code ec;
-            const bool packagesPresent =
-                std::filesystem::is_directory(packagesRoot, ec) && !ec;
-            g_startupPackagesPresent.store(packagesPresent, std::memory_order_release);
-            if (!packagesPresent) {
-                REX::INFO("[NpcAppearance] startup disabled: package directory is absent ({})",
-                          packagesRoot.string());
+            const bool packsPresent =
+                std::filesystem::is_directory(packsRoot, ec) && !ec;
+            g_startupPacksPresent.store(packsPresent, std::memory_order_release);
+            if (!packsPresent) {
+                REX::INFO("[NpcAppearance] startup disabled: packs directory is absent ({})",
+                          packsRoot.string());
                 return;
             }
 
@@ -4537,8 +4537,8 @@ namespace NpcAppearance
 
             g_scenePersistentEnabled.store(true, std::memory_order_release);
             g_startupPersistentArmed.store(true, std::memory_order_release);
-            REX::INFO("[NpcAppearance] startup persistent manager ARMED assignments={} packagesRoot={}; no main-menu mutation, waiting for a matched stable loaded-3D generation",
-                      assignments, packagesRoot.string());
+            REX::INFO("[NpcAppearance] startup persistent manager ARMED assignments={} packsRoot={}; no main-menu mutation, waiting for a matched stable loaded-3D generation",
+                      assignments, packsRoot.string());
         }
 
     }
@@ -4598,7 +4598,7 @@ namespace NpcAppearance
         } else if (a_args[1] == "copyref") {
             RunCopyRef(a_out, a_args);
         } else {
-            a_out("npcapp: status|selftest|scan [packagesRoot]|inspect <npc>|resolve <plugin> <localFormID>|refs <plugin> <localFormID> <npc>|avm <plugin> <localFormID> <npc>|donor [count]|donorseed <plugin> <localFormID> <npc>|donormorph <plugin> <localFormID> <npc>|donorvisual <plugin> <localFormID> <npc>|donorcopy <plugin> <localFormID> <npc>|targettrial <plugin> <localFormID> <actorRefID> <npc>|targethold <plugin> <localFormID> <actorRefID> <npc>|targetlatch <plugin> <localFormID> <actorRefID> <npc>|targetsnapshot <plugin> <localFormID> <actorRefID> <npc>|targetrestore|event <status|on|off>|scene <status|on|off|dispatch <on|off>|auto <on|off>|persistent <on [actorRefID]|off>>|copyref <targetRefID> <sourceRefID> [0|1]");
+            a_out("npcapp: status|selftest|scan [packsRoot]|inspect <npc>|resolve <plugin> <localFormID>|refs <plugin> <localFormID> <npc>|avm <plugin> <localFormID> <npc>|donor [count]|donorseed <plugin> <localFormID> <npc>|donormorph <plugin> <localFormID> <npc>|donorvisual <plugin> <localFormID> <npc>|donorcopy <plugin> <localFormID> <npc>|targettrial <plugin> <localFormID> <actorRefID> <npc>|targethold <plugin> <localFormID> <actorRefID> <npc>|targetlatch <plugin> <localFormID> <actorRefID> <npc>|targetsnapshot <plugin> <localFormID> <actorRefID> <npc>|targetrestore|event <status|on|off>|scene <status|on|off|dispatch <on|off>|auto <on|off>|persistent <on [actorRefID]|off>>|copyref <targetRefID> <sourceRefID> [0|1]");
         }
     }
 }

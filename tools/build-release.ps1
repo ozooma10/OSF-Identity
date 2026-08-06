@@ -55,10 +55,10 @@ try {
         Copy-Item -LiteralPath $schemaPath -Destination $configDir
         Copy-Item -LiteralPath $schemaPath -Destination $examplesConfigDir
     }
-    $examplePackagesDir = Join-Path $examplesConfigDir 'Packages'
-    [void](New-Item -ItemType Directory -Path $examplePackagesDir -Force)
+    $examplePacksDir = Join-Path $examplesConfigDir 'Packs'
+    [void](New-Item -ItemType Directory -Path $examplePacksDir -Force)
     foreach ($example in @('project.community-example', 'author.folder-only-example')) {
-        Copy-Item -LiteralPath (Join-Path $repoRoot "fixtures\osf-identity\Packages\$example") -Destination $examplePackagesDir -Recurse
+        Copy-Item -LiteralPath (Join-Path $repoRoot "fixtures\osf-identity\Packs\$example") -Destination $examplePacksDir -Recurse
     }
     Copy-Item -LiteralPath (Join-Path $repoRoot 'README.md') -Destination $docsDir
     Copy-Item -LiteralPath (Join-Path $repoRoot 'LICENSE') -Destination $docsDir

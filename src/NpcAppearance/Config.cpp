@@ -191,23 +191,23 @@ namespace NpcAppearance
             std::error_code ec;
             const auto root = std::filesystem::absolute(a_manifestPath.parent_path(), ec).lexically_normal();
             if (ec) {
-                a_error = "could not resolve package directory: " + ec.message();
+                a_error = "could not resolve pack directory: " + ec.message();
                 return false;
             }
             auto candidate = (root / relative).lexically_normal();
             if (!IsWithin(root, candidate)) {
-                a_error = "preset path escapes the package directory";
+                a_error = "preset path escapes the pack directory";
                 return false;
             }
             if (a_requireFile) {
                 const auto canonicalRoot = std::filesystem::weakly_canonical(root, ec);
                 if (ec) {
-                    a_error = "could not canonicalize package directory: " + ec.message();
+                    a_error = "could not canonicalize pack directory: " + ec.message();
                     return false;
                 }
                 const auto canonicalCandidate = std::filesystem::weakly_canonical(candidate, ec);
                 if (ec || !IsWithin(canonicalRoot, canonicalCandidate)) {
-                    a_error = "preset path resolves outside the package directory";
+                    a_error = "preset path resolves outside the pack directory";
                     return false;
                 }
                 if (!std::filesystem::is_regular_file(canonicalCandidate, ec) || ec) {
@@ -416,13 +416,13 @@ namespace NpcAppearance
             const auto canonicalRoot = std::filesystem::weakly_canonical(a_packageRoot, ec);
             if (ec) {
                 result.issues.push_back({ a_path, 0, "preset_metadata_read_failed",
-                    "could not canonicalize package directory: " + ec.message() });
+                    "could not canonicalize pack directory: " + ec.message() });
                 return result;
             }
             const auto canonicalPath = std::filesystem::weakly_canonical(a_path, ec);
             if (ec || !IsWithin(canonicalRoot, canonicalPath)) {
                 result.issues.push_back({ a_path, 0, "preset_metadata_path_escape",
-                    "preset metadata resolves outside the package directory" });
+                    "preset metadata resolves outside the pack directory" });
                 return result;
             }
             const auto size = std::filesystem::file_size(canonicalPath, ec);
@@ -458,19 +458,18 @@ namespace NpcAppearance
             const bool a_requirePresetFiles)
         {
             const auto packageRoot = a_manifest.manifestPath.parent_path();
-            const auto presetsRoot = packageRoot / "Presets";
             std::error_code ec;
-            if (!std::filesystem::is_directory(presetsRoot, ec) || ec) {
+            if (!std::filesystem::is_directory(packageRoot, ec) || ec) {
                 if (a_requirePresetFiles) {
-                    AddIssue(a_result, presetsRoot, 0, "preset_root_missing",
-                             "convention package Presets directory is missing");
+                    AddIssue(a_result, packageRoot, 0, "package_root_missing",
+                             "convention pack directory is missing");
                 }
                 return;
             }
 
             std::vector<std::filesystem::path> pluginDirectories;
             std::filesystem::directory_iterator rootIt{
-                presetsRoot, std::filesystem::directory_options::skip_permission_denied, ec };
+                packageRoot, std::filesystem::directory_options::skip_permission_denied, ec };
             const std::filesystem::directory_iterator end;
             for (; !ec && rootIt != end; rootIt.increment(ec)) {
                 if (rootIt->is_directory(ec) && !ec) {
@@ -479,11 +478,11 @@ namespace NpcAppearance
                            (FoldASCII(rootIt->path().extension().string()) == ".npc" ||
                             EndsWithFolded(rootIt->path().filename().string(), ".identity.json"))) {
                     AddIssue(a_result, rootIt->path(), 0, "invalid_convention_layout",
-                             "preset and metadata files must be inside Presets/<OwningPlugin>");
+                             "preset and metadata files must be inside <OwningPlugin>/");
                 }
             }
             if (ec) {
-                AddIssue(a_result, presetsRoot, 0, "preset_scan_failed", ec.message());
+                AddIssue(a_result, packageRoot, 0, "preset_scan_failed", ec.message());
                 return;
             }
             std::ranges::sort(pluginDirectories, [](const auto& a_left, const auto& a_right) {
@@ -547,8 +546,7 @@ namespace NpcAppearance
 
                     Assignment assignment;
                     assignment.target = Target{ plugin, localFormID };
-                    const auto relative = std::filesystem::path{ "Presets" } /
-                        pluginDirectory.filename() / file.filename();
+                    const auto relative = pluginDirectory.filename() / file.filename();
                     std::string presetError;
                     if (!ResolvePresetPath(a_manifest.manifestPath, relative.generic_string(),
                                            a_requirePresetFiles, assignment.presetPath,
@@ -611,16 +609,16 @@ namespace NpcAppearance
                 const auto key = candidate.assignment.target.CanonicalKey();
                 if (targetCounts[key] != 1) {
                     AddIssue(a_result, candidate.sourcePath, 0, "duplicate_target",
-                             "package contains more than one convention preset for target " + key);
+                             "pack contains more than one convention preset for target " + key);
                     continue;
                 }
                 a_manifest.assignments.push_back(std::move(candidate.assignment));
             }
         }
 
-        // A manifest-less package may only contain Presets/. Anything at its root that
-        // looks like a manifest the runtime failed to recognize is a near-miss worth
-        // diagnosing instead of silently treating the package as convention-only.
+        // Anything at a manifest-less pack root that looks like a manifest the
+        // runtime failed to recognize is a near-miss worth diagnosing instead of
+        // silently treating the pack as convention-only.
         [[nodiscard]] bool IsSuspectRootFile(const std::filesystem::path& a_file)
         {
             const auto filename = FoldASCII(a_file.filename().string());
@@ -659,7 +657,7 @@ namespace NpcAppearance
             const auto packageID = FoldASCII(folderName);
             if (!IsPackageID(packageID)) {
                 AddIssue(result, a_packageDirectory, 0, "invalid_package_folder_name",
-                         "package folder name '" + folderName +
+                         "pack folder name '" + folderName +
                              "' cannot be used as a packageId; rename the folder to 3-128 ASCII "
                              "letters, digits, '.', '_' or '-' starting with a letter or digit, or "
                              "add a package.json");
@@ -713,15 +711,15 @@ namespace NpcAppearance
                         FoldASCII(a_right.filename().string());
                 });
                 AddIssue(result, suspects.front(), 0, "suspect_package_root_file",
-                         "package has no package.json; rename '" +
+                         "pack has no package.json; rename '" +
                              suspects.front().filename().string() +
-                             "' to 'package.json' or remove it, because a manifest-less package may "
-                             "only contain Presets/");
+                             "' to 'package.json' or remove it; convention presets belong in "
+                             "<OwningPlugin>/ directories");
                 return result;
             }
             if (std::filesystem::path nested; FindNestedManifest(a_packageDirectory, nested)) {
                 AddIssue(result, nested, 0, "manifest_not_at_package_root",
-                         "package.json must sit at the package root; move it to '" +
+                         "package.json must sit at the pack root; move it to '" +
                              (a_packageDirectory / "package.json").string() + "'");
                 return result;
             }
@@ -789,7 +787,7 @@ namespace NpcAppearance
         }
         if ((assignments == nullptr) == (convention == nullptr)) {
             AddIssue(result, a_manifestPath, root.offset, "package_format_choice",
-                     "package must contain exactly one of 'assignments' or 'presetConvention'");
+                     "pack must contain exactly one of 'assignments' or 'presetConvention'");
             return result;
         }
         if (assignments && assignments->kind != JsonValue::Kind::kArray) {
@@ -913,7 +911,7 @@ namespace NpcAppearance
                 const auto targetKey = assignment.target.CanonicalKey();
                 if (!targets.insert(targetKey).second) {
                     AddIssue(result, a_manifestPath, target->offset, "duplicate_target",
-                             "package contains more than one assignment for target " + targetKey);
+                             "pack contains more than one assignment for target " + targetKey);
                     return result;
                 }
                 manifest.assignments.push_back(std::move(assignment));
@@ -946,33 +944,33 @@ namespace NpcAppearance
         return ParsePackageManifest(text, a_manifestPath, a_requirePresetFiles);
     }
 
-    DiscoveryResult DiscoverPackages(const std::filesystem::path& a_packagesRoot,
+    DiscoveryResult DiscoverPackages(const std::filesystem::path& a_packsRoot,
                                      const bool a_requirePresetFiles)
     {
         DiscoveryResult result;
         std::error_code ec;
-        if (!std::filesystem::is_directory(a_packagesRoot, ec) || ec) {
-            result.issues.push_back({ a_packagesRoot, 0, "package_root_missing", "package root is missing or is not a directory" });
+        if (!std::filesystem::is_directory(a_packsRoot, ec) || ec) {
+            result.issues.push_back({ a_packsRoot, 0, "package_root_missing", "packs root is missing or is not a directory" });
             return result;
         }
         std::vector<std::filesystem::path> packageDirectories;
-        std::filesystem::directory_iterator it{ a_packagesRoot,
+        std::filesystem::directory_iterator it{ a_packsRoot,
             std::filesystem::directory_options::skip_permission_denied, ec };
         const std::filesystem::directory_iterator end;
         for (; !ec && it != end; it.increment(ec)) {
             if (it->is_directory(ec) && !ec) {
                 packageDirectories.push_back(it->path());
                 if (packageDirectories.size() > kMaxPackages) {
-                    result.issues.push_back({ a_packagesRoot, 0, "package_limit_exceeded", "package count exceeds safety limit" });
+                    result.issues.push_back({ a_packsRoot, 0, "package_limit_exceeded", "pack count exceeds safety limit" });
                     return result;
                 }
             } else if (!ec) {
                 result.issues.push_back({ it->path(), 0, "stray_package_root_file",
-                                          "files directly under the package root are ignored; every package must be its own folder" });
+                                          "files directly under the packs root are ignored; every pack must be its own folder" });
             }
         }
         if (ec) {
-            result.issues.push_back({ a_packagesRoot, 0, "package_scan_failed", ec.message() });
+            result.issues.push_back({ a_packsRoot, 0, "package_scan_failed", ec.message() });
             return result;
         }
         std::ranges::sort(packageDirectories, [](const auto& a_left, const auto& a_right) {
@@ -997,7 +995,7 @@ namespace NpcAppearance
                 return false;
             }
             result.issues.push_back({ package.DiagnosticPath(), 0, "duplicate_package_id",
-                                      "every package using duplicate packageId '" + package.packageID + "' was rejected" });
+                                      "every pack using duplicate packageId '" + package.packageID + "' was rejected" });
             return true;
         });
         return result;

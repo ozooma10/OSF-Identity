@@ -23,10 +23,10 @@ Assignments resolve base NPCs by owning plugin plus local FormID, so normal load
 order changes do not retarget them. Full, medium, and light plugins are supported.
 The target must resolve to a unique HumanRace NPC.
 
-Packages can declare required plugins and Data assets. A missing dependency
-disables only the invalid package or assignment; other valid winners continue.
+Packs can declare required plugins and Data assets. A missing dependency
+disables only the invalid pack or assignment; other valid winners continue.
 
-Two appearance packages targeting the same NPC use deterministic priority and
+Two appearance packs targeting the same NPC use deterministic priority and
 package-ID selection. The framework does not merge partial appearances.
 
 ## Save behavior
@@ -43,5 +43,5 @@ temporary donor form remains registered after application.
 - race or sex transformation;
 - an in-game appearance editor;
 - randomization;
-- partial face-only, body-only, or tint-only package scopes;
+- partial face-only, body-only, or tint-only pack scopes;
 - compatibility claims for untested game versions.

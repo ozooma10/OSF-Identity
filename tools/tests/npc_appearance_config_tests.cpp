@@ -24,7 +24,7 @@ namespace
                          const int a_priority = 100,
                          const std::string& a_plugin = "Starfield.esm",
                          const std::string& a_formID = "00005983",
-                         const std::string& a_preset = "Presets/Sarah.npc",
+                         const std::string& a_preset = "Sarah.npc",
                          const std::string& a_scope = "faceAndBody")
     {
         return std::format(
@@ -62,7 +62,7 @@ int main()
     const auto root = std::filesystem::absolute("tmp/npc-appearance-config-tests");
     std::filesystem::remove_all(root);
     const auto manifestPath = root / "author.sarah" / "package.json";
-    Write(root / "author.sarah" / "Presets" / "Sarah.npc", "fixture");
+    Write(root / "author.sarah" / "Sarah.npc", "fixture");
 
     const auto valid = NA::ParsePackageManifest(Manifest(), manifestPath, true);
     Check(valid.manifest && valid.manifest->assignments.size() == 1 && valid.issues.empty(),
@@ -82,7 +82,7 @@ int main()
           "full, medium, and small plugin local FormID bounds enforced");
 
     const auto explicitPerPreset = NA::ParsePackageManifest(
-        R"({"schemaVersion":1,"packageId":"author.per-preset","priority":0,"requires":{"plugins":["SharedAssets.esm"],"assets":["Textures/Shared.dds"]},"assignments":[{"target":{"plugin":"Starfield.esm","localFormId":"0029A8EB"},"preset":"Presets/Daniel.npc","scope":"faceAndBody","requires":{"plugins":["ExampleHairMod.esm"],"assets":["Meshes/Hair/Example.mesh"]}}]})",
+        R"({"schemaVersion":1,"packageId":"author.per-preset","priority":0,"requires":{"plugins":["SharedAssets.esm"],"assets":["Textures/Shared.dds"]},"assignments":[{"target":{"plugin":"Starfield.esm","localFormId":"0029A8EB"},"preset":"Daniel.npc","scope":"faceAndBody","requires":{"plugins":["ExampleHairMod.esm"],"assets":["Meshes/Hair/Example.mesh"]}}]})",
         root / "explicit-per-preset" / "package.json", false);
     Check(explicitPerPreset.manifest &&
               explicitPerPreset.manifest->assignments[0].requirements.plugins.size() == 3 &&
@@ -96,7 +96,7 @@ int main()
           "explicit per-assignment requirements are additive");
 
     const auto assetManifest = NA::ParsePackageManifest(
-        R"({"schemaVersion":1,"packageId":"author.assets","priority":0,"requires":{"plugins":[],"assets":["Textures/Author/Required.dds"]},"assignments":[{"target":{"plugin":"Starfield.esm","localFormId":"00005983"},"preset":"Presets/Sarah.npc","scope":"faceAndBody"}]})",
+        R"({"schemaVersion":1,"packageId":"author.assets","priority":0,"requires":{"plugins":[],"assets":["Textures/Author/Required.dds"]},"assignments":[{"target":{"plugin":"Starfield.esm","localFormId":"00005983"},"preset":"Sarah.npc","scope":"faceAndBody"}]})",
         root / "author.assets" / "package.json", false);
     const auto dataRoot = root / "Data";
     Check(assetManifest.manifest &&
@@ -114,12 +114,12 @@ int main()
     std::filesystem::current_path(originalCurrentPath);
 
     const auto checkedInExample = NA::LoadPackageManifest(
-        "fixtures/osf-identity/Packages/author.sarah-example/package.json", false);
+        "fixtures/osf-identity/Packs/author.sarah-example/package.json", false);
     Check(checkedInExample.manifest && checkedInExample.manifest->packageID == "author.sarah-example",
           "checked-in example matches runtime schema");
 
     const auto missing = NA::ParsePackageManifest(
-        Manifest("author.missing", 0, "Starfield.esm", "00005983", "Presets/Missing.npc"),
+        Manifest("author.missing", 0, "Starfield.esm", "00005983", "Missing.npc"),
         root / "author.missing" / "package.json", true);
     Check(missing.HasFatalError() && !missing.issues.empty(), "missing preset rejects package");
 
@@ -201,10 +201,10 @@ int main()
     const auto conventionRoot = root / "convention";
     Write(conventionRoot / "package.json",
           R"({"schemaVersion":1,"packageId":"project.community","priority":100,"requires":{"plugins":["SharedAssets.esm"],"assets":["Textures/Shared.dds"]},"presetConvention":"pluginFolderLocalFormId"})");
-    Write(conventionRoot / "Presets" / "Starfield.esm" / "0029A8EB.npc", "fixture");
-    Write(conventionRoot / "Presets" / "Starfield.esm" / "0029A8EB.identity.json",
+    Write(conventionRoot / "Starfield.esm" / "0029A8EB.npc", "fixture");
+    Write(conventionRoot / "Starfield.esm" / "0029A8EB.identity.json",
           R"({"schemaVersion":1,"requires":{"plugins":["ExampleHairMod.esm"],"assets":["Meshes/Hair/Example.mesh"]}})");
-    Write(conventionRoot / "Presets" / "Starfield.esm" / "00005983.npc", "fixture");
+    Write(conventionRoot / "Starfield.esm" / "00005983.npc", "fixture");
     const auto convention = NA::LoadPackageManifest(conventionRoot / "package.json", true);
     const auto daniel = convention.manifest ?
         std::ranges::find_if(convention.manifest->assignments, [](const auto& a_assignment) {
@@ -225,13 +225,13 @@ int main()
     const auto isolatedRoot = root / "isolated-invalid";
     Write(isolatedRoot / "package.json",
           R"({"schemaVersion":1,"packageId":"project.isolated","priority":0,"requires":{"plugins":[],"assets":[]},"presetConvention":"pluginFolderLocalFormId"})");
-    Write(isolatedRoot / "Presets" / "Starfield.esm" / "00000001.npc", "fixture");
-    Write(isolatedRoot / "Presets" / "Starfield.esm" / "00000001.identity.json", "{");
-    Write(isolatedRoot / "Presets" / "Starfield.esm" / "00000002.npc", "fixture");
-    Write(isolatedRoot / "Presets" / "Starfield.esm" / "EditorName.npc", "fixture");
-    Write(isolatedRoot / "Presets" / "Starfield.esm" / "00000003.identity.json",
+    Write(isolatedRoot / "Starfield.esm" / "00000001.npc", "fixture");
+    Write(isolatedRoot / "Starfield.esm" / "00000001.identity.json", "{");
+    Write(isolatedRoot / "Starfield.esm" / "00000002.npc", "fixture");
+    Write(isolatedRoot / "Starfield.esm" / "EditorName.npc", "fixture");
+    Write(isolatedRoot / "Starfield.esm" / "00000003.identity.json",
           R"({"schemaVersion":1,"requires":{"plugins":[],"assets":[]}})");
-    Write(isolatedRoot / "Presets" / "Starfield.esm" / "Nested" / "00000004.npc", "fixture");
+    Write(isolatedRoot / "Starfield.esm" / "Nested" / "00000004.npc", "fixture");
     const auto isolated = NA::LoadPackageManifest(isolatedRoot / "package.json", true);
     Check(isolated.manifest && isolated.manifest->assignments.size() == 1 &&
               isolated.manifest->assignments[0].target.localFormID == 2,
@@ -242,18 +242,18 @@ int main()
               HasIssue(isolated.issues, "invalid_convention_layout"),
           "convention diagnostics cover malformed, orphaned, and nested entries");
 
-    const auto missingPresetRoot = NA::ParsePackageManifest(
+    const auto missingPackageRoot = NA::ParsePackageManifest(
         R"({"schemaVersion":1,"packageId":"project.empty","priority":0,"requires":{"plugins":[],"assets":[]},"presetConvention":"pluginFolderLocalFormId"})",
         root / "missing-preset-root" / "package.json", true);
-    Check(missingPresetRoot.manifest && missingPresetRoot.manifest->assignments.empty() &&
-              HasIssue(missingPresetRoot.issues, "preset_root_missing"),
-          "missing convention preset root leaves package non-mutating");
+    Check(missingPackageRoot.manifest && missingPackageRoot.manifest->assignments.empty() &&
+              HasIssue(missingPackageRoot.issues, "package_root_missing"),
+          "missing convention package root leaves package non-mutating");
 
     const auto limitRoot = root / "convention-limit";
     Write(limitRoot / "package.json",
           R"({"schemaVersion":1,"packageId":"project.limit","priority":0,"requires":{"plugins":[],"assets":[]},"presetConvention":"pluginFolderLocalFormId"})");
     for (std::uint32_t i = 0; i <= NA::kMaxAssignments; ++i) {
-        Write(limitRoot / "Presets" / "Starfield.esm" /
+        Write(limitRoot / "Starfield.esm" /
                   std::format("{:08X}.npc", i + 1),
               "fixture");
     }
@@ -263,7 +263,7 @@ int main()
           "convention assignment safety limit fails closed");
 
     const auto checkedConventionExample = NA::LoadPackageManifest(
-        "fixtures/osf-identity/Packages/project.community-example/package.json", false);
+        "fixtures/osf-identity/Packs/project.community-example/package.json", false);
     Check(checkedConventionExample.manifest &&
               checkedConventionExample.manifest->format ==
                   NA::PackageFormat::kPluginFolderLocalFormID,
@@ -289,11 +289,11 @@ int main()
 
     const auto discoveryRoot = root / "discovery";
     Write(discoveryRoot / "duplicate-a" / "package.json", Manifest("author.duplicate", 1));
-    Write(discoveryRoot / "duplicate-a" / "Presets" / "Sarah.npc", "fixture");
+    Write(discoveryRoot / "duplicate-a" / "Sarah.npc", "fixture");
     Write(discoveryRoot / "duplicate-b" / "package.json", Manifest("author.duplicate", 2));
-    Write(discoveryRoot / "duplicate-b" / "Presets" / "Sarah.npc", "fixture");
+    Write(discoveryRoot / "duplicate-b" / "Sarah.npc", "fixture");
     Write(discoveryRoot / "unique" / "package.json", Manifest("author.unique", 3));
-    Write(discoveryRoot / "unique" / "Presets" / "Sarah.npc", "fixture");
+    Write(discoveryRoot / "unique" / "Sarah.npc", "fixture");
     const auto discovery = NA::DiscoverPackages(discoveryRoot, true);
     Check(discovery.packages.size() == 1 && discovery.packages[0].packageID == "author.unique",
           "all duplicate packageIds rejected independently");
@@ -302,16 +302,16 @@ int main()
           "package with a package.json is not reported as implicit");
 
     const auto implicitRoot = root / "implicit-discovery";
-    Write(implicitRoot / "Author.MyPack" / "Presets" / "Starfield.esm" / "0029A8EB.npc", "fixture");
-    Write(implicitRoot / "My Cool Pack!" / "Presets" / "Starfield.esm" / "00005983.npc", "fixture");
-    Write(implicitRoot / "ab" / "Presets" / "Starfield.esm" / "00005983.npc", "fixture");
+    Write(implicitRoot / "Author.MyPack" / "Starfield.esm" / "0029A8EB.npc", "fixture");
+    Write(implicitRoot / "My Cool Pack!" / "Starfield.esm" / "00005983.npc", "fixture");
+    Write(implicitRoot / "ab" / "Starfield.esm" / "00005983.npc", "fixture");
     Write(implicitRoot / "author.suspect" / "package.jsn", "{}");
-    Write(implicitRoot / "author.suspect" / "Presets" / "Starfield.esm" / "00005983.npc", "fixture");
+    Write(implicitRoot / "author.suspect" / "Starfield.esm" / "00005983.npc", "fixture");
     Write(implicitRoot / "author.stray-json" / "notes.json", "{}");
-    Write(implicitRoot / "author.stray-json" / "Presets" / "Starfield.esm" / "00005983.npc",
+    Write(implicitRoot / "author.stray-json" / "Starfield.esm" / "00005983.npc",
           "fixture");
     Write(implicitRoot / "author.nested" / "inner" / "package.json", Manifest("author.nested-inner"));
-    Write(implicitRoot / "author.nested" / "inner" / "Presets" / "Sarah.npc", "fixture");
+    Write(implicitRoot / "author.nested" / "inner" / "Sarah.npc", "fixture");
     std::filesystem::create_directories(implicitRoot / "author.empty");
     Write(implicitRoot / "loose-note.txt", "stray");
     const auto implicitDiscovery = NA::DiscoverPackages(implicitRoot, true);
@@ -333,8 +333,7 @@ int main()
     Check(HasIssue(implicitDiscovery.issues, "invalid_package_folder_name") &&
               HasIssue(implicitDiscovery.issues, "suspect_package_root_file") &&
               HasIssue(implicitDiscovery.issues, "manifest_not_at_package_root") &&
-              HasIssue(implicitDiscovery.issues, "stray_package_root_file") &&
-              HasIssue(implicitDiscovery.issues, "preset_root_missing"),
+              HasIssue(implicitDiscovery.issues, "stray_package_root_file"),
           "manifest-less discovery diagnoses bad folder names, near-miss and stray files, and nested manifests");
     Check(std::ranges::count_if(implicitDiscovery.issues, [](const auto& a_issue) {
               return a_issue.code == "invalid_package_folder_name";
@@ -342,11 +341,11 @@ int main()
           "both an illegal-character folder and a too-short folder are rejected");
 
     const auto mixedRoot = root / "implicit-vs-explicit";
-    Write(mixedRoot / "author.implicit-pack" / "Presets" / "Starfield.esm" / "00005983.npc",
+    Write(mixedRoot / "author.implicit-pack" / "Starfield.esm" / "00005983.npc",
           "fixture");
     Write(mixedRoot / "author.explicit-pack" / "package.json",
           R"({"schemaVersion":1,"packageId":"author.explicit-pack","priority":100,"requires":{"plugins":[],"assets":[]},"presetConvention":"pluginFolderLocalFormId"})");
-    Write(mixedRoot / "author.explicit-pack" / "Presets" / "Starfield.esm" / "00005983.npc",
+    Write(mixedRoot / "author.explicit-pack" / "Starfield.esm" / "00005983.npc",
           "fixture");
     const auto mixedDiscovery = NA::DiscoverPackages(mixedRoot, true);
     const auto mixedSelection = NA::SelectAssignments(mixedDiscovery.packages);
@@ -355,10 +354,10 @@ int main()
           "an explicit manifest priority outranks a manifest-less package at the same target");
 
     const auto collisionRoot = root / "implicit-collision";
-    Write(collisionRoot / "Author.Collide" / "Presets" / "Starfield.esm" / "00005983.npc",
+    Write(collisionRoot / "Author.Collide" / "Starfield.esm" / "00005983.npc",
           "fixture");
     Write(collisionRoot / "explicit" / "package.json", Manifest("author.collide"));
-    Write(collisionRoot / "explicit" / "Presets" / "Sarah.npc", "fixture");
+    Write(collisionRoot / "explicit" / "Sarah.npc", "fixture");
     const auto collision = NA::DiscoverPackages(collisionRoot, true);
     Check(collision.packages.empty() &&
               std::ranges::count_if(collision.issues, [](const auto& a_issue) {
@@ -366,15 +365,15 @@ int main()
               }) == 2,
           "a folded folder name colliding with an explicit packageId rejects both");
 
-    const auto checkedInPackages =
-        NA::DiscoverPackages("fixtures/osf-identity/Packages", false);
-    Check(checkedInPackages.packages.size() == 3 &&
-              std::ranges::any_of(checkedInPackages.packages, [](const auto& a_package) {
+    const auto checkedInPacks =
+        NA::DiscoverPackages("fixtures/osf-identity/Packs", false);
+    Check(checkedInPacks.packages.size() == 3 &&
+              std::ranges::any_of(checkedInPacks.packages, [](const auto& a_package) {
                   return a_package.packageID == "author.folder-only-example" &&
                       a_package.implicitManifest;
               }) &&
-              checkedInPackages.issues.empty(),
-          "checked-in example packages discover cleanly, including the manifest-less one");
+              checkedInPacks.issues.empty(),
+          "checked-in example packs discover cleanly, including the manifest-less one");
 
     std::cout << "RESULT failed=" << g_failed << '\n';
     return g_failed == 0 ? 0 : 1;
