@@ -1,86 +1,65 @@
 # OSF Identity
 
-OSF Identity is a package-driven SFSE framework that applies complete
-face-and-body appearance presets to unique Starfield NPCs without editing their
-source plugins.
+An SFSE framework that applies face-and-body appearance presets to unique
+Starfield NPCs from drop-in packages, without editing their source plugins.
 
-The framework is deliberately fail-closed. Installing only the framework does
-nothing: appearance mutation is armed only when at least one complete, valid
-package wins discovery and all preset, target, dependency, ownership, thread,
-and refresh gates pass.
+The framework alone does nothing. Appearance changes are applied only when a
+complete, valid package wins selection and passes every validation gate —
+anything invalid fails closed and is skipped.
 
-## Current compatibility
+## Requirements
 
-- Starfield `1.16.244.0`
-- Matching SFSE and Address Library
-- Unique `HumanRace` NPC bases
-- Creation Kit `1.16.244` `.npc` exports
-- CharGenMenu/SFEE `.npc` exports produced by the verified `1.16.244` build
-- Package scope: `faceAndBody`
+- Starfield `1.16.244.0` with matching SFSE and Address Library
+- Presets exported by Creation Kit `1.16.244` or the verified
+  CharGenMenu/SFEE `1.16.244` build
+- Targets must be unique `HumanRace` NPC bases
 
-CharGenMenu is a preset producer only; players do not need SFEE installed to
-use a package containing a compatible exported preset.
+Players do not need SFEE installed — CharGenMenu is only used to author
+presets.
 
-## Player installation
+## Install
 
-Install the release archive with a mod manager. Appearance packages are
-separate mods and use this layout:
+Install the release archive with a mod manager, then install appearance
+packages as separate mods:
 
 ```text
-Data/
-  SFSE/
-    Plugins/
-      NpcAppearanceLoader/
-        Packages/
-          author.package-id/
-            package.json
-            Presets/
-              Appearance.npc
+Data/SFSE/Plugins/OSFIdentity/Packages/
+  author.package-id/
+    package.json
+    Presets/
+      Starfield.esm/
+        0029A8EB.npc
+        0029A8EB.identity.json
 ```
 
-Removing a package promotes the next valid winner for that NPC, or restores the
-original appearance when no winner remains. See
-[Player Guide](docs/PLAYER_GUIDE.md) for the supported removal workflow.
+Removing a package promotes the next valid one, or restores the original
+appearance. See the [Player Guide](docs/PLAYER_GUIDE.md).
 
-## Package selection
+## How packages are chosen
 
-Assignments target a base NPC by plugin name plus plugin-local FormID. Package
-load order does not determine the winner: the highest numeric `priority` wins,
-then `packageId` ascending breaks ties. Missing plugins, assets, presets, and
-invalid assignments are diagnosed and isolated.
+Presets target an NPC by owning-plugin directory and plugin-local FormID
+filename. When several valid packages target the same NPC, the highest
+`priority` wins; ties go to the lexically smaller `packageId`. Mod-manager
+load order is irrelevant. A candidate with a missing plugin or asset is
+skipped — never partially applied — and the next valid package wins instead.
 
-The source example is under
-`fixtures/npc-appearance-loader/Packages/author.sarah-example`. It intentionally
-contains no active preset payload; authors must supply a real producer export.
+See the [Author Guide](docs/AUTHOR_GUIDE.md) for the package format and
+[Compatibility](docs/COMPATIBILITY.md) for runtime boundaries. Example
+packages live in `fixtures/osf-identity/Packages`; they ship no
+preset payload, so supply a real producer export.
 
 ## Build
 
-Clone recursively so the pinned CommonLibSF fork is present:
-
 ```powershell
-git clone --recursive <repository-url>
+git clone --recursive <repository-url>   # pulls the pinned CommonLibSF fork
 pwsh -NoProfile -File .\tools\verify.ps1
+pwsh -NoProfile -File .\tools\build-release.ps1   # writes the ZIP to dist/
 ```
 
-Build a release archive with:
+## Non-goals
 
-```powershell
-pwsh -NoProfile -File .\tools\build-release.ps1
-```
-
-The ZIP is written to `dist/`. See [Author Guide](docs/AUTHOR_GUIDE.md) and
-[Compatibility](docs/COMPATIBILITY.md) for the format and runtime boundaries.
-
-## Proven behavior
-
-The extracted runtime has passed strict package selection, both six-file preset
-producer matrices, independently owned donor construction and teardown,
-complete morph/headpart/color/AVM materialization, nonvisual preservation,
-native-thread lifecycle handoff, loaded-actor refresh, quickload reapplication,
-deterministic conflict promotion, package removal, and full framework removal.
-
-The framework does not provide an in-game editor, randomizer, procedural crowd
-system, race/sex conversion, or per-reference appearance variation.
+No in-game editor, randomizer, procedural crowds, race/sex conversion, or
+per-reference variation for a shared base NPC.
 
 ## License
 

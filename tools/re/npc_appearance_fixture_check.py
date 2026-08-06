@@ -13,7 +13,7 @@ from typing import Any
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_ROOT = REPO_ROOT / "fixtures" / "npc-appearance-loader" / "Presets"
+DEFAULT_ROOT = REPO_ROOT / "fixtures" / "osf-identity" / "Presets"
 PRODUCERS = {"CK": "Creation Kit", "CharGenMenu": "CharGenMenu"}
 FIXTURE_NAMES = (
     "Baseline.npc",

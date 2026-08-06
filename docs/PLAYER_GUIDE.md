@@ -3,61 +3,40 @@
 ## Requirements
 
 - Starfield `1.16.244.0`
-- Matching SFSE
-- Matching Address Library for SFSE Plugins
+- Address Library for SFSE Plugins
 - OSF Identity
-- At least one compatible appearance package
-
-SFEE/CharGenMenu and the Creation Kit are authoring tools. They are not runtime
-requirements for players consuming already-exported presets.
+- At least one appearance package
 
 ## Install
 
 1. Install the framework archive with your mod manager.
-2. Install one or more appearance packages as separate mods.
-3. Start the game through SFSE.
-4. Load a save containing the targeted NPC.
-
-The framework applies a validated winner after the actor has a stable loaded 3D
-generation. Loading screens and the main menu block mutation.
+2. Install appearance packages as separate mods, plus any hair, beard, or asset dependencies they need.
+3. Launch through SFSE and the targetted NPC will have its appearance replaced
 
 ## Conflicts
 
-The package with the highest numeric `priority` wins for an NPC. If priorities
-tie, the lexically smaller `packageId` wins. Mod-manager order does not override
-that rule.
+When several valid packages target one NPC, the highest `priority` wins; ties go to the lexically smaller `packageId`. Mod-manager order does not matter. A preset with a missing dependency is skipped so the next valid package can win.
 
-## Remove or replace a package
+## Removing a package
 
-1. Save normally, exit Starfield, and disable or remove the package mod.
-2. Start the game through SFSE and load the save.
-3. The next valid package wins, or the NPC returns to the original appearance.
+1. Save, exit Starfield, and disable or remove the package mod.
+2. Relaunch through SFSE and load the save.
 
-The framework keeps the base NPC's original values at rest. It does not require
-a permanent donor form or write appearance data into your save.
+The next valid package takes over, or the NPC reverts to the original appearance. Packages are scanned once after game data load, so always restart Starfield after adding, changing, or removing one.
 
-To remove the entire framework, exit the game and disable both the framework and
-its appearance packages. A subsequent vanilla actor generation uses the
-original base appearance.
+The framework keeps the base NPC's original values at rest and never writes appearance data into your save. To remove it entirely, disable the framework and its packages; NPCs revert on their next vanilla regeneration.
 
 ## Troubleshooting
 
-Read the newest log at:
+Check the newest log:
 
 ```text
 Documents\My Games\Starfield\SFSE\Logs\osf-identity.log
 ```
 
-Common fail-closed messages:
-
-- package directory absent: no appearance package is installed;
-- no fully validated winning assignments: every candidate was invalid or lost
-  dependency validation;
-- required plugin or asset missing: install the author-declared dependency;
-- preset rejected: the file is malformed or uses an unsupported producer
-  contract;
-- runtime contract mismatch: the installed game or Address Library does not
-  match the supported version.
-
-Do not rename `.npc` files to work around a rejection. Ask the package author
-for a preset exported and reloaded by a supported producer.
+- `package directory absent` - no appearance package is installed
+- `no fully validated winning assignments` - every candidate failed validation
+- `required package plugin or asset missing` - that package is disabled
+- `required preset plugin or asset missing` - only that preset is disabled; a lower-priority candidate may win
+- `preset rejected` - malformed file or unsupported producer
+- `runtime contract mismatch` - game or Address Library version unsupported

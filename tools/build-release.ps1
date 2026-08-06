@@ -42,13 +42,22 @@ try {
     }
 
     $pluginDir = Join-Path $stageRoot 'SFSE\Plugins'
-    $configDir = Join-Path $pluginDir 'NpcAppearanceLoader'
+    $configDir = Join-Path $pluginDir 'OSFIdentity'
     $docsDir = Join-Path $stageRoot 'Documentation\OSF Identity'
+    $examplesConfigDir = Join-Path $docsDir 'Examples\OSFIdentity'
     [void](New-Item -ItemType Directory -Path $configDir -Force)
     [void](New-Item -ItemType Directory -Path $docsDir -Force)
+    [void](New-Item -ItemType Directory -Path $examplesConfigDir -Force)
 
     Copy-Item -LiteralPath $dll -Destination $pluginDir
-    Copy-Item -LiteralPath (Join-Path $repoRoot 'fixtures\npc-appearance-loader\package.schema.json') -Destination $configDir
+    foreach ($schema in @('package.schema.json', 'preset-metadata.schema.json')) {
+        $schemaPath = Join-Path $repoRoot "fixtures\osf-identity\$schema"
+        Copy-Item -LiteralPath $schemaPath -Destination $configDir
+        Copy-Item -LiteralPath $schemaPath -Destination $examplesConfigDir
+    }
+    $examplePackagesDir = Join-Path $examplesConfigDir 'Packages'
+    [void](New-Item -ItemType Directory -Path $examplePackagesDir -Force)
+    Copy-Item -LiteralPath (Join-Path $repoRoot 'fixtures\osf-identity\Packages\project.community-example') -Destination $examplePackagesDir -Recurse
     Copy-Item -LiteralPath (Join-Path $repoRoot 'README.md') -Destination $docsDir
     Copy-Item -LiteralPath (Join-Path $repoRoot 'LICENSE') -Destination $docsDir
     Copy-Item -LiteralPath (Join-Path $repoRoot 'CHANGELOG.md') -Destination $docsDir

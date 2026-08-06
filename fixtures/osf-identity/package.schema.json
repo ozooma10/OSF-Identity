@@ -8,8 +8,17 @@
     "schemaVersion",
     "packageId",
     "priority",
-    "requires",
-    "assignments"
+    "requires"
+  ],
+  "oneOf": [
+    {
+      "required": ["assignments"],
+      "not": { "required": ["presetConvention"] }
+    },
+    {
+      "required": ["presetConvention"],
+      "not": { "required": ["assignments"] }
+    }
   ],
   "properties": {
     "$schema": {
@@ -28,32 +37,10 @@
       "maximum": 1000000
     },
     "requires": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "plugins",
-        "assets"
-      ],
-      "properties": {
-        "plugins": {
-          "type": "array",
-          "maxItems": 256,
-          "uniqueItems": true,
-          "items": {
-            "type": "string",
-            "pattern": "^[^\\\\/:]+\\.[eE][sS][mMpPlL]$"
-          }
-        },
-        "assets": {
-          "type": "array",
-          "maxItems": 256,
-          "uniqueItems": true,
-          "items": {
-            "type": "string",
-            "minLength": 1
-          }
-        }
-      }
+      "$ref": "#/$defs/requirements"
+    },
+    "presetConvention": {
+      "const": "pluginFolderLocalFormId"
     },
     "assignments": {
       "type": "array",
@@ -77,8 +64,7 @@
             ],
             "properties": {
               "plugin": {
-                "type": "string",
-                "pattern": "^[^\\\\/:]+\\.[eE][sS][mMpPlL]$"
+                "$ref": "#/$defs/plugin"
               },
               "localFormId": {
                 "type": "string",
@@ -92,6 +78,42 @@
           },
           "scope": {
             "const": "faceAndBody"
+          },
+          "requires": {
+            "$ref": "#/$defs/requirements"
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "plugin": {
+      "type": "string",
+      "pattern": "^[^\\\\/:]+\\.[eE][sS][mMpPlL]$"
+    },
+    "requirements": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "plugins",
+        "assets"
+      ],
+      "properties": {
+        "plugins": {
+          "type": "array",
+          "maxItems": 256,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/plugin"
+          }
+        },
+        "assets": {
+          "type": "array",
+          "maxItems": 256,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
           }
         }
       }

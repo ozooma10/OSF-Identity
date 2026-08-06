@@ -1,0 +1,10 @@
+{
+  "$schema": "../../../../preset-metadata.schema.json",
+  "schemaVersion": 1,
+  "requires": {
+    "plugins": [
+      "ExampleHairMod.esm"
+    ],
+    "assets": []
+  }
+}

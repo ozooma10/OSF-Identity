@@ -17,6 +17,8 @@ namespace Probe::NpcAppearance
     inline constexpr std::uintmax_t kMaxPresetBytes = 32 * 1024 * 1024;
     inline constexpr std::int32_t kMinPriority = -1'000'000;
     inline constexpr std::int32_t kMaxPriority = 1'000'000;
+    inline constexpr std::string_view kPluginFolderLocalFormIDConvention =
+        "pluginFolderLocalFormId";
 
     struct Target
     {
@@ -25,6 +27,17 @@ namespace Probe::NpcAppearance
 
         [[nodiscard]] std::string CanonicalKey() const;
     };
+
+    enum class PluginTier
+    {
+        kFull,
+        kMedium,
+        kSmall
+    };
+
+    [[nodiscard]] bool IsLocalFormIDValidForTier(
+        std::uint32_t a_localFormID,
+        PluginTier a_tier) noexcept;
 
     struct Requirements
     {
@@ -41,7 +54,14 @@ namespace Probe::NpcAppearance
     {
         Target target;
         std::filesystem::path presetPath;
+        Requirements requirements;
         AppearanceScope scope{ AppearanceScope::kFaceAndBody };
+    };
+
+    enum class PackageFormat
+    {
+        kExplicitAssignments,
+        kPluginFolderLocalFormID
     };
 
     struct PackageManifest
@@ -52,6 +72,7 @@ namespace Probe::NpcAppearance
         Requirements requirements;
         std::vector<Assignment> assignments;
         std::filesystem::path manifestPath;
+        PackageFormat format{ PackageFormat::kExplicitAssignments };
     };
 
     struct ManifestIssue
@@ -87,6 +108,7 @@ namespace Probe::NpcAppearance
     {
         Target target;
         std::filesystem::path presetPath;
+        Requirements requirements;
         std::string packageID;
         std::int32_t priority{ 0 };
     };
@@ -121,6 +143,10 @@ namespace Probe::NpcAppearance
 
     [[nodiscard]] AssetRequirementResult CheckRequiredAssets(
         const PackageManifest& a_package,
+        const std::filesystem::path& a_dataRoot);
+
+    [[nodiscard]] AssetRequirementResult CheckRequiredAssets(
+        const Requirements& a_requirements,
         const std::filesystem::path& a_dataRoot);
 
     [[nodiscard]] SelectionResult SelectAssignments(

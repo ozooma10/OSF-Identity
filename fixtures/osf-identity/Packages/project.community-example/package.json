@@ -1,0 +1,11 @@
+{
+  "$schema": "../../package.schema.json",
+  "schemaVersion": 1,
+  "packageId": "project.community-example",
+  "priority": 100,
+  "requires": {
+    "plugins": [],
+    "assets": []
+  },
+  "presetConvention": "pluginFolderLocalFormId"
+}

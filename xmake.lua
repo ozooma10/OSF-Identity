@@ -57,12 +57,14 @@ target("OSF Identity")
             end
         end
 
-        local configdir = path.join(plugindir, "NpcAppearanceLoader")
+        local configdir = path.join(plugindir, "OSFIdentity")
         os.mkdir(configdir)
-        os.trycp(
-            path.join(os.projectdir(), "fixtures", "npc-appearance-loader", "package.schema.json"),
-            path.join(configdir, "package.schema.json")
-        )
+        for _, schema in ipairs({ "package.schema.json", "preset-metadata.schema.json" }) do
+            os.trycp(
+                path.join(os.projectdir(), "fixtures", "osf-identity", schema),
+                path.join(configdir, schema)
+            )
+        end
     end)
 
 target("npc-appearance-config-tests")

@@ -88,7 +88,7 @@ namespace
 int main()
 {
     namespace NA = Probe::NpcAppearance;
-    const auto fixtures = std::filesystem::path{ "fixtures/npc-appearance-loader/Presets/CK" };
+    const auto fixtures = std::filesystem::path{ "fixtures/osf-identity/Presets/CK" };
     auto baselineResult = NA::LoadCkPreset(fixtures / "Baseline.npc");
     auto headpartResult = NA::LoadCkPreset(fixtures / "HeadpartOnly.npc");
     auto facialResult = NA::LoadCkPreset(fixtures / "FacialMorphOnly.npc");
@@ -97,7 +97,7 @@ int main()
     auto compositeResult = NA::LoadCkPreset(fixtures / "Sarah.npc");
 
     const auto charGenFixtures =
-        std::filesystem::path{ "fixtures/npc-appearance-loader/Presets/CharGenMenu" };
+        std::filesystem::path{ "fixtures/osf-identity/Presets/CharGenMenu" };
     auto charGenBaselineResult = NA::LoadCkPreset(charGenFixtures / "Baseline.npc");
     auto charGenHeadpartResult = NA::LoadCkPreset(charGenFixtures / "HeadpartOnly.npc");
     auto charGenFacialResult = NA::LoadCkPreset(charGenFixtures / "FacialMorphOnly.npc");

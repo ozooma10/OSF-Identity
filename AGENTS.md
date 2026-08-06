@@ -5,7 +5,7 @@ NPC appearance work proven in OSF RE.
 
 ## Safety contract
 
-- No `NpcAppearanceLoader/Packages` directory means no mutation.
+- No `OSFIdentity/Packages` directory means no mutation.
 - Invalid packages, missing dependencies, unresolved assets, malformed presets,
   and runtime byte-contract mismatches fail closed independently.
 - Game-object work runs only from the verified native BSService queue drain.

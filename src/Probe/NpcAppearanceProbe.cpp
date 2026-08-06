@@ -526,7 +526,7 @@ namespace Probe::NpcAppearance
 
         [[nodiscard]] std::filesystem::path DefaultPluginDirectory()
         {
-            return GetThisDllDirectory() / L"NpcAppearanceLoader";
+            return GetThisDllDirectory() / L"OSFIdentity";
         }
 
         [[nodiscard]] std::filesystem::path DefaultPackagesDirectory()
@@ -2170,13 +2170,6 @@ namespace Probe::NpcAppearance
             }
         }
 
-        enum class PluginTier
-        {
-            kFull,
-            kMedium,
-            kSmall
-        };
-
         struct LoadedPlugin
         {
             RE::TESFile* file{ nullptr };
@@ -2220,12 +2213,19 @@ namespace Probe::NpcAppearance
             }
             switch (plugin->tier) {
             case PluginTier::kSmall:
-                if (a_target.localFormID > 0xFFF) return std::nullopt;
+                if (!IsLocalFormIDValidForTier(a_target.localFormID, plugin->tier)) {
+                    return std::nullopt;
+                }
                 return 0xFE000000u | (plugin->index << 12) | a_target.localFormID;
             case PluginTier::kMedium:
-                if (a_target.localFormID > 0xFFFF) return std::nullopt;
+                if (!IsLocalFormIDValidForTier(a_target.localFormID, plugin->tier)) {
+                    return std::nullopt;
+                }
                 return 0xFD000000u | (plugin->index << 16) | a_target.localFormID;
             case PluginTier::kFull:
+                if (!IsLocalFormIDValidForTier(a_target.localFormID, plugin->tier)) {
+                    return std::nullopt;
+                }
                 return (plugin->index << 24) | a_target.localFormID;
             }
             return std::nullopt;
@@ -2315,7 +2315,7 @@ namespace Probe::NpcAppearance
 
         void RunSelfTest(const LineSink& a_out)
         {
-            const std::filesystem::path root{ LR"(C:\NpcAppearanceLoader)" };
+            const std::filesystem::path root{ LR"(C:\OSFIdentity)" };
             const auto manifestPath = root / L"author.sarah" / L"package.json";
             std::size_t passed = 0;
             std::size_t failed = 0;
@@ -2399,42 +2399,94 @@ namespace Probe::NpcAppearance
             }
 
             std::size_t decodedPresets = 0;
-            std::erase_if(discovery.packages, [&](const PackageManifest& a_package) {
-                for (const auto& plugin : a_package.requirements.plugins) {
+            std::vector<PackageManifest> validatedPackages;
+            for (const auto& package : discovery.packages) {
+                bool packageRequirementsComplete = true;
+                for (const auto& plugin : package.requirements.plugins) {
                     if (!FindLoadedPlugin(plugin)) {
                         a_out(std::format("package '{}' rejected: required plugin '{}' is not loaded",
-                                          a_package.packageID, plugin));
-                        return true;
+                                          package.packageID, plugin));
+                        packageRequirementsComplete = false;
                     }
                 }
-                const auto assets = CheckRequiredAssets(a_package, DefaultDataDirectory());
-                if (!assets.Complete()) {
-                    for (const auto& asset : assets.missing) {
+                const auto packageAssets =
+                    CheckRequiredAssets(package.requirements, DefaultDataDirectory());
+                if (!packageAssets.Complete()) {
+                    packageRequirementsComplete = false;
+                    for (const auto& asset : packageAssets.missing) {
                         a_out(std::format("package '{}' rejected: required Data asset '{}' is missing or is not a regular file",
-                                          a_package.packageID, asset.generic_string()));
+                                          package.packageID, asset.generic_string()));
                     }
-                    return true;
                 }
-                std::size_t packageDecodedPresets = 0;
-                for (const auto& assignment : a_package.assignments) {
+                if (!packageRequirementsComplete) {
+                    continue;
+                }
+
+                PackageManifest validatedPackage = package;
+                validatedPackage.assignments.clear();
+                for (const auto& assignment : package.assignments) {
+                    bool assignmentRequirementsComplete = true;
+                    for (const auto& plugin : assignment.requirements.plugins) {
+                        if (!FindLoadedPlugin(plugin)) {
+                            a_out(std::format("candidate package='{}' target={} rejected: required plugin '{}' is not loaded",
+                                              package.packageID,
+                                              assignment.target.CanonicalKey(), plugin));
+                            assignmentRequirementsComplete = false;
+                        }
+                    }
+                    const auto assignmentAssets =
+                        CheckRequiredAssets(assignment.requirements, DefaultDataDirectory());
+                    if (!assignmentAssets.Complete()) {
+                        assignmentRequirementsComplete = false;
+                        for (const auto& asset : assignmentAssets.missing) {
+                            a_out(std::format("candidate package='{}' target={} rejected: required Data asset '{}' is missing or is not a regular file",
+                                              package.packageID,
+                                              assignment.target.CanonicalKey(),
+                                              asset.generic_string()));
+                        }
+                    }
+                    if (!assignmentRequirementsComplete) {
+                        continue;
+                    }
+
                     const auto decoded = LoadCkPreset(assignment.presetPath);
                     if (!decoded.preset) {
-                        a_out(std::format("package '{}' rejected: preset '{}' does not satisfy the CK 1.16.244 contract",
-                                          a_package.packageID, assignment.presetPath.string()));
+                        a_out(std::format("candidate package='{}' target={} rejected: preset '{}' does not satisfy a supported 1.16.244 producer contract",
+                                          package.packageID,
+                                          assignment.target.CanonicalKey(),
+                                          assignment.presetPath.string()));
                         for (const auto& issue : decoded.issues) {
                             a_out(std::format("  preset issue code={} path={} @0x{:X}: {}",
                                               issue.code, issue.path.string(), issue.offset,
                                               issue.message));
                         }
-                        return true;
+                        continue;
                     }
-                    ++packageDecodedPresets;
-                }
-                decodedPresets += packageDecodedPresets;
-                return false;
-            });
+                    ++decodedPresets;
 
-            const auto selection = SelectAssignments(discovery.packages);
+                    auto* npc = ResolveEligibleTarget(a_out, assignment.target);
+                    if (!npc) {
+                        a_out(std::format("candidate package='{}' target={} rejected: target is absent or ineligible",
+                                          package.packageID,
+                                          assignment.target.CanonicalKey()));
+                        continue;
+                    }
+                    const auto resolved = ResolveAppearanceDependencies(*decoded.preset, npc);
+                    ReportDependencyResolution(a_out, resolved);
+                    if (!resolved.Complete()) {
+                        a_out(std::format("candidate package='{}' target={} rejected: preset appearance references are incomplete",
+                                          package.packageID,
+                                          assignment.target.CanonicalKey()));
+                        continue;
+                    }
+                    validatedPackage.assignments.push_back(assignment);
+                }
+                if (!validatedPackage.assignments.empty()) {
+                    validatedPackages.push_back(std::move(validatedPackage));
+                }
+            }
+
+            const auto selection = SelectAssignments(validatedPackages);
             for (const auto& decision : selection.decisions) {
                 a_out(std::format("conflict target={} package='{}' priority={} result={} reason={}",
                                   decision.targetKey, decision.packageID, decision.priority,
@@ -2445,23 +2497,14 @@ namespace Probe::NpcAppearance
             std::unordered_map<RE::TESFormID, SelectedAssignment> resolvedAssignments;
             for (const auto& assignment : selection.winners) {
                 auto* npc = ResolveEligibleTarget(a_out, assignment.target);
-                bool dependenciesComplete = false;
                 if (npc) {
-                    const auto decoded = LoadCkPreset(assignment.presetPath);
-                    if (decoded.preset) {
-                        const auto resolved = ResolveAppearanceDependencies(*decoded.preset, npc);
-                        ReportDependencyResolution(a_out, resolved);
-                        dependenciesComplete = resolved.Complete();
-                    }
-                }
-                if (npc && dependenciesComplete) {
                     resolvedBaseIDs.insert(npc->GetFormID());
                     resolvedAssignments.emplace(npc->GetFormID(), assignment);
                 }
-                a_out(std::format("  winner package='{}' priority={} target={} preset={} targetResolved={} dependenciesComplete={}",
+                a_out(std::format("  winner package='{}' priority={} target={} preset={} targetResolved={}",
                                   assignment.packageID, assignment.priority,
                                   assignment.target.CanonicalKey(), assignment.presetPath.string(),
-                                  static_cast<void*>(npc), dependenciesComplete));
+                                  static_cast<void*>(npc)));
             }
             const auto resolvedCount = resolvedBaseIDs.size();
             {
@@ -2475,9 +2518,9 @@ namespace Probe::NpcAppearance
             }
             g_sceneDispatchObserveArmed.store(false, std::memory_order_release);
             g_sceneAutoTrialArmed.store(false, std::memory_order_release);
-            a_out(std::format("scan: validPackages={} decodedPresets={} winners={} resolvedTargets={}; validation only, owned population/application gate prevents mutation",
-                              discovery.packages.size(), decodedPresets, selection.winners.size(),
-                              resolvedCount));
+            a_out(std::format("scan: discoveredPackages={} validPackages={} decodedPresets={} validCandidates={} winners={} resolvedTargets={}; validation only, owned population/application gate prevents mutation",
+                              discovery.packages.size(), validatedPackages.size(), decodedPresets,
+                              selection.decisions.size(), selection.winners.size(), resolvedCount));
         }
 
         void RunEvent(const LineSink& a_out, const std::vector<std::string>& a_args)
