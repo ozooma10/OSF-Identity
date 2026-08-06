@@ -5,7 +5,7 @@
 - Starfield `1.16.244.0`
 - Matching SFSE
 - Matching Address Library for SFSE Plugins
-- Runtime NPC Appearance Distributor
+- OSF Identity
 - At least one compatible appearance package
 
 SFEE/CharGenMenu and the Creation Kit are authoring tools. They are not runtime
@@ -45,7 +45,7 @@ original base appearance.
 Read the newest log at:
 
 ```text
-Documents\My Games\Starfield\SFSE\Logs\runtime-npc-appearance-distributor.log
+Documents\My Games\Starfield\SFSE\Logs\osf-identity.log
 ```
 
 Common fail-closed messages:

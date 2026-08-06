@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-// Production runtime for the standalone `.npc` appearance distributor. The
+// Production runtime for OSF Identity's `.npc` appearance distribution. The
 // rotating SFSE frame callback only requests verified native BSService queue
 // work; all game-object reads and writes execute from that queue's proven
 // drain-owner thread. Startup stays fail-closed when no valid package wins.

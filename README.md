@@ -1,7 +1,8 @@
-# Runtime NPC Appearance Distributor
+# OSF Identity
 
-A package-driven SFSE framework that applies complete face-and-body appearance
-presets to unique Starfield NPCs without editing their source plugins.
+OSF Identity is a package-driven SFSE framework that applies complete
+face-and-body appearance presets to unique Starfield NPCs without editing their
+source plugins.
 
 The framework is deliberately fail-closed. Installing only the framework does
 nothing: appearance mutation is armed only when at least one complete, valid

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:runtime-npc-appearance-distributor:fixture-metadata:v1",
-  "title": "Runtime NPC Appearance Distributor golden fixture metadata",
+  "$id": "urn:osf-identity:fixture-metadata:v1",
+  "title": "OSF Identity golden fixture metadata",
   "type": "object",
   "additionalProperties": false,
   "required": [

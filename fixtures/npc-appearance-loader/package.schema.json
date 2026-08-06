@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:runtime-npc-appearance-distributor:package:v1",
-  "title": "Runtime NPC Appearance Distributor package",
+  "$id": "urn:osf-identity:package:v1",
+  "title": "OSF Identity appearance package",
   "type": "object",
   "additionalProperties": false,
   "required": [

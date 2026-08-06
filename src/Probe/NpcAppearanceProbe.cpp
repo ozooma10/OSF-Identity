@@ -2266,7 +2266,7 @@ namespace Probe::NpcAppearance
         void RunStatus(const LineSink& a_out)
         {
             const auto root = DefaultPluginDirectory();
-            a_out("NpcAppearanceLoader spike: disabled-by-default / explicit commands only");
+            a_out("OSF Identity diagnostics: disabled-by-default / explicit commands only");
             a_out(std::format("pluginDirectory={}", root.string()));
             a_out(std::format("packagesDirectory={}", DefaultPackagesDirectory().string()));
             a_out("manifestParser=implemented (strict package schema v1, plugin+localFormId targeting, containment, deterministic conflicts)");

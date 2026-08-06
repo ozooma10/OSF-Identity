@@ -6,8 +6,8 @@ param(
 $ErrorActionPreference = 'Stop'
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 $distRoot = Join-Path $repoRoot 'dist'
-$stageRoot = Join-Path $distRoot 'Runtime NPC Appearance Distributor'
-$zipPath = Join-Path $distRoot 'Runtime-NPC-Appearance-Distributor-0.1.0.zip'
+$stageRoot = Join-Path $distRoot 'OSF Identity'
+$zipPath = Join-Path $distRoot 'OSF-Identity-0.1.0.zip'
 
 function Assert-UnderDist([string]$Path) {
     $full = [IO.Path]::GetFullPath($Path)
@@ -26,10 +26,10 @@ try {
 
     & xmake f -m releasedbg
     if ($LASTEXITCODE -ne 0) { throw "xmake release configure failed with exit code $LASTEXITCODE" }
-    & xmake build 'Runtime NPC Appearance Distributor'
+    & xmake build 'OSF Identity'
     if ($LASTEXITCODE -ne 0) { throw "release build failed with exit code $LASTEXITCODE" }
 
-    $dll = Join-Path $repoRoot 'build\windows\x64\releasedbg\Runtime NPC Appearance Distributor.dll'
+    $dll = Join-Path $repoRoot 'build\windows\x64\releasedbg\OSF Identity.dll'
     if (-not (Test-Path -LiteralPath $dll)) { throw "Release DLL not found: $dll" }
 
     Assert-UnderDist $stageRoot
@@ -43,7 +43,7 @@ try {
 
     $pluginDir = Join-Path $stageRoot 'SFSE\Plugins'
     $configDir = Join-Path $pluginDir 'NpcAppearanceLoader'
-    $docsDir = Join-Path $stageRoot 'Documentation\Runtime NPC Appearance Distributor'
+    $docsDir = Join-Path $stageRoot 'Documentation\OSF Identity'
     [void](New-Item -ItemType Directory -Path $configDir -Force)
     [void](New-Item -ItemType Directory -Path $docsDir -Force)
 

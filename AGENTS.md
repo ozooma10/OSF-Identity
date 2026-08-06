@@ -1,4 +1,4 @@
-# Runtime NPC Appearance Distributor
+# OSF Identity
 
 This repository is the production extraction of the Starfield 1.16.244 runtime
 NPC appearance work proven in OSF RE.
@@ -26,7 +26,7 @@ Or build directly:
 
 ```powershell
 xmake f -m debug
-xmake build "Runtime NPC Appearance Distributor"
+xmake build "OSF Identity"
 ```
 
 Set `XSE_SF_MODS_PATH` to deploy into a matching MO2 mod folder, or

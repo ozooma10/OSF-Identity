@@ -10,7 +10,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "xmake configure failed with exit code $LASTEXITCODE" }
 
     foreach ($target in @(
-        'Runtime NPC Appearance Distributor',
+        'OSF Identity',
         'npc-appearance-config-tests',
         'npc-appearance-preset-tests'
     )) {
@@ -39,7 +39,7 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "git diff --check failed with exit code $LASTEXITCODE" }
     }
 
-    Write-Host '[verify] all standalone checks passed' -ForegroundColor Green
+    Write-Host '[verify] all OSF Identity checks passed' -ForegroundColor Green
 }
 finally {
     Pop-Location

@@ -1,6 +1,6 @@
 includes("lib/commonlibsf")
 
-set_project("Runtime NPC Appearance Distributor")
+set_project("OSF Identity")
 set_version("0.1.0")
 set_license("MIT")
 set_languages("c++23")
@@ -9,9 +9,9 @@ set_warnings("allextra")
 add_rules("mode.debug", "mode.releasedbg")
 add_rules("plugin.vsxmake.autoupdate")
 
-target("Runtime NPC Appearance Distributor")
+target("OSF Identity")
     add_rules("commonlibsf.plugin", {
-        name = "runtime-npc-appearance-distributor",
+        name = "osf-identity",
         author = "ozooma10",
         description = "Safe package-driven runtime NPC appearance distribution",
         email = "ozooma10@protonmail.com"
@@ -40,7 +40,7 @@ target("Runtime NPC Appearance Distributor")
         elseif gameroot and #gameroot > 0 then
             plugindir = path.join(gameroot, "Data", "SFSE", "Plugins")
         else
-            cprint("${yellow}[npc-distributor] no deploy root configured; skipping post-build copy")
+            cprint("${yellow}[osf-identity] no deploy root configured; skipping post-build copy")
             return
         end
 
@@ -53,7 +53,7 @@ target("Runtime NPC Appearance Distributor")
             if entry.src and os.isfile(entry.src) then
                 local dst = path.join(plugindir, path.filename(entry.src))
                 os.trycp(entry.src, dst)
-                cprint("${green}[npc-distributor] copied %s:${clear} %s", entry.label, dst)
+                cprint("${green}[osf-identity] copied %s:${clear} %s", entry.label, dst)
             end
         end
 

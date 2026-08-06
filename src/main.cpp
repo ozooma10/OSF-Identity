@@ -5,7 +5,7 @@ namespace
 {
     void OnDataLoaded()
     {
-        REX::INFO("=== Runtime NPC Appearance Distributor: data loaded ===");
+        REX::INFO("=== OSF Identity: data loaded ===");
         Probe::NpcAppearance::Initialize();
 
         const auto* tasks = SFSE::GetTaskInterface();
@@ -22,7 +22,7 @@ namespace
             });
         }
 
-        REX::INFO("=== Runtime NPC Appearance Distributor: ready ===");
+        REX::INFO("=== OSF Identity: ready ===");
     }
 
     void OnSFSEMessage(SFSE::MessagingInterface::Message* a_message)
@@ -46,6 +46,6 @@ SFSE_PLUGIN_LOAD(const SFSE::LoadInterface* a_sfse)
         return false;
     }
 
-    REX::INFO("Runtime NPC Appearance Distributor loaded");
+    REX::INFO("OSF Identity loaded");
     return true;
 }
