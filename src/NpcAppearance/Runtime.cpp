@@ -1248,6 +1248,9 @@ namespace NpcAppearance
         std::mutex                                      g_deferredC2SaveMutex;
         std::shared_ptr<DeferredC2SaveTask>             g_deferredC2SaveTask;
         bool                                            g_deferredC2SaveInFlight{ false };
+        std::atomic<bool>                               g_deferredC2RetryScheduled{ false };
+        constexpr std::uint32_t                         kDeferredC2RetryMaxWaits = 400;
+        constexpr std::chrono::milliseconds             kDeferredC2RetryDelay{ 25 };
 
         [[nodiscard]] bool ForgetPersistentState(const RE::TESFormID a_refID)
         {
@@ -2097,10 +2100,9 @@ namespace NpcAppearance
         }
 
         // ==================================================================
-        // Native main-thread lifecycle
-        // Everything below OnNpcAppearanceNativeFrame executes inside the
-        // verified BSService queue drain; the SFSE frame callback only
-        // requests that work via RequestNpcAppearanceNativeFrame.
+        // Legacy native lifecycle retained until C4b. Everything below
+        // OnNpcAppearanceNativeFrame executes inside the verified BSService
+        // queue drain, but C4a no longer schedules this path from production.
         // ==================================================================
         void OnNpcAppearanceNativeFrame()
         {
@@ -2517,9 +2519,8 @@ namespace NpcAppearance
                               SaveLoadHooks::SupportsSaveVeto(),
                               g_mutationKilled.load(std::memory_order_relaxed)));
             a_out(std::format(
-                "C2BracketArmed={} marker={} appliedBases={} failedBases={} inBracket={} preSaveReady={} saveGatewayEntered={} saveHookObserved={} saveLoadEventRegistered={} saveEntries={} saveReturns={} loadReturns={} loadGeneration={}",
+                "saveLoadBracketArmed={} autoArm=true appliedBases={} failedBases={} inBracket={} preSaveReady={} saveGatewayEntered={} saveHookObserved={} saveLoadEventRegistered={} saveEntries={} saveReturns={} loadReturns={} loadGeneration={}",
                 g_bracketArmed.load(std::memory_order_relaxed),
-                (DefaultPluginDirectory() / L"bracket.armed").string(),
                 appliedBases, failedBases,
                 g_inBracket.load(std::memory_order_relaxed),
                 g_preSaveReady.load(std::memory_order_relaxed),
@@ -5397,6 +5398,101 @@ namespace NpcAppearance
             return failedCount == 0;
         }
 
+        void PumpDeferredC2LoadTask() noexcept;
+        void PumpDeferredC2SaveTask() noexcept;
+
+        void ScheduleDeferredC2Retry() noexcept
+        {
+            bool expected = false;
+            if (!g_deferredC2RetryScheduled.compare_exchange_strong(
+                    expected, true, std::memory_order_acq_rel)) {
+                return;
+            }
+
+            try {
+                // A retry scheduled directly from an SFSE task can be consumed
+                // again by the same task drain, starving the main loop while
+                // the native queue is disabled around LoadGame. Wait off-thread
+                // for the verified queue gate, then enqueue one SFSE handoff.
+                // The worker is demand-driven and bounded; it performs no
+                // game-object work.
+                std::thread([] {
+                    try {
+                        for (std::uint32_t wait = 1;
+                             wait <= kDeferredC2RetryMaxWaits;
+                             ++wait) {
+                            std::this_thread::sleep_for(kDeferredC2RetryDelay);
+                            if (g_mutationKilled.load(std::memory_order_acquire)) {
+                                g_deferredC2RetryScheduled.store(
+                                    false, std::memory_order_release);
+                                return;
+                            }
+
+                            const auto diagnostics =
+                                Util::NativeMainThreadQueue::GetDiagnostics();
+                            if (!diagnostics.queueEnabled ||
+                                diagnostics.singleton == 0) {
+                                continue;
+                            }
+
+                            const auto* tasks = SFSE::GetTaskInterface();
+                            if (!tasks) {
+                                g_deferredC2RetryScheduled.store(
+                                    false, std::memory_order_release);
+                                KillMutation(
+                                    "SFSE task interface unavailable for deferred bracket retry");
+                                REX::CRITICAL(
+                                    "[NpcAppearance] deferred bracket retry could not acquire the SFSE task interface; pending work remains fail-closed");
+                                return;
+                            }
+                            tasks->AddTask([] {
+                                g_deferredC2RetryScheduled.store(
+                                    false, std::memory_order_release);
+                                PumpDeferredC2SaveTask();
+                                PumpDeferredC2LoadTask();
+                            });
+                            return;
+                        }
+
+                        g_deferredC2RetryScheduled.store(
+                            false, std::memory_order_release);
+                        KillMutation(
+                            "native queue unavailable for deferred bracket retry");
+                        REX::CRITICAL(
+                            "[NpcAppearance] deferred bracket retry timed out after {} ms waiting for the native queue; pending work remains fail-closed",
+                            kDeferredC2RetryMaxWaits *
+                                static_cast<std::uint32_t>(kDeferredC2RetryDelay.count()));
+                    } catch (const std::exception& e) {
+                        g_deferredC2RetryScheduled.store(
+                            false, std::memory_order_release);
+                        KillMutation("deferred bracket retry worker threw");
+                        REX::CRITICAL(
+                            "[NpcAppearance] deferred bracket retry worker threw '{}'; pending work remains fail-closed",
+                            e.what());
+                    } catch (...) {
+                        g_deferredC2RetryScheduled.store(
+                            false, std::memory_order_release);
+                        KillMutation("deferred bracket retry worker threw");
+                        REX::CRITICAL(
+                            "[NpcAppearance] deferred bracket retry worker threw; pending work remains fail-closed");
+                    }
+                }).detach();
+            } catch (const std::exception& e) {
+                g_deferredC2RetryScheduled.store(
+                    false, std::memory_order_release);
+                KillMutation("deferred bracket retry scheduling threw");
+                REX::CRITICAL(
+                    "[NpcAppearance] deferred bracket retry scheduling threw '{}'; pending work remains fail-closed",
+                    e.what());
+            } catch (...) {
+                g_deferredC2RetryScheduled.store(
+                    false, std::memory_order_release);
+                KillMutation("deferred bracket retry scheduling threw");
+                REX::CRITICAL(
+                    "[NpcAppearance] deferred bracket retry scheduling threw; pending work remains fail-closed");
+            }
+        }
+
         void PumpDeferredC2LoadTask() noexcept
         {
             std::shared_ptr<DeferredC2LoadTask> pending;
@@ -5438,11 +5534,18 @@ namespace NpcAppearance
                             "[NpcAppearance] deferred C2 LOAD-RETURN generation={} threw inside the verified drain",
                             pending->generation);
                     }
-                    const std::scoped_lock lock{ g_deferredC2LoadMutex };
-                    if (complete && g_deferredC2LoadTask == pending) {
-                        g_deferredC2LoadTask.reset();
+                    bool retry = false;
+                    {
+                        const std::scoped_lock lock{ g_deferredC2LoadMutex };
+                        if (complete && g_deferredC2LoadTask == pending) {
+                            g_deferredC2LoadTask.reset();
+                        }
+                        retry = !complete && g_deferredC2LoadTask == pending;
+                        g_deferredC2LoadInFlight = false;
                     }
-                    g_deferredC2LoadInFlight = false;
+                    if (retry) {
+                        ScheduleDeferredC2Retry();
+                    }
                 };
 
                 const auto diagnostics =
@@ -5482,6 +5585,7 @@ namespace NpcAppearance
                         diagnostics.currentThreadID, diagnostics.queueEnabled,
                         diagnostics.singleton);
                 }
+                ScheduleDeferredC2Retry();
             } catch (const std::exception& e) {
                 {
                     const std::scoped_lock lock{ g_deferredC2LoadMutex };
@@ -5571,6 +5675,7 @@ namespace NpcAppearance
                         diagnostics.currentThreadID, diagnostics.queueEnabled,
                         diagnostics.singleton);
                 }
+                ScheduleDeferredC2Retry();
             } catch (const std::exception& e) {
                 {
                     const std::scoped_lock lock{ g_deferredC2SaveMutex };
@@ -6418,8 +6523,8 @@ namespace NpcAppearance
 
         // ==================================================================
         // Startup
-        // Fail-closed arming sequence: packs directory -> scan ->
-        // validated winners -> scene sinks -> persistent manager.
+        // Fail-closed arming sequence: operational save/load hooks -> packs
+        // directory -> validated winners -> pre-save event sink -> bracket.
         // ==================================================================
         void OnNpcAppearanceDataLoaded()
         {
@@ -6461,54 +6566,35 @@ namespace NpcAppearance
                 assignments = g_sceneAssignments.size();
             }
             if (assignments == 0) {
-                REX::WARN("[NpcAppearance] startup found no fully validated winning assignments; persistent mutation remains disabled");
+                REX::WARN("[NpcAppearance] startup found no fully validated winning assignments; save/load bracket remains disabled");
                 return;
             }
 
-            if (g_bracketArmed.load(std::memory_order_acquire)) {
-                auto* saveLoadSource = RE::SaveLoadEvent::GetEventSource();
-                if (!saveLoadSource) {
-                    KillMutation("SaveLoadEvent source unavailable during C2 arming");
-                    REX::CRITICAL(
-                        "[NpcAppearance] C2 save/load bracket could not register the pre-save event sink; mutation disabled and saves with tracked state will be vetoed");
-                    return;
-                }
-                if (!g_saveLoadEventRegistered.load(std::memory_order_acquire)) {
-                    saveLoadSource->RegisterSink(
-                        &C2SaveLoadEventSink::GetSingleton());
-                    g_saveLoadEventRegistered.store(
-                        true, std::memory_order_release);
-                }
-                REX::INFO(
-                    "[NpcAppearance] C2 save/load bracket ARMED assignments={} marker={} markerIsOnlyArm=true saveLoadEventRegistered={}; legacy scene lifecycle remains compiled but is not armed",
-                    assignments,
-                    (DefaultPluginDirectory() / L"bracket.armed").string(),
-                    g_saveLoadEventRegistered.load(std::memory_order_relaxed));
+            auto* saveLoadSource = RE::SaveLoadEvent::GetEventSource();
+            if (!saveLoadSource) {
+                KillMutation("SaveLoadEvent source unavailable during bracket arming");
+                REX::CRITICAL(
+                    "[NpcAppearance] save/load bracket could not register the pre-save event sink; mutation disabled and saves with tracked state will be vetoed");
                 return;
             }
-
-            RunSceneEvent(startupOut, { "npcapp", "scene", "on" });
-            if (!g_sceneRegistered.load(std::memory_order_acquire)) {
-                REX::WARN("[NpcAppearance] startup could not register scene lifecycle sinks; persistent mutation remains disabled");
-                return;
+            if (!g_saveLoadEventRegistered.load(std::memory_order_acquire)) {
+                saveLoadSource->RegisterSink(
+                    &C2SaveLoadEventSink::GetSingleton());
+                g_saveLoadEventRegistered.store(
+                    true, std::memory_order_release);
             }
-
-            g_scenePersistentEnabled.store(true, std::memory_order_release);
-            g_startupPersistentArmed.store(true, std::memory_order_release);
-            REX::INFO("[NpcAppearance] startup persistent manager ARMED assignments={} packsRoot={}; no main-menu mutation, waiting for a matched stable loaded-3D generation",
-                      assignments, packsRoot.string());
+            g_bracketArmed.store(true, std::memory_order_release);
+            REX::INFO(
+                "[NpcAppearance] save/load bracket ARMED assignments={} autoArm=true saveLoadEventRegistered={}; legacy scene lifecycle remains compiled but is unreachable from production startup",
+                assignments,
+                g_saveLoadEventRegistered.load(std::memory_order_relaxed));
         }
 
     }
 
     void Initialize()
     {
-        const auto markerPath = DefaultPluginDirectory() / L"bracket.armed";
-        std::error_code markerError;
-        const bool markerPresent =
-            std::filesystem::is_regular_file(markerPath, markerError) &&
-            !markerError;
-        g_bracketArmed.store(markerPresent, std::memory_order_release);
+        g_bracketArmed.store(false, std::memory_order_release);
         const SaveLoadHooks::Callbacks callbacks{
             .onSaveGameEntry = &OnSaveGameEntryImpl,
             .onSaveGameReturn = &OnSaveGameReturnImpl,
@@ -6520,18 +6606,22 @@ namespace NpcAppearance
             KillMutation("SaveGame/LoadGame hook installation failed");
         }
         const bool saveVetoSupported = SaveLoadHooks::SupportsSaveVeto();
-        if (markerPresent && hooksInstalled && !saveVetoSupported) {
-            g_bracketArmed.store(false, std::memory_order_release);
+        const bool deferredRetryAvailable = SFSE::GetTaskInterface() != nullptr;
+        if (hooksInstalled && !saveVetoSupported) {
             KillMutation(
-                "C2 marker requires OSF Identity's direct save hook so failed restoration can veto serialization");
+                "production bracket requires save veto support so failed restoration cannot serialize");
+        }
+        if (!deferredRetryAvailable) {
+            KillMutation(
+                "SFSE task interface unavailable for demand-driven bracket retries");
         }
         REX::INFO(
-            "[NpcAppearance] C2 save/load hook state operational={} saveVetoSupported={} mutationKilled={} bracketArmed={} markerPresent={} marker={} callbacks=native-queue-shaped",
+            "[NpcAppearance] save/load hook state operational={} saveVetoSupported={} deferredRetryAvailable={} mutationKilled={} bracketArmed={} autoArmPending={} callbacks=native-queue-shaped",
             g_bracketOperational.load(std::memory_order_relaxed),
-            saveVetoSupported,
+            saveVetoSupported, deferredRetryAvailable,
             g_mutationKilled.load(std::memory_order_relaxed),
-            g_bracketArmed.load(std::memory_order_relaxed), markerPresent,
-            markerPath.string());
+            g_bracketArmed.load(std::memory_order_relaxed),
+            MutationOperational() && saveVetoSupported);
         try {
             if (!QueueOrRunNativeTask(
                     [] { OnNpcAppearanceDataLoaded(); },
@@ -6548,15 +6638,6 @@ namespace NpcAppearance
             REX::CRITICAL(
                 "[NpcAppearance] startup scan scheduling threw; no mutation");
         }
-    }
-
-    void OnFrame()
-    {
-        // SFSE's rotating worker only requests native BSService queue work.
-        // All game-object access remains on the verified drain-owner thread.
-        PumpDeferredC2SaveTask();
-        PumpDeferredC2LoadTask();
-        RequestNpcAppearanceNativeFrame();
     }
 
     void RunCommand(const LineSink& a_out, const std::vector<std::string>& a_args)

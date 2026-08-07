@@ -8,20 +8,6 @@ namespace
         REX::INFO("=== OSF Identity: data loaded ===");
         NpcAppearance::Initialize();
 
-        const auto* tasks = SFSE::GetTaskInterface();
-        if (!tasks) {
-            REX::CRITICAL("SFSE TaskInterface is unavailable; lifecycle service remains disabled");
-            return;
-        }
-
-        static bool installed = false;
-        if (!installed) {
-            installed = true;
-            tasks->AddPermanentTask([] {
-                NpcAppearance::OnFrame();
-            });
-        }
-
         REX::INFO("=== OSF Identity: ready ===");
     }
 

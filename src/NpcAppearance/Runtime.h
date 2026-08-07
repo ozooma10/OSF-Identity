@@ -4,10 +4,10 @@
 #include <string>
 #include <vector>
 
-// Production runtime for OSF Identity's `.npc` appearance distribution. The
-// rotating SFSE frame callback only requests verified native BSService queue
-// work; all game-object reads and writes execute from that queue's proven
-// drain-owner thread. Startup stays fail-closed when no valid package wins.
+// Production runtime for OSF Identity's `.npc` appearance distribution. All
+// game-object reads and writes execute from the verified native BSService
+// queue's proven drain-owner thread. Startup stays fail-closed when no valid
+// package wins or the save/load bracket cannot operate safely.
 //
 //   npcapp status
 //   npcapp selftest
@@ -35,7 +35,6 @@ namespace NpcAppearance
     using LineSink = std::function<void(const std::string&)>;
 
     void Initialize();
-    void OnFrame();
 
     // Retained as an unbound diagnostic surface for focused development builds.
     void RunCommand(const LineSink& a_out, const std::vector<std::string>& a_args);
