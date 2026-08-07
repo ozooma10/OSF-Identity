@@ -61,7 +61,6 @@ namespace NpcAppearance
         constexpr REL::ID kNpcRemoveAvmDataID{ 68088 };
         constexpr REL::ID kActorAppearanceRefreshID{ 101307 };
         constexpr std::uint32_t kAppearanceRefreshDirtyActorFlag = 0x00008000;
-        constexpr std::uint32_t kTargetHoldSeconds = 12;
         constexpr std::uintptr_t kProcessListsVtableRva = 0x4CC01B0;
         constexpr std::uintptr_t kActorVtableRva = 0x4CB9248;
         constexpr REL::Offset kNpcOwnedVisualCopyOffset{ 0xCD56E0 };
@@ -129,10 +128,9 @@ namespace NpcAppearance
         };
 
         // ==================================================================
-        // Scene lifecycle state
-        // Shared between the event sinks, the SFSE frame callback, and the
-        // native drain. Sets/maps are guarded by g_eventMutex; counters and
-        // flags are atomics.
+        // Production save/load bracket state. Assignment maps are published by
+        // validation-only scans and consumed only from the verified native
+        // BSService queue drain.
         // ==================================================================
         std::atomic<bool>             g_bracketOperational{ false };
         std::atomic<bool>             g_bracketArmed{ false };
@@ -140,77 +138,10 @@ namespace NpcAppearance
         std::atomic<bool>             g_inBracket{ false };
         std::mutex                    g_eventMutex;
         std::unordered_set<RE::TESFormID> g_targetBaseIDs;
-        std::unordered_set<RE::TESFormID> g_loadedTargetRefs;
-        std::atomic<bool>             g_eventRegistered{ false };
-        std::atomic<std::uint64_t>    g_eventCount{ 0 };
-        std::atomic<std::uint64_t>    g_matchingLoadCount{ 0 };
-        std::atomic<std::uint64_t>    g_matchingUnloadCount{ 0 };
-        std::atomic<std::uint64_t>    g_debouncedLoadCount{ 0 };
-        std::atomic<std::uint64_t>    g_queuedApplyCount{ 0 };
-        std::atomic<std::uint64_t>    g_ranApplyCount{ 0 };
-
-        std::unordered_set<RE::TESFormID> g_sceneTargetRefs;
         std::unordered_map<RE::TESFormID, SelectedAssignment> g_sceneAssignments;
-        constexpr std::uint32_t kSceneStableNativeFrames = 30;
-        struct PendingSceneApply
-        {
-            RE::TESFormID refID{ 0 };
-            RE::TESFormID baseID{ 0 };
-            std::uint32_t  eventThreadID{ 0 };
-            std::uint64_t  sequence{ 0 };
-            std::uint32_t  stableNativeFrames{ 0 };
-            bool           loadingDeferralLogged{ false };
-            bool           invalidStateLogged{ false };
-        };
-        std::optional<PendingSceneApply> g_pendingSceneApply;
-        std::uint64_t                    g_nextSceneSequence{ 0 };
-        struct SceneSet3dSuppression
-        {
-            std::uint32_t count{ 0 };
-            std::uint64_t deadlineMs{ 0 };
-        };
-        std::unordered_map<RE::TESFormID, SceneSet3dSuppression> g_sceneSet3dSuppressions;
-        std::atomic<bool>             g_sceneRegistered{ false };
-        std::atomic<bool>             g_sceneDispatchObserveArmed{ false };
-        std::atomic<bool>             g_sceneAutoTrialArmed{ false };
-        std::atomic<bool>             g_scenePersistentEnabled{ false };
-        std::atomic<bool>             g_startupPacksPresent{ false };
-        std::atomic<bool>             g_startupPersistentArmed{ false };
-        std::atomic<std::uint64_t>    g_sceneSet3dCount{ 0 };
-        std::atomic<std::uint64_t>    g_sceneDetachCount{ 0 };
-        std::atomic<std::uint64_t>    g_sceneMatchingSet3dCount{ 0 };
-        std::atomic<std::uint64_t>    g_sceneMatchingDetachCount{ 0 };
-        std::atomic<std::uint64_t>    g_sceneDebouncedCount{ 0 };
-        std::atomic<std::uint64_t>    g_sceneQueuedApplyCount{ 0 };
-        std::atomic<std::uint64_t>    g_sceneRanApplyCount{ 0 };
-        std::atomic<std::uint64_t>    g_sceneAutoTrialAttemptCount{ 0 };
-        std::atomic<std::uint64_t>    g_sceneAutoTrialApplyCount{ 0 };
-        std::atomic<std::uint64_t>    g_scenePersistentAttemptCount{ 0 };
-        std::atomic<std::uint64_t>    g_scenePersistentApplyCount{ 0 };
-        std::atomic<std::uint64_t>    g_scenePersistentRemovalCount{ 0 };
-        std::atomic<std::uint64_t>    g_sceneSuppressedSet3dCount{ 0 };
-        std::atomic<std::uint64_t>    g_sceneSuppressedDetachCount{ 0 };
-        std::atomic<std::uint64_t>    g_sceneNativeFrameCount{ 0 };
-        std::atomic<std::uint64_t>    g_sceneNativeLoadingDeferralCount{ 0 };
-        std::atomic<std::uint64_t>    g_sceneNativeReadyCount{ 0 };
-        std::atomic<std::uint64_t>    g_sceneNativeObservePassCount{ 0 };
-        std::atomic<std::uint32_t>    g_sceneNativeThreadID{ 0 };
-        std::atomic<bool>             g_sceneNativeTaskInFlight{ false };
-        std::atomic<bool>             g_sceneNativePostFailureLogged{ false };
 
-        enum class TargetTrialMode
-        {
-            kImmediate,
-            kHold,
-            kRenderLatch,
-            kOwnedSnapshotLatch,
-            kPersistentLatch
-        };
-
-        void RunTargetTrial(const LineSink& a_out, const std::vector<std::string>& a_args,
-                            TargetTrialMode a_mode, bool* a_completed = nullptr);
-        [[nodiscard]] bool TargetHoldActive();
-        [[nodiscard]] bool ForgetPersistentState(RE::TESFormID a_refID);
+        void RunTargetTrial(
+            const LineSink& a_out, const std::vector<std::string>& a_args);
 
         [[nodiscard]] bool MutationOperational() noexcept
         {
@@ -248,97 +179,6 @@ namespace NpcAppearance
             return false;
         }
 
-        void SuppressNextSceneSet3d(const RE::TESFormID a_refID)
-        {
-            constexpr std::uint64_t kSuppressionWindowMs = 2000;
-            const auto now = ::GetTickCount64();
-            const std::scoped_lock lock{ g_eventMutex };
-            auto& suppression = g_sceneSet3dSuppressions[a_refID];
-            if (now > suppression.deadlineMs) {
-                suppression.count = 0;
-            }
-            ++suppression.count;
-            suppression.deadlineMs = now + kSuppressionWindowMs;
-        }
-
-        class ObjectLoadedSink : public RE::BSTEventSink<RE::TESObjectLoadedEvent>
-        {
-        public:
-            static ObjectLoadedSink& GetSingleton() noexcept
-            {
-                static ObjectLoadedSink singleton;
-                return singleton;
-            }
-
-            RE::BSEventNotifyControl ProcessEvent(
-                const RE::TESObjectLoadedEvent& a_event,
-                RE::BSTEventSource<RE::TESObjectLoadedEvent>*) override
-            {
-                g_eventCount.fetch_add(1, std::memory_order_relaxed);
-
-                if (!a_event.loaded) {
-                    bool wasTarget = false;
-                    {
-                        const std::scoped_lock lock{ g_eventMutex };
-                        wasTarget = g_loadedTargetRefs.erase(a_event.formID) != 0;
-                    }
-                    if (wasTarget) {
-                        g_matchingUnloadCount.fetch_add(1, std::memory_order_relaxed);
-                        REX::INFO("[NpcAppearance] TESObjectLoadedEvent ref=0x{:08X} loaded=0; per-reference state cleared tid={}",
-                                  a_event.formID, ::GetCurrentThreadId());
-                    }
-                    return RE::BSEventNotifyControl::kContinue;
-                }
-
-                auto* actor = RE::TESForm::LookupByID<RE::Actor>(a_event.formID);
-                auto* base = actor ? actor->GetNPC() : nullptr;
-                if (!base) {
-                    return RE::BSEventNotifyControl::kContinue;
-                }
-
-                bool matchingBase = false;
-                bool firstForGeneration = false;
-                {
-                    const std::scoped_lock lock{ g_eventMutex };
-                    matchingBase = g_targetBaseIDs.contains(base->GetFormID());
-                    if (matchingBase) {
-                        firstForGeneration = g_loadedTargetRefs.insert(a_event.formID).second;
-                    }
-                }
-                if (!matchingBase) {
-                    return RE::BSEventNotifyControl::kContinue;
-                }
-                if (!firstForGeneration) {
-                    g_debouncedLoadCount.fetch_add(1, std::memory_order_relaxed);
-                    return RE::BSEventNotifyControl::kContinue;
-                }
-
-                g_matchingLoadCount.fetch_add(1, std::memory_order_relaxed);
-                const auto refID = a_event.formID;
-                const auto baseID = base->GetFormID();
-                const auto eventTid = ::GetCurrentThreadId();
-                if (const auto* tasks = SFSE::GetTaskInterface()) {
-                    g_queuedApplyCount.fetch_add(1, std::memory_order_relaxed);
-                    tasks->AddTask([refID, baseID, eventTid] {
-                        auto* queuedActor = RE::TESForm::LookupByID<RE::Actor>(refID);
-                        auto* queuedBase = queuedActor ? queuedActor->GetNPC() : nullptr;
-                        if (!queuedBase || queuedBase->GetFormID() != baseID) {
-                            REX::INFO("[NpcAppearance] queued apply ref=0x{:08X} skipped (unloaded/rebound) eventTid={} taskTid={}",
-                                      refID, eventTid, ::GetCurrentThreadId());
-                            return;
-                        }
-                        g_ranApplyCount.fetch_add(1, std::memory_order_relaxed);
-                        REX::INFO("[NpcAppearance] queued apply ref=0x{:08X} base=0x{:08X} reached game task; mutation disabled eventTid={} taskTid={}",
-                                  refID, baseID, eventTid, ::GetCurrentThreadId());
-                    });
-                } else {
-                    REX::WARN("[NpcAppearance] TESObjectLoadedEvent matched ref=0x{:08X}, but SFSE TaskInterface is unavailable",
-                              refID);
-                }
-                return RE::BSEventNotifyControl::kContinue;
-            }
-        };
-
         // ==================================================================
         // Snapshots
         // Byte-exact captures of base NPC state taken before mutation and
@@ -370,143 +210,6 @@ namespace NpcAppearance
             std::array<std::byte, sizeof(RE::AIDATA_GAME)> aiData{};
 
             [[nodiscard]] bool operator==(const NonVisualSnapshot&) const = default;
-        };
-
-        class ReferenceSet3dSink :
-            public RE::BSTEventSink<RE::RuntimeComponentDBFactory::ReferenceSet3d>
-        {
-        public:
-            static ReferenceSet3dSink& GetSingleton() noexcept
-            {
-                static ReferenceSet3dSink singleton;
-                return singleton;
-            }
-
-            RE::BSEventNotifyControl ProcessEvent(
-                const RE::RuntimeComponentDBFactory::ReferenceSet3d& a_event,
-                RE::BSTEventSource<RE::RuntimeComponentDBFactory::ReferenceSet3d>*) override
-            {
-                g_sceneSet3dCount.fetch_add(1, std::memory_order_relaxed);
-
-                auto* ref = a_event.ref.get();
-                auto* actor = ref ? ref->As<RE::Actor>() : nullptr;
-                auto* base = actor ? actor->GetNPC() : nullptr;
-                if (!base) {
-                    return RE::BSEventNotifyControl::kContinue;
-                }
-
-                const auto refID = actor->GetFormID();
-                const auto baseID = base->GetFormID();
-                bool matchingBase = false;
-                bool firstForGeneration = false;
-                bool selfRefreshSuppressed = false;
-                {
-                    const std::scoped_lock lock{ g_eventMutex };
-                    matchingBase = g_targetBaseIDs.contains(baseID);
-                    if (matchingBase) {
-                        const auto suppression = g_sceneSet3dSuppressions.find(refID);
-                        if (suppression != g_sceneSet3dSuppressions.end()) {
-                            if (::GetTickCount64() <= suppression->second.deadlineMs &&
-                                suppression->second.count != 0) {
-                                selfRefreshSuppressed = true;
-                                if (--suppression->second.count == 0) {
-                                    g_sceneSet3dSuppressions.erase(suppression);
-                                }
-                                g_sceneTargetRefs.insert(refID);
-                            } else {
-                                g_sceneSet3dSuppressions.erase(suppression);
-                            }
-                        }
-                        if (!selfRefreshSuppressed) {
-                            firstForGeneration = g_sceneTargetRefs.insert(refID).second;
-                        }
-                    }
-                }
-                if (!matchingBase) {
-                    return RE::BSEventNotifyControl::kContinue;
-                }
-                if (selfRefreshSuppressed) {
-                    g_sceneSuppressedSet3dCount.fetch_add(1, std::memory_order_relaxed);
-                    REX::INFO("[NpcAppearance] ReferenceSet3d suppressed self-refresh ref=0x{:08X} base=0x{:08X} eventTid={}",
-                              refID, baseID, ::GetCurrentThreadId());
-                    return RE::BSEventNotifyControl::kContinue;
-                }
-                if (!firstForGeneration) {
-                    g_sceneDebouncedCount.fetch_add(1, std::memory_order_relaxed);
-                    return RE::BSEventNotifyControl::kContinue;
-                }
-
-                g_sceneMatchingSet3dCount.fetch_add(1, std::memory_order_relaxed);
-                const auto eventTid = ::GetCurrentThreadId();
-                std::uint64_t sequence = 0;
-                {
-                    const std::scoped_lock lock{ g_eventMutex };
-                    sequence = ++g_nextSceneSequence;
-                    g_pendingSceneApply = PendingSceneApply{
-                        .refID = refID,
-                        .baseID = baseID,
-                        .eventThreadID = eventTid,
-                        .sequence = sequence,
-                    };
-                    g_sceneQueuedApplyCount.fetch_add(1, std::memory_order_relaxed);
-                }
-                REX::INFO("[NpcAppearance] ReferenceSet3d matched ref=0x{:08X} base=0x{:08X} refPtr={} eventTid={}; published native-main-thread handoff sequence={} (no event-thread mutation)",
-                          refID, baseID, static_cast<void*>(actor), eventTid, sequence);
-                return RE::BSEventNotifyControl::kContinue;
-            }
-        };
-
-        class ReferenceDetachSink :
-            public RE::BSTEventSink<RE::RuntimeComponentDBFactory::ReferenceDetach>
-        {
-        public:
-            static ReferenceDetachSink& GetSingleton() noexcept
-            {
-                static ReferenceDetachSink singleton;
-                return singleton;
-            }
-
-            RE::BSEventNotifyControl ProcessEvent(
-                const RE::RuntimeComponentDBFactory::ReferenceDetach& a_event,
-                RE::BSTEventSource<RE::RuntimeComponentDBFactory::ReferenceDetach>*) override
-            {
-                g_sceneDetachCount.fetch_add(1, std::memory_order_relaxed);
-
-                auto* ref = a_event.ref.get();
-                if (!ref) {
-                    return RE::BSEventNotifyControl::kContinue;
-                }
-                const auto refID = ref->GetFormID();
-                bool wasTarget = false;
-                bool selfRefreshSuppressed = false;
-                {
-                    const std::scoped_lock lock{ g_eventMutex };
-                    const auto suppression = g_sceneSet3dSuppressions.find(refID);
-                    selfRefreshSuppressed =
-                        suppression != g_sceneSet3dSuppressions.end() &&
-                        ::GetTickCount64() <= suppression->second.deadlineMs &&
-                        suppression->second.count != 0;
-                    if (!selfRefreshSuppressed) {
-                        wasTarget = g_sceneTargetRefs.erase(refID) != 0;
-                        if (g_pendingSceneApply && g_pendingSceneApply->refID == refID) {
-                            g_pendingSceneApply.reset();
-                        }
-                    }
-                }
-                if (selfRefreshSuppressed) {
-                    g_sceneSuppressedDetachCount.fetch_add(1, std::memory_order_relaxed);
-                    REX::INFO("[NpcAppearance] ReferenceDetach suppressed self-refresh ref=0x{:08X}; scene generation and persistent removal state preserved eventTid={}",
-                              refID, ::GetCurrentThreadId());
-                    return RE::BSEventNotifyControl::kContinue;
-                }
-                const bool forgotPersistent = ForgetPersistentState(refID);
-                if (wasTarget) {
-                    g_sceneMatchingDetachCount.fetch_add(1, std::memory_order_relaxed);
-                    REX::INFO("[NpcAppearance] ReferenceDetach matched ref=0x{:08X}; scene generation cleared persistentStateRetired={} eventTid={}",
-                              refID, forgotPersistent, ::GetCurrentThreadId());
-                }
-                return RE::BSEventNotifyControl::kContinue;
-            }
         };
 
         struct VisualSeedSnapshot
@@ -1191,20 +894,8 @@ namespace NpcAppearance
         }
 
         // ==================================================================
-        // Persistent application and target-hold tracking
+        // Production save/load bracket tracking
         // ==================================================================
-        struct PersistentAppliedState
-        {
-            RE::TESFormID        baseID{ 0 };
-            std::uint64_t        sequence{ 0 };
-            OwnedVisualSnapshot originalVisual;
-            NonVisualSnapshot   originalNonVisual;
-            RE::TESNPC*          originalFaceNPC{ nullptr };
-            std::uint32_t        originalActorFlags{ 0 };
-        };
-
-        std::unordered_map<RE::TESFormID, PersistentAppliedState> g_persistentAppliedRefs;
-
         struct AppliedBaseState
         {
             RE::TESFormID       baseID{ 0 };
@@ -1251,18 +942,6 @@ namespace NpcAppearance
         std::atomic<bool>                               g_deferredC2RetryScheduled{ false };
         constexpr std::uint32_t                         kDeferredC2RetryMaxWaits = 400;
         constexpr std::chrono::milliseconds             kDeferredC2RetryDelay{ 25 };
-
-        [[nodiscard]] bool ForgetPersistentState(const RE::TESFormID a_refID)
-        {
-            const std::scoped_lock lock{ g_eventMutex };
-            return g_persistentAppliedRefs.erase(a_refID) != 0;
-        }
-
-        [[nodiscard]] std::size_t PersistentAppliedCount()
-        {
-            const std::scoped_lock lock{ g_eventMutex };
-            return g_persistentAppliedRefs.size();
-        }
 
         using ResolveFaceDbEntry = bool (*)(
             std::uint32_t, const RE::BSFixedString*, const RE::BSFixedString*,
@@ -1344,30 +1023,6 @@ namespace NpcAppearance
         using OwnedVisualCopy = void (*)(RE::TESNPC*, RE::TESNPC*, bool);
         using RefreshActorAppearance = void (*)(RE::Actor*, bool, std::uint32_t, bool);
         using DestroyNpc = RE::TESNPC* (*)(RE::TESNPC*, std::uint32_t);
-
-        struct TargetHoldState
-        {
-            std::uint64_t    serial{ 0 };
-            RE::TESFormID    targetFormID{ 0 };
-            RE::TESFormID    actorRefID{ 0 };
-            RE::TESFormID    backupFormID{ 0 };
-            RE::TESFormID    presetFormID{ 0 };
-            RE::TESNPC*      target{ nullptr };
-            RE::Actor*       actor{ nullptr };
-            RE::TESNPC*      backup{ nullptr };
-            RE::TESNPC*      originalFaceNPC{ nullptr };
-            std::optional<OwnedVisualSnapshot> originalVisual;
-            NonVisualSnapshot originalNonVisual;
-            std::uint32_t    originalActorFlags{ 0 };
-            bool             baseRestoredBeforeWait{ false };
-            bool             donorsDestroyedBeforeWait{ false };
-        };
-
-        std::mutex                       g_targetHoldMutex;
-        std::unique_ptr<TargetHoldState> g_targetHold;
-        std::atomic<std::uint64_t>       g_nextTargetHoldSerial{ 0 };
-        std::atomic<std::uint64_t>       g_targetHoldRollbackDueSerial{ 0 };
-        std::atomic<bool>                g_targetHoldRollbackDeferralLogged{ false };
 
         // ==================================================================
         // Preset -> donor population
@@ -1835,7 +1490,6 @@ namespace NpcAppearance
 
             NotifyBaseAppearanceChanged(a_target, 0x800);
             NotifyBaseAppearanceChanged(a_target, 0x4000);
-            SuppressNextSceneSet3d(a_actorRefID);
             reinterpret_cast<RefreshActorAppearance>(refreshAddress)(
                 a_actor, false, 0x28, false);
             return true;
@@ -1850,544 +1504,6 @@ namespace NpcAppearance
                                        loadedData) &&
                    loadedData != 0 && Util::SafeReadQword(loadedData + 0x8, root3D) &&
                    root3D != 0;
-        }
-
-        [[nodiscard]] bool TargetHoldActive()
-        {
-            const std::scoped_lock lock{ g_targetHoldMutex };
-            return g_targetHold != nullptr;
-        }
-
-        struct PersistentRemovalSummary
-        {
-            std::size_t refreshed{ 0 };
-            std::size_t retiredUnloaded{ 0 };
-            std::size_t failed{ 0 };
-        };
-
-        [[nodiscard]] PersistentRemovalSummary RemovePersistentAppearances(
-            const LineSink& a_out)
-        {
-            std::vector<std::pair<RE::TESFormID, PersistentAppliedState>> applied;
-            {
-                const std::scoped_lock lock{ g_eventMutex };
-                applied.reserve(g_persistentAppliedRefs.size());
-                for (const auto& entry : g_persistentAppliedRefs) {
-                    applied.push_back(entry);
-                }
-            }
-
-            PersistentRemovalSummary summary;
-            if (applied.empty()) {
-                return summary;
-            }
-
-            const auto refreshAddress =
-                REL::Relocation<std::uintptr_t>{ kActorAppearanceRefreshID }.address();
-            if (!HasExpectedBytes(refreshAddress, kActorAppearanceRefreshGate)) {
-                summary.failed = applied.size();
-                KillMutation("persistent removal refresh byte gate failed");
-                a_out("scene persistent: removal refresh contract mismatch; FAIL CLOSED");
-                return summary;
-            }
-
-            for (const auto& [refID, state] : applied) {
-                auto* actor = RE::TESForm::LookupByID<RE::Actor>(refID);
-                auto* target = RE::TESForm::LookupByID<RE::TESNPC>(state.baseID);
-                const bool baseOriginal = target &&
-                    SameExactVisualValues(target, state.originalVisual) &&
-                    target->faceNPC == state.originalFaceNPC &&
-                    state.originalNonVisual == Snapshot(target);
-                if (!baseOriginal) {
-                    ++summary.failed;
-                    a_out(std::format(
-                        "scene persistent: removal REFUSED ref=0x{:08X} base=0x{:08X}; original base snapshot no longer matches",
-                        refID, state.baseID));
-                    continue;
-                }
-
-                if (!actor || actor->GetNPC() != target || !HasLoaded3D(actor)) {
-                    static_cast<void>(ForgetPersistentState(refID));
-                    ++summary.retiredUnloaded;
-                    a_out(std::format(
-                        "scene persistent: retired unloaded/stale generation ref=0x{:08X} base=0x{:08X}; base remained exactly original",
-                        refID, state.baseID));
-                    continue;
-                }
-
-                if (!NotifyAndKick(target, actor, refID)) {
-                    ++summary.failed;
-                    a_out(std::format(
-                        "scene persistent: removal notify/kick failed ref=0x{:08X}; FAIL CLOSED",
-                        refID));
-                    continue;
-                }
-                const auto afterRefreshRaw = Snapshot(target);
-                const auto refreshDirtyMask =
-                    state.originalNonVisual.actorFlagsExceptSex ^
-                    afterRefreshRaw.actorFlagsExceptSex;
-                const bool refreshNonVisualExpected =
-                    (refreshDirtyMask & ~kAppearanceRefreshDirtyActorFlag) == 0 &&
-                    SameNonVisualIgnoringRefreshDirtyFlag(
-                        state.originalNonVisual, afterRefreshRaw);
-                target->actorData.actorBaseFlags =
-                    static_cast<RE::ACTOR_BASE_DATA::Flag>(state.originalActorFlags);
-                const bool finalExact =
-                    SameExactVisualValues(target, state.originalVisual) &&
-                    target->faceNPC == state.originalFaceNPC &&
-                    state.originalNonVisual == Snapshot(target);
-                if (!refreshNonVisualExpected || !finalExact) {
-                    ++summary.failed;
-                    a_out(std::format(
-                        "scene persistent: removal FAILED ref=0x{:08X} base=0x{:08X} refreshDirtyMask=0x{:08X} refreshNonVisualExpected={} finalExact={}; stop without saving",
-                        refID, state.baseID, refreshDirtyMask,
-                        refreshNonVisualExpected, finalExact));
-                    continue;
-                }
-
-                static_cast<void>(ForgetPersistentState(refID));
-                g_scenePersistentRemovalCount.fetch_add(1, std::memory_order_relaxed);
-                ++summary.refreshed;
-                a_out(std::format(
-                    "scene persistent: REMOVE PASS ref=0x{:08X} base=0x{:08X} sequence={} refreshDirtyMask=0x{:08X}; final base and rendered actor are original",
-                    refID, state.baseID, state.sequence, refreshDirtyMask));
-            }
-            return summary;
-        }
-
-        enum class TargetHoldFinish
-        {
-            kNoActiveHold,
-            kRestored,
-            kFailed
-        };
-
-        TargetHoldFinish FinishTargetHold(const std::string_view a_reason)
-        {
-            std::unique_ptr<TargetHoldState> state;
-            {
-                const std::scoped_lock lock{ g_targetHoldMutex };
-                if (!g_targetHold) {
-                    return TargetHoldFinish::kNoActiveHold;
-                }
-                state = std::move(g_targetHold);
-            }
-
-            const bool usesOwnedSnapshot = state->originalVisual.has_value();
-            const auto ownedCopyAddress = kNpcOwnedVisualCopyOffset.address();
-            const auto refreshAddress =
-                REL::Relocation<std::uintptr_t>{ kActorAppearanceRefreshID }.address();
-            const auto destructorAddress =
-                REL::Relocation<std::uintptr_t>{ kNpcScalarDeletingDestructorID }.address();
-            if (!HasExpectedBytes(refreshAddress, kActorAppearanceRefreshGate) ||
-                (!usesOwnedSnapshot &&
-                 (!HasExpectedBytes(ownedCopyAddress, kNpcOwnedVisualCopyGate) ||
-                  !HasExpectedBytes(destructorAddress, kNpcDestructorGate)))) {
-                KillMutation("target hold restore byte gate failed");
-                REX::CRITICAL(
-                    "[NpcAppearance] targethold RESTORE FAILED reason={} because a runtime contract changed; stop without saving",
-                    a_reason);
-                return TargetHoldFinish::kFailed;
-            }
-
-            auto* target = RE::TESForm::LookupByID<RE::TESNPC>(state->targetFormID);
-            auto* actor = RE::TESForm::LookupByID<RE::Actor>(state->actorRefID);
-            auto* backup = RE::TESForm::LookupByID<RE::TESNPC>(state->backupFormID);
-            const bool identitiesValid = target == state->target && actor == state->actor &&
-                actor && actor->GetNPC() == target &&
-                (usesOwnedSnapshot ? backup == nullptr && state->backup == nullptr :
-                                     backup == state->backup);
-            const bool bodyCompatible = usesOwnedSnapshot ||
-                (target && backup && target->unk3D8 && backup->unk3D8 &&
-                 target->unk3D8->size() == backup->unk3D8->size());
-            if (!identitiesValid || !bodyCompatible) {
-                REX::CRITICAL(
-                    "[NpcAppearance] targethold RESTORE FAILED reason={} identitiesValid={} bodyCompatible={} ownedSnapshot={} target={} actor={} backup={}; stop without saving",
-                    a_reason, identitiesValid, bodyCompatible, usesOwnedSnapshot,
-                    static_cast<void*>(target), static_cast<void*>(actor),
-                    static_cast<void*>(backup));
-                return TargetHoldFinish::kFailed;
-            }
-
-            const auto ownedCopy = reinterpret_cast<OwnedVisualCopy>(ownedCopyAddress);
-            const auto restoreVisualOnly = [&]() {
-                target->morphWeight = backup->morphWeight;
-                for (std::uint32_t i = 0; i < backup->unk3D8->size(); ++i) {
-                    (*target->unk3D8)[i] = (*backup->unk3D8)[i];
-                }
-                target->skinToneIndex = backup->skinToneIndex;
-                ownedCopy(target, backup, false);
-                target->faceNPC = state->originalFaceNPC;
-            };
-            const auto matchesOriginal = [&]() {
-                const bool visualExact = usesOwnedSnapshot ?
-                    SameExactVisualValues(target, *state->originalVisual) :
-                    SameExactVisualValues(target, backup);
-                return visualExact && target->faceNPC == state->originalFaceNPC &&
-                    SameNonVisualIgnoringRefreshDirtyFlag(
-                        state->originalNonVisual, Snapshot(target));
-            };
-
-            std::uint32_t restoreAttempts = 0;
-            if (!state->baseRestoredBeforeWait) {
-                if (usesOwnedSnapshot) {
-                    REX::CRITICAL(
-                        "[NpcAppearance] targethold RESTORE FAILED reason={} because an owned-snapshot hold reached cleanup without a pre-restored base; stop without saving",
-                        a_reason);
-                    return TargetHoldFinish::kFailed;
-                }
-                restoreVisualOnly();
-                restoreAttempts = 1;
-            }
-            bool restoreExact = matchesOriginal();
-            if (!restoreExact && !usesOwnedSnapshot) {
-                restoreVisualOnly();
-                ++restoreAttempts;
-                restoreExact = matchesOriginal();
-            }
-
-            std::uint32_t refreshDirtyMask = 0;
-            bool refreshNonVisualExpected = false;
-            if (restoreExact) {
-                restoreExact = NotifyAndKick(target, actor, state->actorRefID);
-                const auto afterRefreshRaw = Snapshot(target);
-                refreshDirtyMask = state->originalNonVisual.actorFlagsExceptSex ^
-                    afterRefreshRaw.actorFlagsExceptSex;
-                refreshNonVisualExpected =
-                    (refreshDirtyMask & ~kAppearanceRefreshDirtyActorFlag) == 0 &&
-                    SameNonVisualIgnoringRefreshDirtyFlag(
-                        state->originalNonVisual, afterRefreshRaw);
-            }
-            target->actorData.actorBaseFlags =
-                static_cast<RE::ACTOR_BASE_DATA::Flag>(state->originalActorFlags);
-            const bool finalNonVisualExact = state->originalNonVisual == Snapshot(target);
-            const bool finalVisualExact = restoreExact && matchesOriginal();
-
-            if (backup) {
-                const auto destroy = reinterpret_cast<DestroyNpc>(destructorAddress);
-                destroy(backup, 1);
-            }
-            const bool donorsUnregistered =
-                RE::TESForm::LookupByID<RE::TESNPC>(state->backupFormID) == nullptr &&
-                RE::TESForm::LookupByID<RE::TESNPC>(state->presetFormID) == nullptr;
-            const bool passed = restoreExact && refreshNonVisualExpected &&
-                finalVisualExact && finalNonVisualExact && donorsUnregistered &&
-                (!usesOwnedSnapshot || state->donorsDestroyedBeforeWait);
-            if (passed) {
-                REX::INFO(
-                    "[NpcAppearance] targethold RESTORE PASS reason={} attempts={} basePreRestored={} ownedSnapshot={} donorsDestroyedBeforeWait={} refreshDirtyMask=0x{:08X} donorsUnregistered={} final target is original",
-                    a_reason, restoreAttempts, state->baseRestoredBeforeWait,
-                    usesOwnedSnapshot, state->donorsDestroyedBeforeWait,
-                    refreshDirtyMask, donorsUnregistered);
-                return TargetHoldFinish::kRestored;
-            }
-
-            REX::CRITICAL(
-                "[NpcAppearance] targethold RESTORE FAILED reason={} exact={} attempts={} basePreRestored={} ownedSnapshot={} donorsDestroyedBeforeWait={} refreshDirtyMask=0x{:08X} refreshExpected={} visualExact={} nonVisualExact={} donorsUnregistered={}; stop without saving",
-                a_reason, restoreExact, restoreAttempts, state->baseRestoredBeforeWait,
-                usesOwnedSnapshot, state->donorsDestroyedBeforeWait, refreshDirtyMask,
-                refreshNonVisualExpected, finalVisualExact, finalNonVisualExact,
-                donorsUnregistered);
-            return TargetHoldFinish::kFailed;
-        }
-
-        void ScheduleTargetHoldRollback(const std::uint64_t a_serial)
-        {
-            std::thread([a_serial] {
-                std::this_thread::sleep_for(std::chrono::seconds{ kTargetHoldSeconds });
-                g_targetHoldRollbackDueSerial.store(a_serial, std::memory_order_release);
-            }).detach();
-        }
-
-        // ==================================================================
-        // Legacy native lifecycle retained until C4b. Everything below
-        // OnNpcAppearanceNativeFrame executes inside the verified BSService
-        // queue drain, but C4a no longer schedules this path from production.
-        // ==================================================================
-        void OnNpcAppearanceNativeFrame()
-        {
-            const auto nativeThreadID = ::GetCurrentThreadId();
-            const auto nativeDiagnostics = Util::NativeMainThreadQueue::GetDiagnostics();
-            if (!nativeDiagnostics.insideDrain) {
-                REX::CRITICAL(
-                    "[NpcAppearance] native lifecycle callback rejected tid={} drainOwnerTid={}; no mutation",
-                    nativeThreadID, nativeDiagnostics.drainOwnerThreadID);
-                return;
-            }
-            g_sceneNativeThreadID.store(nativeThreadID, std::memory_order_relaxed);
-            g_sceneNativeFrameCount.fetch_add(1, std::memory_order_relaxed);
-
-            auto* ui = RE::UI::GetSingleton();
-            const bool mainMenuOpen = ui && ui->IsMenuOpen(RE::BSFixedString{ "MainMenu" });
-            const bool loadingMenuOpen = ui && ui->IsMenuOpen(RE::BSFixedString{ "LoadingMenu" });
-            const bool menusBlockMutation = !ui || mainMenuOpen || loadingMenuOpen;
-
-            auto rollbackSerial =
-                g_targetHoldRollbackDueSerial.load(std::memory_order_acquire);
-            if (rollbackSerial != 0) {
-                if (menusBlockMutation) {
-                    if (!g_targetHoldRollbackDeferralLogged.exchange(
-                            true, std::memory_order_relaxed)) {
-                        REX::WARN("[NpcAppearance] targethold rollback serial={} deferred on native-main-thread tid={} uiAvailable={} mainMenuOpen={} loadingMenuOpen={}",
-                                  rollbackSerial, nativeThreadID, ui != nullptr,
-                                  mainMenuOpen, loadingMenuOpen);
-                    }
-                } else if (g_targetHoldRollbackDueSerial.compare_exchange_strong(
-                               rollbackSerial, 0, std::memory_order_acq_rel)) {
-                    g_targetHoldRollbackDeferralLogged.store(false, std::memory_order_relaxed);
-                    std::uint64_t activeSerial = 0;
-                    {
-                        const std::scoped_lock lock{ g_targetHoldMutex };
-                        if (g_targetHold) {
-                            activeSerial = g_targetHold->serial;
-                        }
-                    }
-                    if (activeSerial == rollbackSerial) {
-                        FinishTargetHold("native-main-thread automatic timer");
-                    } else {
-                        REX::INFO("[NpcAppearance] ignored stale targethold rollback serial={} activeSerial={} nativeTid={}",
-                                  rollbackSerial, activeSerial, nativeThreadID);
-                    }
-                }
-            }
-
-            std::optional<PendingSceneApply> pending;
-            {
-                const std::scoped_lock lock{ g_eventMutex };
-                pending = g_pendingSceneApply;
-            }
-            if (!pending) {
-                return;
-            }
-
-            if (menusBlockMutation) {
-                bool shouldLog = false;
-                {
-                    const std::scoped_lock lock{ g_eventMutex };
-                    if (g_pendingSceneApply &&
-                        g_pendingSceneApply->sequence == pending->sequence) {
-                        g_pendingSceneApply->stableNativeFrames = 0;
-                        if (!g_pendingSceneApply->loadingDeferralLogged) {
-                            g_pendingSceneApply->loadingDeferralLogged = true;
-                            shouldLog = true;
-                        }
-                    }
-                }
-                if (shouldLog) {
-                    g_sceneNativeLoadingDeferralCount.fetch_add(1, std::memory_order_relaxed);
-                    REX::INFO("[NpcAppearance] native-main-thread handoff sequence={} deferred; uiAvailable={} mainMenuOpen={} loadingMenuOpen={} eventTid={} nativeTid={}",
-                              pending->sequence, ui != nullptr, mainMenuOpen,
-                              loadingMenuOpen, pending->eventThreadID, nativeThreadID);
-                }
-                return;
-            }
-
-            auto* actor = RE::TESForm::LookupByID<RE::Actor>(pending->refID);
-            auto* base = actor ? actor->GetNPC() : nullptr;
-            bool generationCurrent = false;
-            {
-                const std::scoped_lock lock{ g_eventMutex };
-                generationCurrent = g_sceneTargetRefs.contains(pending->refID);
-            }
-            const bool liveAndReady = generationCurrent && base &&
-                base->GetFormID() == pending->baseID && HasLoaded3D(actor);
-            if (!liveAndReady) {
-                bool shouldLog = false;
-                {
-                    const std::scoped_lock lock{ g_eventMutex };
-                    if (g_pendingSceneApply &&
-                        g_pendingSceneApply->sequence == pending->sequence) {
-                        g_pendingSceneApply->stableNativeFrames = 0;
-                        if (!g_pendingSceneApply->invalidStateLogged) {
-                            g_pendingSceneApply->invalidStateLogged = true;
-                            shouldLog = true;
-                        }
-                    }
-                }
-                if (shouldLog) {
-                    REX::INFO("[NpcAppearance] native-main-thread handoff sequence={} waiting for stable loaded actor generationCurrent={} actor={} base={} expectedBase=0x{:08X} loaded3D={} nativeTid={}",
-                              pending->sequence, generationCurrent,
-                              static_cast<void*>(actor), static_cast<void*>(base),
-                              pending->baseID, HasLoaded3D(actor), nativeThreadID);
-                }
-                return;
-            }
-
-            std::optional<PendingSceneApply> ready;
-            {
-                const std::scoped_lock lock{ g_eventMutex };
-                if (g_pendingSceneApply &&
-                    g_pendingSceneApply->sequence == pending->sequence) {
-                    g_pendingSceneApply->invalidStateLogged = false;
-                    ++g_pendingSceneApply->stableNativeFrames;
-                    if (g_pendingSceneApply->stableNativeFrames >= kSceneStableNativeFrames) {
-                        ready = *g_pendingSceneApply;
-                        g_pendingSceneApply.reset();
-                    }
-                }
-            }
-            if (!ready) {
-                return;
-            }
-
-            g_sceneRanApplyCount.fetch_add(1, std::memory_order_relaxed);
-            g_sceneNativeReadyCount.fetch_add(1, std::memory_order_relaxed);
-            const bool observeOnly =
-                g_sceneDispatchObserveArmed.exchange(false, std::memory_order_acq_rel);
-            if (observeOnly) {
-                g_sceneNativeObservePassCount.fetch_add(1, std::memory_order_relaxed);
-                REX::INFO("[NpcAppearance] native-main-thread dispatch OBSERVE PASS sequence={} ref=0x{:08X} base=0x{:08X} stableFrames={} menusClosed=true loaded3D=true eventTid={} nativeTid={}; no mutation",
-                          ready->sequence, ready->refID, ready->baseID,
-                          ready->stableNativeFrames, ready->eventThreadID, nativeThreadID);
-                return;
-            }
-
-            const bool persistentEnabled =
-                g_scenePersistentEnabled.load(std::memory_order_acquire);
-            const bool autoTrialArmed = persistentEnabled ? false :
-                g_sceneAutoTrialArmed.exchange(false, std::memory_order_acq_rel);
-            if (!persistentEnabled && !autoTrialArmed) {
-                REX::INFO("[NpcAppearance] native-main-thread dispatch READY sequence={} ref=0x{:08X} base=0x{:08X} stableFrames={} eventTid={} nativeTid={}; mutation disabled",
-                          ready->sequence, ready->refID, ready->baseID,
-                          ready->stableNativeFrames, ready->eventThreadID, nativeThreadID);
-                return;
-            }
-
-            std::optional<SelectedAssignment> assignment;
-            {
-                const std::scoped_lock lock{ g_eventMutex };
-                const auto found = g_sceneAssignments.find(ready->baseID);
-                if (found != g_sceneAssignments.end()) {
-                    assignment = found->second;
-                }
-            }
-            if (!assignment) {
-                REX::WARN("[NpcAppearance] native-main-thread assignment sequence={} has no validated winner for base=0x{:08X}; persistentEnabled={} autoTrialArmed={}; no mutation",
-                          ready->sequence, ready->baseID, persistentEnabled, autoTrialArmed);
-                return;
-            }
-            if (TargetHoldActive()) {
-                REX::WARN("[NpcAppearance] native-main-thread assignment sequence={} skipped because a target hold is already active; persistentEnabled={} autoTrialArmed={}",
-                          ready->sequence, persistentEnabled, autoTrialArmed);
-                return;
-            }
-
-            if (persistentEnabled) {
-                {
-                    const std::scoped_lock lock{ g_eventMutex };
-                    if (g_persistentAppliedRefs.contains(ready->refID)) {
-                        REX::INFO("[NpcAppearance] native-main-thread persistent assignment sequence={} ref=0x{:08X} already tracked for this generation; no duplicate apply",
-                                  ready->sequence, ready->refID);
-                        return;
-                    }
-                }
-
-                PersistentAppliedState applied{
-                    .baseID = ready->baseID,
-                    .sequence = ready->sequence,
-                    .originalVisual = CaptureOwnedVisualSnapshot(base),
-                    .originalNonVisual = Snapshot(base),
-                    .originalFaceNPC = base->faceNPC,
-                    .originalActorFlags = base->actorData.actorBaseFlags.underlying(),
-                };
-                const std::vector<std::string> trialArgs{
-                    "npcapp",
-                    "targetpersistent",
-                    assignment->target.CanonicalKey(),
-                    std::format("{:08X}", ready->refID),
-                    assignment->presetPath.string()
-                };
-                const LineSink trialOut = [](const std::string& a_text) {
-                    REX::INFO("[NpcAppearance] scene persistent: {}", a_text);
-                };
-                g_scenePersistentAttemptCount.fetch_add(1, std::memory_order_relaxed);
-                REX::INFO("[NpcAppearance] native-main-thread persistent assignment START sequence={} ref=0x{:08X} base=0x{:08X} stableFrames={} eventTid={} nativeTid={}",
-                          ready->sequence, ready->refID, ready->baseID,
-                          ready->stableNativeFrames, ready->eventThreadID, nativeThreadID);
-                bool completed = false;
-                RunTargetTrial(
-                    trialOut, trialArgs, TargetTrialMode::kPersistentLatch, &completed);
-
-                bool retained = false;
-                if (completed) {
-                    const std::scoped_lock lock{ g_eventMutex };
-                    if (g_scenePersistentEnabled.load(std::memory_order_acquire) &&
-                        g_sceneTargetRefs.contains(ready->refID)) {
-                        g_persistentAppliedRefs.insert_or_assign(
-                            ready->refID, std::move(applied));
-                        retained = true;
-                    }
-                }
-                if (retained) {
-                    g_scenePersistentApplyCount.fetch_add(1, std::memory_order_relaxed);
-                }
-                REX::INFO("[NpcAppearance] native-main-thread persistent assignment END sequence={} completed={} tracked={} baseOriginalAtRest=true nativeTid={}",
-                          ready->sequence, completed, retained, nativeThreadID);
-                return;
-            }
-
-            g_sceneAutoTrialAttemptCount.fetch_add(1, std::memory_order_relaxed);
-            const std::vector<std::string> trialArgs{
-                "npcapp",
-                "targethold",
-                assignment->target.CanonicalKey(),
-                std::format("{:08X}", ready->refID),
-                assignment->presetPath.string()
-            };
-            const LineSink trialOut = [](const std::string& a_text) {
-                REX::INFO("[NpcAppearance] scene auto: {}", a_text);
-            };
-            REX::INFO("[NpcAppearance] native-main-thread automatic bounded trial START sequence={} ref=0x{:08X} base=0x{:08X} stableFrames={} eventTid={} nativeTid={}",
-                      ready->sequence, ready->refID, ready->baseID,
-                      ready->stableNativeFrames, ready->eventThreadID, nativeThreadID);
-            RunTargetTrial(trialOut, trialArgs, TargetTrialMode::kHold);
-            const bool active = TargetHoldActive();
-            if (active) {
-                g_sceneAutoTrialApplyCount.fetch_add(1, std::memory_order_relaxed);
-            }
-            REX::INFO("[NpcAppearance] native-main-thread automatic bounded trial END sequence={} holdActive={} oneShotArmConsumed=true nativeTid={}",
-                      ready->sequence, active, nativeThreadID);
-        }
-
-        void RequestNpcAppearanceNativeFrame()
-        {
-            bool pendingScene = false;
-            {
-                const std::scoped_lock lock{ g_eventMutex };
-                pendingScene = g_pendingSceneApply.has_value();
-            }
-            const bool rollbackDue =
-                g_targetHoldRollbackDueSerial.load(std::memory_order_acquire) != 0;
-            if (!pendingScene && !rollbackDue) {
-                return;
-            }
-
-            bool expected = false;
-            if (!g_sceneNativeTaskInFlight.compare_exchange_strong(
-                    expected, true, std::memory_order_acq_rel)) {
-                return;
-            }
-
-            const auto result = Util::NativeMainThreadQueue::Post([] {
-                struct InFlightReset
-                {
-                    ~InFlightReset()
-                    {
-                        g_sceneNativeTaskInFlight.store(false, std::memory_order_release);
-                    }
-                } reset;
-                OnNpcAppearanceNativeFrame();
-            }, "NpcAppearance.SceneLifecycle");
-            if (result != Util::NativeMainThreadQueue::PostResult::kQueued) {
-                g_sceneNativeTaskInFlight.store(false, std::memory_order_release);
-                if (!g_sceneNativePostFailureLogged.exchange(true, std::memory_order_acq_rel)) {
-                    REX::WARN(
-                        "[NpcAppearance] native lifecycle post deferred: {}; pending work remains fail-closed",
-                        Util::NativeMainThreadQueue::ToString(result));
-                }
-            } else {
-                g_sceneNativePostFailureLogged.store(false, std::memory_order_release);
-            }
         }
 
         // ==================================================================
@@ -2513,7 +1629,7 @@ namespace NpcAppearance
                         return a_entry.second.bracketFailed;
                     }));
             }
-            a_out("OSF Identity diagnostics: disabled-by-default / explicit commands only");
+            a_out("OSF Identity diagnostics: production save/load bracket + retained pipeline commands");
             a_out(std::format("saveLoadBracketOperational={} saveVetoSupported={} mutationKilled={}",
                               g_bracketOperational.load(std::memory_order_relaxed),
                               SaveLoadHooks::SupportsSaveVeto(),
@@ -2539,42 +1655,7 @@ namespace NpcAppearance
             a_out("runtimeNpcImporter=NO SAFE SEAM FOUND (SavePCFace is a parse-only console wrapper)");
             a_out("ownedEngineConstruction=RUNTIME-PROVEN (100/100 registered-empty Create(false)+destroy+unregister cycles)");
             a_out("copyAppearance=deep-owned containers STATIC-PROVEN, but also copies pronoun; visual-only path pending");
-            a_out("copyRefreshWorker=ID 97401 (static byte-contract gate; runtime proof pending)");
-            a_out(std::format("lifecycle=TESObjectLoadedEvent ID 64152 register/unregister RUNTIME-PROVEN; sinkRegistered={} events={} matchingLoads={} matchingUnloads={} debounced={} queued={} ran={}",
-                              g_eventRegistered.load(std::memory_order_relaxed),
-                              g_eventCount.load(std::memory_order_relaxed),
-                              g_matchingLoadCount.load(std::memory_order_relaxed),
-                              g_matchingUnloadCount.load(std::memory_order_relaxed),
-                              g_debouncedLoadCount.load(std::memory_order_relaxed),
-                              g_queuedApplyCount.load(std::memory_order_relaxed),
-                              g_ranApplyCount.load(std::memory_order_relaxed)));
-            a_out(std::format("sceneLifecycle=ReferenceSet3d ID 49237 + ReferenceDetach ID 40306 -> BSService::TaskQueue IDs 883606/100121 with drain-owner ID 923104; startupPacksPresent={} startupPersistentArmed={} sinkRegistered={} observeArmed={} autoTrialArmed={} persistentEnabled={} persistentTracked={} set3d={} detach={} matchingSet3d={} matchingDetach={} selfRefreshSuppressedSet3d={} selfRefreshSuppressedDetach={} debounced={} published={} nativeReady={} nativeObservePass={} nativeLoadingDeferrals={} nativeFrames={} nativeTid={} nativeInFlight={} autoAttempts={} autoApplies={} persistentAttempts={} persistentApplies={} persistentRemovals={}",
-                              g_startupPacksPresent.load(std::memory_order_relaxed),
-                              g_startupPersistentArmed.load(std::memory_order_relaxed),
-                              g_sceneRegistered.load(std::memory_order_relaxed),
-                              g_sceneDispatchObserveArmed.load(std::memory_order_relaxed),
-                              g_sceneAutoTrialArmed.load(std::memory_order_relaxed),
-                              g_scenePersistentEnabled.load(std::memory_order_relaxed),
-                              PersistentAppliedCount(),
-                              g_sceneSet3dCount.load(std::memory_order_relaxed),
-                              g_sceneDetachCount.load(std::memory_order_relaxed),
-                              g_sceneMatchingSet3dCount.load(std::memory_order_relaxed),
-                              g_sceneMatchingDetachCount.load(std::memory_order_relaxed),
-                              g_sceneSuppressedSet3dCount.load(std::memory_order_relaxed),
-                              g_sceneSuppressedDetachCount.load(std::memory_order_relaxed),
-                              g_sceneDebouncedCount.load(std::memory_order_relaxed),
-                              g_sceneQueuedApplyCount.load(std::memory_order_relaxed),
-                              g_sceneNativeReadyCount.load(std::memory_order_relaxed),
-                              g_sceneNativeObservePassCount.load(std::memory_order_relaxed),
-                              g_sceneNativeLoadingDeferralCount.load(std::memory_order_relaxed),
-                              g_sceneNativeFrameCount.load(std::memory_order_relaxed),
-                              g_sceneNativeThreadID.load(std::memory_order_relaxed),
-                              g_sceneNativeTaskInFlight.load(std::memory_order_relaxed),
-                              g_sceneAutoTrialAttemptCount.load(std::memory_order_relaxed),
-                              g_sceneAutoTrialApplyCount.load(std::memory_order_relaxed),
-                              g_scenePersistentAttemptCount.load(std::memory_order_relaxed),
-                              g_scenePersistentApplyCount.load(std::memory_order_relaxed),
-                              g_scenePersistentRemovalCount.load(std::memory_order_relaxed)));
+            a_out("appearanceRefresh=ID 101307 (byte-contract gated; runtime-proven one-shot for matching loaded actors)");
         }
 
         void RunSelfTest(const LineSink& a_out)
@@ -2639,15 +1720,6 @@ namespace NpcAppearance
 
         void RunScan(const LineSink& a_out, const std::vector<std::string>& a_args)
         {
-            if (TargetHoldActive()) {
-                a_out("scan: refused while a bounded target hold is active; wait for exact rollback or run npcapp targetrestore");
-                return;
-            }
-            if (g_scenePersistentEnabled.load(std::memory_order_acquire) ||
-                PersistentAppliedCount() != 0) {
-                a_out("scan: refused while persistent assignment is enabled or tracked; run npcapp scene persistent off first");
-                return;
-            }
             std::filesystem::path packsRoot;
             if (a_args.size() > 2) {
                 packsRoot = std::filesystem::path{ JoinArguments(a_args, 2) };
@@ -2830,64 +1902,11 @@ namespace NpcAppearance
                 const std::scoped_lock lock{ g_eventMutex };
                 g_targetBaseIDs = std::move(resolvedBaseIDs);
                 g_sceneAssignments = std::move(resolvedAssignments);
-                g_loadedTargetRefs.clear();
-                g_sceneTargetRefs.clear();
-                g_sceneSet3dSuppressions.clear();
-                g_pendingSceneApply.reset();
             }
-            g_sceneDispatchObserveArmed.store(false, std::memory_order_release);
-            g_sceneAutoTrialArmed.store(false, std::memory_order_release);
             a_out(std::format("scan: discoveredPacks={} implicitPacks={} validPacks={} decodedPresets={} validCandidates={} winners={} resolvedTargets={}; validation only, owned population/application gate prevents mutation",
                               discovery.packages.size(), implicitPacks, validPacks,
                               decodedPresets, validatedCandidates.size(), selection.winners.size(),
                               resolvedCount));
-        }
-
-        void RunEvent(const LineSink& a_out, const std::vector<std::string>& a_args)
-        {
-            const std::string_view action =
-                a_args.size() >= 3 ? std::string_view{ a_args[2] } : std::string_view{ "status" };
-            if (action == "status") {
-                std::size_t targets = 0;
-                std::size_t loadedRefs = 0;
-                {
-                    const std::scoped_lock lock{ g_eventMutex };
-                    targets = g_targetBaseIDs.size();
-                    loadedRefs = g_loadedTargetRefs.size();
-                }
-                a_out(std::format("event: registered={} targetBases={} loadedTargetRefs={} total={} matchingLoads={} matchingUnloads={} debounced={} queued={} ran={}",
-                                  g_eventRegistered.load(std::memory_order_relaxed), targets, loadedRefs,
-                                  g_eventCount.load(std::memory_order_relaxed),
-                                  g_matchingLoadCount.load(std::memory_order_relaxed),
-                                  g_matchingUnloadCount.load(std::memory_order_relaxed),
-                                  g_debouncedLoadCount.load(std::memory_order_relaxed),
-                                  g_queuedApplyCount.load(std::memory_order_relaxed),
-                                  g_ranApplyCount.load(std::memory_order_relaxed)));
-                return;
-            }
-
-            auto* source = RE::TESObjectLoadedEvent::GetEventSource();
-            if (!source) {
-                a_out("event: GetEventSource() returned null; FAIL CLOSED");
-                return;
-            }
-            auto* sink = &ObjectLoadedSink::GetSingleton();
-            if (action == "on") {
-                if (!g_eventRegistered.exchange(true, std::memory_order_acq_rel)) {
-                    source->RegisterSink(sink);
-                }
-                a_out(std::format("event: sink registered source={} (ID 64152); load mappings first to select targets",
-                                  static_cast<void*>(source)));
-            } else if (action == "off") {
-                if (g_eventRegistered.exchange(false, std::memory_order_acq_rel)) {
-                    source->UnregisterSink(sink);
-                }
-                const std::scoped_lock lock{ g_eventMutex };
-                g_loadedTargetRefs.clear();
-                a_out("event: sink unregistered; per-reference state cleared");
-            } else {
-                a_out("usage: npcapp event <status|on|off>");
-            }
         }
 
         void RunInspect(const LineSink& a_out, const std::vector<std::string>& a_args)
@@ -2960,290 +1979,6 @@ namespace NpcAppearance
             for (const auto& issue : a_result.issues) {
                 a_out(std::format("  dependency issue code={} field={} value='{}': {}",
                                   issue.code, issue.field, issue.value, issue.message));
-            }
-        }
-
-        void RunSceneEvent(const LineSink& a_out, const std::vector<std::string>& a_args)
-        {
-            const std::string_view action =
-                a_args.size() >= 3 ? std::string_view{ a_args[2] } : std::string_view{ "status" };
-            if (action == "status") {
-                std::size_t targets = 0;
-                std::size_t trackedRefs = 0;
-                std::size_t assignments = 0;
-                std::size_t persistentTracked = 0;
-                bool pending = false;
-                {
-                    const std::scoped_lock lock{ g_eventMutex };
-                    targets = g_targetBaseIDs.size();
-                    trackedRefs = g_sceneTargetRefs.size();
-                    assignments = g_sceneAssignments.size();
-                    persistentTracked = g_persistentAppliedRefs.size();
-                    pending = g_pendingSceneApply.has_value();
-                }
-                a_out(std::format("scene: startupPacksPresent={} startupPersistentArmed={} registered={} observeArmed={} autoTrialArmed={} persistentEnabled={} persistentTracked={} targetBases={} assignments={} trackedRefs={} pending={} set3dTotal={} detachTotal={} matchingSet3d={} matchingDetach={} selfRefreshSuppressedSet3d={} selfRefreshSuppressedDetach={} debounced={} published={} nativeReady={} nativeObservePass={} nativeLoadingDeferrals={} nativeFrames={} nativeTid={} nativeInFlight={} autoAttempts={} autoApplies={} persistentAttempts={} persistentApplies={} persistentRemovals={}",
-                                  g_startupPacksPresent.load(std::memory_order_relaxed),
-                                  g_startupPersistentArmed.load(std::memory_order_relaxed),
-                                  g_sceneRegistered.load(std::memory_order_relaxed),
-                                  g_sceneDispatchObserveArmed.load(std::memory_order_relaxed),
-                                  g_sceneAutoTrialArmed.load(std::memory_order_relaxed),
-                                  g_scenePersistentEnabled.load(std::memory_order_relaxed),
-                                  persistentTracked,
-                                  targets, assignments, trackedRefs, pending,
-                                  g_sceneSet3dCount.load(std::memory_order_relaxed),
-                                  g_sceneDetachCount.load(std::memory_order_relaxed),
-                                  g_sceneMatchingSet3dCount.load(std::memory_order_relaxed),
-                                  g_sceneMatchingDetachCount.load(std::memory_order_relaxed),
-                                  g_sceneSuppressedSet3dCount.load(std::memory_order_relaxed),
-                                  g_sceneSuppressedDetachCount.load(std::memory_order_relaxed),
-                                  g_sceneDebouncedCount.load(std::memory_order_relaxed),
-                                  g_sceneQueuedApplyCount.load(std::memory_order_relaxed),
-                                  g_sceneNativeReadyCount.load(std::memory_order_relaxed),
-                                  g_sceneNativeObservePassCount.load(std::memory_order_relaxed),
-                                  g_sceneNativeLoadingDeferralCount.load(std::memory_order_relaxed),
-                                  g_sceneNativeFrameCount.load(std::memory_order_relaxed),
-                                  g_sceneNativeThreadID.load(std::memory_order_relaxed),
-                                  g_sceneNativeTaskInFlight.load(std::memory_order_relaxed),
-                                  g_sceneAutoTrialAttemptCount.load(std::memory_order_relaxed),
-                                  g_sceneAutoTrialApplyCount.load(std::memory_order_relaxed),
-                                  g_scenePersistentAttemptCount.load(std::memory_order_relaxed),
-                                  g_scenePersistentApplyCount.load(std::memory_order_relaxed),
-                                  g_scenePersistentRemovalCount.load(std::memory_order_relaxed)));
-                return;
-            }
-
-            if (action == "dispatch") {
-                const std::string_view setting =
-                    a_args.size() >= 4 ? std::string_view{ a_args[3] } : std::string_view{};
-                if (setting == "on") {
-                    std::size_t assignments = 0;
-                    {
-                        const std::scoped_lock lock{ g_eventMutex };
-                        assignments = g_sceneAssignments.size();
-                    }
-                    if (!g_sceneRegistered.load(std::memory_order_acquire) || assignments == 0) {
-                        a_out(std::format("scene dispatch: refused registered={} assignments={}; run scan and scene on first",
-                                          g_sceneRegistered.load(std::memory_order_relaxed), assignments));
-                        return;
-                    }
-                    if (g_sceneAutoTrialArmed.load(std::memory_order_acquire) ||
-                        g_scenePersistentEnabled.load(std::memory_order_acquire) ||
-                        PersistentAppliedCount() != 0 || TargetHoldActive()) {
-                        a_out("scene dispatch: refused while an automatic/persistent assignment or target hold is active");
-                        return;
-                    }
-                    g_sceneDispatchObserveArmed.store(true, std::memory_order_release);
-                    a_out(std::format("scene dispatch: ARMED observation-only; next matched 3D attach must reach the verified native game-thread drain with menus closed and loaded 3D stable for {} frames; no mutation",
-                                      kSceneStableNativeFrames));
-                } else if (setting == "off") {
-                    g_sceneDispatchObserveArmed.store(false, std::memory_order_release);
-                    a_out("scene dispatch: DISARMED; no mutation");
-                } else {
-                    a_out("usage: npcapp scene dispatch <on|off>");
-                }
-                return;
-            }
-
-            if (action == "persistent") {
-                const std::string_view setting =
-                    a_args.size() >= 4 ? std::string_view{ a_args[3] } : std::string_view{};
-                if (setting == "on") {
-                    std::optional<RE::TESFormID> requestedRefID;
-                    if (a_args.size() >= 5) {
-                        requestedRefID = ParseFormID(a_args[4]);
-                        if (!requestedRefID) {
-                            a_out("scene persistent: actorRefID must be hexadecimal");
-                            return;
-                        }
-                    }
-
-                    std::size_t assignments = 0;
-                    {
-                        const std::scoped_lock lock{ g_eventMutex };
-                        assignments = g_sceneAssignments.size();
-                    }
-                    if (!g_sceneRegistered.load(std::memory_order_acquire) || assignments == 0) {
-                        a_out(std::format("scene persistent: refused registered={} assignments={}; run scan and scene on first",
-                                          g_sceneRegistered.load(std::memory_order_relaxed), assignments));
-                        return;
-                    }
-                    if (TargetHoldActive() ||
-                        g_sceneDispatchObserveArmed.load(std::memory_order_acquire) ||
-                        g_sceneAutoTrialArmed.load(std::memory_order_acquire)) {
-                        a_out("scene persistent: refused while observation, bounded auto, or target hold is active");
-                        return;
-                    }
-                    const auto nativeDiagnostics =
-                        Util::NativeMainThreadQueue::GetDiagnostics();
-                    if (!nativeDiagnostics.insideDrain ||
-                        !nativeDiagnostics.queueEnabled || nativeDiagnostics.singleton == 0) {
-                        a_out(std::format("scene persistent: refused because native main-thread proof is not active insideDrain={} queueEnabled={} singleton=0x{:X}; no mutation",
-                                          nativeDiagnostics.insideDrain,
-                                          nativeDiagnostics.queueEnabled,
-                                          nativeDiagnostics.singleton));
-                        return;
-                    }
-
-                    std::uint64_t sequence = 0;
-                    RE::TESFormID requestedBaseID = 0;
-                    if (requestedRefID) {
-                        auto* actor = RE::TESForm::LookupByID<RE::Actor>(*requestedRefID);
-                        auto* base = actor ? actor->GetNPC() : nullptr;
-                        if (!base || !HasLoaded3D(actor)) {
-                            a_out(std::format("scene persistent: requested ref=0x{:08X} is not a loaded actor with 3D; no mutation",
-                                              *requestedRefID));
-                            return;
-                        }
-                        requestedBaseID = base->GetFormID();
-                        {
-                            const std::scoped_lock lock{ g_eventMutex };
-                            if (!g_sceneAssignments.contains(requestedBaseID)) {
-                                a_out(std::format("scene persistent: requested ref=0x{:08X} base=0x{:08X} has no validated winning assignment; no mutation",
-                                                  *requestedRefID, requestedBaseID));
-                                return;
-                            }
-                            if (g_persistentAppliedRefs.contains(*requestedRefID)) {
-                                g_scenePersistentEnabled.store(true, std::memory_order_release);
-                                a_out(std::format("scene persistent: already enabled and tracked for ref=0x{:08X}",
-                                                  *requestedRefID));
-                                return;
-                            }
-                            if (g_pendingSceneApply) {
-                                a_out(std::format("scene persistent: refused explicit reconcile because sequence={} is already pending",
-                                                  g_pendingSceneApply->sequence));
-                                return;
-                            }
-                            g_sceneTargetRefs.insert(*requestedRefID);
-                            sequence = ++g_nextSceneSequence;
-                            g_pendingSceneApply = PendingSceneApply{
-                                .refID = *requestedRefID,
-                                .baseID = requestedBaseID,
-                                .eventThreadID = ::GetCurrentThreadId(),
-                                .sequence = sequence,
-                            };
-                            g_sceneQueuedApplyCount.fetch_add(1, std::memory_order_relaxed);
-                        }
-                    }
-
-                    g_scenePersistentEnabled.store(true, std::memory_order_release);
-                    g_sceneAutoTrialArmed.store(false, std::memory_order_release);
-                    if (requestedRefID) {
-                        a_out(std::format("scene persistent: ENABLED and queued explicit loaded-generation reconcile sequence={} ref=0x{:08X} base=0x{:08X}; waits for {} stable verified native frames",
-                                          sequence, *requestedRefID, requestedBaseID,
-                                          kSceneStableNativeFrames));
-                    } else {
-                        a_out(std::format("scene persistent: ENABLED for {} validated assignment(s); future matched 3D generations will apply automatically",
-                                          assignments));
-                    }
-                } else if (setting == "off") {
-                    g_scenePersistentEnabled.store(false, std::memory_order_release);
-                    {
-                        const std::scoped_lock lock{ g_eventMutex };
-                        g_pendingSceneApply.reset();
-                    }
-                    const auto summary = RemovePersistentAppearances(a_out);
-                    a_out(std::format("scene persistent: DISABLED refreshed={} retiredUnloaded={} failed={} remainingTracked={}",
-                                      summary.refreshed, summary.retiredUnloaded,
-                                      summary.failed, PersistentAppliedCount()));
-                } else {
-                    a_out("usage: npcapp scene persistent <on [actorRefID]|off>");
-                }
-                return;
-            }
-
-            if (action == "auto") {
-                const std::string_view setting =
-                    a_args.size() >= 4 ? std::string_view{ a_args[3] } : std::string_view{};
-                if (setting == "on") {
-                    std::size_t assignments = 0;
-                    {
-                        const std::scoped_lock lock{ g_eventMutex };
-                        assignments = g_sceneAssignments.size();
-                    }
-                    if (!g_sceneRegistered.load(std::memory_order_acquire) || assignments == 0) {
-                        a_out(std::format("scene auto: refused registered={} assignments={}; run scan and scene on first",
-                                          g_sceneRegistered.load(std::memory_order_relaxed), assignments));
-                        return;
-                    }
-                    if (TargetHoldActive() ||
-                        g_scenePersistentEnabled.load(std::memory_order_acquire) ||
-                        PersistentAppliedCount() != 0) {
-                        a_out("scene auto: refused while another bounded hold or persistent assignment is active");
-                        return;
-                    }
-                    if (g_sceneDispatchObserveArmed.load(std::memory_order_acquire)) {
-                        a_out("scene auto: refused while observation-only dispatch is armed");
-                        return;
-                    }
-                    const auto nativeDiagnostics =
-                        Util::NativeMainThreadQueue::GetDiagnostics();
-                    if (!nativeDiagnostics.insideDrain ||
-                        !nativeDiagnostics.queueEnabled || nativeDiagnostics.singleton == 0) {
-                        a_out(std::format("scene auto: refused because native main-thread proof is not active insideDrain={} queueEnabled={} singleton=0x{:X}; no mutation",
-                                          nativeDiagnostics.insideDrain,
-                                          nativeDiagnostics.queueEnabled,
-                                          nativeDiagnostics.singleton));
-                        return;
-                    }
-                    g_sceneAutoTrialArmed.store(true, std::memory_order_release);
-                    a_out(std::format("scene auto: ARMED one-shot for {} validated assignment(s); next matched 3D attach waits for menus closed plus {} stable verified native frames, then starts a bounded {}-second apply with native-main-thread exact rollback",
-                                      assignments, kSceneStableNativeFrames, kTargetHoldSeconds));
-                } else if (setting == "off") {
-                    g_sceneAutoTrialArmed.store(false, std::memory_order_release);
-                    const auto finish = FinishTargetHold("scene auto disarm");
-                    a_out(std::format("scene auto: DISARMED activeHoldResult={}",
-                                      finish == TargetHoldFinish::kNoActiveHold ? "none" :
-                                      finish == TargetHoldFinish::kRestored ? "restored" : "FAILED"));
-                } else {
-                    a_out("usage: npcapp scene auto <on|off>");
-                }
-                return;
-            }
-
-            auto* set3dSource = RE::RuntimeComponentDBFactory::ReferenceSet3d::GetEventSource();
-            auto* detachSource = RE::RuntimeComponentDBFactory::ReferenceDetach::GetEventSource();
-            if (!set3dSource || !detachSource) {
-                a_out(std::format("scene: event source unavailable set3d={} detach={}; FAIL CLOSED",
-                                  static_cast<void*>(set3dSource), static_cast<void*>(detachSource)));
-                return;
-            }
-
-            auto* set3dSink = &ReferenceSet3dSink::GetSingleton();
-            auto* detachSink = &ReferenceDetachSink::GetSingleton();
-            if (action == "on") {
-                if (!g_sceneRegistered.exchange(true, std::memory_order_acq_rel)) {
-                    set3dSource->RegisterSink(set3dSink);
-                    detachSource->RegisterSink(detachSink);
-                }
-                a_out(std::format("scene: sinks registered set3dSource={} (ID 49237) detachSource={} (ID 40306); load mappings first to select targets",
-                                  static_cast<void*>(set3dSource), static_cast<void*>(detachSource)));
-            } else if (action == "off") {
-                g_sceneDispatchObserveArmed.store(false, std::memory_order_release);
-                g_sceneAutoTrialArmed.store(false, std::memory_order_release);
-                g_scenePersistentEnabled.store(false, std::memory_order_release);
-                const auto finish = FinishTargetHold("scene sink disarm");
-                const auto removal = RemovePersistentAppearances(a_out);
-                if (removal.failed != 0) {
-                    a_out(std::format("scene: sink disarm REFUSED because persistent removal failed={} remainingTracked={}; sinks remain registered",
-                                      removal.failed, PersistentAppliedCount()));
-                    return;
-                }
-                if (g_sceneRegistered.exchange(false, std::memory_order_acq_rel)) {
-                    set3dSource->UnregisterSink(set3dSink);
-                    detachSource->UnregisterSink(detachSink);
-                }
-                {
-                    const std::scoped_lock lock{ g_eventMutex };
-                    g_sceneTargetRefs.clear();
-                    g_sceneSet3dSuppressions.clear();
-                    g_pendingSceneApply.reset();
-                }
-                a_out(std::format("scene: sinks unregistered; per-reference state cleared; activeHoldResult={} persistentRefreshed={} persistentRetiredUnloaded={}",
-                                  finish == TargetHoldFinish::kNoActiveHold ? "none" :
-                                  finish == TargetHoldFinish::kRestored ? "restored" : "FAILED",
-                                  removal.refreshed, removal.retiredUnloaded));
-            } else {
-                a_out("usage: npcapp scene <status|on|off|dispatch <on|off>|auto <on|off>|persistent <on [actorRefID]|off>>");
             }
         }
 
@@ -4419,9 +3154,8 @@ namespace NpcAppearance
             return targetExact && donorUnregistered;
         }
 
-        // Typed extraction of RunTargetTrial's proven apply pipeline. This
-        // mutates only the TESNPC base: no notifications, actor refresh, or
-        // retained donors. RunTargetTrial remains intact until C4b.
+        // Proven production apply pipeline. This mutates only the TESNPC base:
+        // no notifications, actor refresh, or retained donors.
         [[nodiscard]] bool SilentApplyPresetToBase(
             const LineSink& a_out,
             RE::TESNPC* a_target,
@@ -4665,529 +3399,84 @@ namespace NpcAppearance
             return applied && donorsUnregistered;
         }
 
-        void RunTargetTrial(const LineSink& a_out, const std::vector<std::string>& a_args,
-                            const TargetTrialMode a_mode, bool* const a_completed)
+        void RunTargetTrial(
+            const LineSink& a_out, const std::vector<std::string>& a_args)
         {
-            if (a_completed) {
-                *a_completed = false;
-            }
-            const bool persistentLatch = a_mode == TargetTrialMode::kPersistentLatch;
-            const bool holdForVisualProof = a_mode == TargetTrialMode::kHold ||
-                a_mode == TargetTrialMode::kRenderLatch ||
-                a_mode == TargetTrialMode::kOwnedSnapshotLatch;
-            const bool ownedSnapshotLatch = a_mode == TargetTrialMode::kOwnedSnapshotLatch;
-            const bool ownedSnapshotRequired = ownedSnapshotLatch || persistentLatch;
-            const bool renderLatch = a_mode == TargetTrialMode::kRenderLatch ||
-                ownedSnapshotLatch || persistentLatch;
-            const std::string_view trialLabel = persistentLatch ? "targetpersistent" :
-                ownedSnapshotLatch ? "targetsnapshot" :
-                renderLatch ? "targetlatch" : holdForVisualProof ? "targethold" : "targettrial";
-            if (!RequireMutationOperational(a_out, trialLabel)) {
+            if (!RequireMutationOperational(a_out, "targettrial")) {
                 return;
             }
             if (a_args.size() < 5) {
-                a_out(persistentLatch ?
-                          "usage: npcapp targetpersistent <editorID|plugin:localFormID> <actorRefID> <preset.npc>" :
-                      ownedSnapshotLatch ?
-                          "usage: npcapp targetsnapshot <editorID|plugin:localFormID> <actorRefID> <preset.npc>" :
-                      renderLatch ?
-                          "usage: npcapp targetlatch <editorID|plugin:localFormID> <actorRefID> <preset.npc>" :
-                          holdForVisualProof ?
-                              "usage: npcapp targethold <editorID|plugin:localFormID> <actorRefID> <preset.npc>" :
-                              "usage: npcapp targettrial <editorID|plugin:localFormID> <actorRefID> <preset.npc>");
+                a_out("usage: npcapp targettrial <editorID|plugin:localFormID> <actorRefID> <preset.npc>");
                 return;
             }
-            if (TargetHoldActive()) {
-                a_out("targethold: another visual hold is active; use npcapp targetrestore or wait for automatic rollback");
+
+            const auto nativeDiagnostics =
+                Util::NativeMainThreadQueue::GetDiagnostics();
+            if (!nativeDiagnostics.insideDrain ||
+                !nativeDiagnostics.queueEnabled ||
+                nativeDiagnostics.singleton == 0) {
+                a_out(std::format(
+                    "targettrial: refused outside verified native drain insideDrain={} queueEnabled={} singleton=0x{:X}; no mutation",
+                    nativeDiagnostics.insideDrain,
+                    nativeDiagnostics.queueEnabled,
+                    nativeDiagnostics.singleton));
                 return;
             }
+
             const auto actorRefID = ParseFormID(a_args[3]);
-            if (!actorRefID) {
-                a_out("targettrial: invalid actorRefID");
-                return;
-            }
             const auto targetIdentity = ParseTargetToken(a_args[2]);
-            if (!targetIdentity) {
-                a_out("targettrial: invalid target token");
+            if (!actorRefID || !targetIdentity) {
+                a_out("targettrial: invalid target token or actorRefID");
                 return;
             }
             auto* target = ResolveEligibleTarget(a_out, *targetIdentity);
-            if (!target) {
-                return;
-            }
             auto* actor = RE::TESForm::LookupByID<RE::Actor>(*actorRefID);
-            if (!actor || actor->GetNPC() != target) {
+            if (!target || !actor || actor->GetNPC() != target) {
                 a_out(std::format(
-                    "targettrial: actor ref 0x{:08X} missing or bound to a different base (actor={} actorBase={} expected={}); no mutation",
-                    *actorRefID, static_cast<void*>(actor),
-                    static_cast<void*>(actor ? actor->GetNPC() : nullptr),
-                    static_cast<void*>(target)));
+                    "targettrial: actor ref 0x{:08X} is absent or bound to a different base; no mutation",
+                    *actorRefID));
                 return;
             }
 
-            const std::filesystem::path path{ JoinArguments(a_args, 4) };
-            const auto decoded = LoadCkPreset(path);
-            if (!decoded.preset) {
-                a_out(std::format("targettrial: preset rejected path={} issues={}",
-                                  path.string(), decoded.issues.size()));
-                return;
-            }
-            const auto resolved = ResolveAppearanceDependencies(*decoded.preset, target);
-            ReportDependencyResolution(a_out, resolved);
-            if (!resolved.Complete()) {
-                a_out("targettrial: dependency resolution incomplete; no mutation");
-                return;
-            }
-
-            const auto factoryAddress = REL::Relocation<std::uintptr_t>{ kNpcFactorySingletonID }.address();
-            const auto factoryVtable = REL::Relocation<std::uintptr_t>{ kNpcFactoryVtableID }.address();
-            const auto createAddress = REL::Relocation<std::uintptr_t>{ kNpcFactoryCreateID }.address();
-            const auto npcVtable = REL::Relocation<std::uintptr_t>{ kNpcPrimaryVtableID }.address();
-            const auto destructorAddress =
-                REL::Relocation<std::uintptr_t>{ kNpcScalarDeletingDestructorID }.address();
-            const auto copyAddress = REL::Relocation<std::uintptr_t>{ kNpcCopyAppearanceID }.address();
-            const auto shapeAddress = REL::Relocation<std::uintptr_t>{ kNpcSetShapeBlendID }.address();
-            const auto bodyAddress = REL::Relocation<std::uintptr_t>{ kNpcSetBodyMorphID }.address();
-            const auto boneAddress = REL::Relocation<std::uintptr_t>{ kNpcSetBoneValueID }.address();
-            const auto boneGroupAddress =
-                REL::Relocation<std::uintptr_t>{ kNpcSetBoneGroupValueID }.address();
-            const auto removeHeadAddress =
-                REL::Relocation<std::uintptr_t>{ kNpcRemoveHeadPartID }.address();
-            const auto changeHeadAddress =
-                REL::Relocation<std::uintptr_t>{ kNpcChangeHeadPartID }.address();
-            const auto resolveEntryAddress =
-                REL::Relocation<std::uintptr_t>{ kFaceDbResolveEntryID }.address();
-            const auto setAvmAddress =
-                REL::Relocation<std::uintptr_t>{ kNpcSetAvmDataID }.address();
-            const auto removeAvmAddress =
-                REL::Relocation<std::uintptr_t>{ kNpcRemoveAvmDataID }.address();
-            const auto ownedCopyAddress = kNpcOwnedVisualCopyOffset.address();
-            const auto refreshAddress =
-                REL::Relocation<std::uintptr_t>{ kActorAppearanceRefreshID }.address();
-
-            if (!Util::IsReadableRange(factoryAddress, sizeof(std::uintptr_t)) ||
-                *reinterpret_cast<const std::uintptr_t*>(factoryAddress) != factoryVtable ||
-                !Util::IsReadableRange(factoryVtable + sizeof(std::uintptr_t), sizeof(std::uintptr_t)) ||
-                *reinterpret_cast<const std::uintptr_t*>(factoryVtable + sizeof(std::uintptr_t)) != createAddress ||
-                !HasExpectedBytes(createAddress, kNpcFactoryCreateGate) ||
-                !HasExpectedBytes(destructorAddress, kNpcDestructorGate) ||
-                !HasExpectedBytes(copyAddress, kNpcCopyAppearanceGate) ||
-                !HasExpectedBytes(shapeAddress, kNpcSetShapeBlendGate) ||
-                !HasExpectedBytes(bodyAddress, kNpcSetBodyMorphGate) ||
-                !HasExpectedBytes(boneAddress, kNpcSetBoneValueGate) ||
-                !HasExpectedBytes(boneGroupAddress, kNpcSetBoneGroupValueGate) ||
-                !HasExpectedBytes(removeHeadAddress, kNpcRemoveHeadPartGate) ||
-                !HasExpectedBytes(changeHeadAddress, kNpcChangeHeadPartGate) ||
-                !HasExpectedBytes(resolveEntryAddress, kFaceDbResolveEntryGate) ||
-                !HasExpectedBytes(setAvmAddress, kNpcSetAvmDataGate) ||
-                !HasExpectedBytes(removeAvmAddress, kNpcRemoveAvmDataGate) ||
-                !HasExpectedBytes(ownedCopyAddress, kNpcOwnedVisualCopyGate) ||
-                !HasExpectedBytes(refreshAddress, kActorAppearanceRefreshGate)) {
-                KillMutation("target trial byte gate failed");
-                a_out("targettrial: population/copy/refresh/destructor contract mismatch; FAIL CLOSED");
-                return;
-            }
-
-            const auto resolveEntry = reinterpret_cast<ResolveFaceDbEntry>(resolveEntryAddress);
-            std::vector<MaterializedAvmLayer> expectedAvms;
-            if (!MaterializeAvmLayers(a_out, *decoded.preset, resolveEntry, expectedAvms)) {
-                a_out("targettrial: AVM materialization incomplete; no mutation");
-                return;
-            }
-
-            using Create = RE::TESNPC* (*)(void*, bool);
-            using Copy = void (*)(RE::TESNPC*, RE::TESNPC*, bool);
-            using OwnedCopy = void (*)(RE::TESNPC*, RE::TESNPC*, bool);
-            using Destroy = RE::TESNPC* (*)(RE::TESNPC*, std::uint32_t);
-            const auto create = reinterpret_cast<Create>(createAddress);
-            const auto copy = reinterpret_cast<Copy>(copyAddress);
-            const auto ownedCopy = reinterpret_cast<OwnedCopy>(ownedCopyAddress);
-            const auto setShape = reinterpret_cast<SetShapeBlend>(shapeAddress);
-            const auto setBody = reinterpret_cast<SetBodyMorph>(bodyAddress);
-            const auto setBone = reinterpret_cast<SetFacialBone>(boneAddress);
-            const auto ensureBoneGroup =
-                reinterpret_cast<EnsureFacialBoneGroup>(boneGroupAddress);
-            const auto removeHeadPart = reinterpret_cast<RemoveHeadPart>(removeHeadAddress);
-            const auto changeHeadPart = reinterpret_cast<ChangeHeadPart>(changeHeadAddress);
-            const auto setAvmData = reinterpret_cast<SetAvmData>(setAvmAddress);
-            const auto removeAvmData = reinterpret_cast<RemoveAvmData>(removeAvmAddress);
-            const auto destroy = reinterpret_cast<Destroy>(destructorAddress);
-
-            const auto targetNonVisualBefore = Snapshot(target);
-            const auto targetVisualBefore = SnapshotVisualSeed(target);
-            auto originalOwnedVisual = CaptureOwnedVisualSnapshot(target);
-            const auto originalActorFlags = target->actorData.actorBaseFlags.underlying();
-            auto* const originalFaceNPC = target->faceNPC;
-            auto* backupDonor = create(reinterpret_cast<void*>(factoryAddress), false);
-            auto* presetDonor = create(reinterpret_cast<void*>(factoryAddress), false);
-            if (!backupDonor || !presetDonor) {
-                if (presetDonor) {
-                    destroy(presetDonor, 1);
+            std::filesystem::path trackedPreset;
+            {
+                const std::scoped_lock lock{ g_appliedBasesMutex };
+                const auto state = g_appliedBases.find(target->GetFormID());
+                if (state == g_appliedBases.end() || state->second.bracketFailed) {
+                    a_out(std::format(
+                        "targettrial: base 0x{:08X} is not safely tracked by the active save bracket; no mutation",
+                        target->GetFormID()));
+                    return;
                 }
-                if (backupDonor) {
-                    destroy(backupDonor, 1);
-                }
-                a_out("targettrial: failed to create the backup/preset donor pair; no mutation");
-                return;
-            }
-            const auto backupFormID = backupDonor->GetFormID();
-            const auto presetFormID = presetDonor->GetFormID();
-            const auto initialized = [&](RE::TESNPC* a_donor, RE::TESFormID a_formID) {
-                return *reinterpret_cast<const std::uintptr_t*>(a_donor) == npcVtable &&
-                       a_formID != 0 &&
-                       RE::TESForm::LookupByID<RE::TESNPC>(a_formID) == a_donor &&
-                       a_donor->QRefCount() == 0 && a_donor->unk3D8 == nullptr &&
-                       a_donor->unk3E0 == nullptr && a_donor->unk3E8 == nullptr &&
-                       a_donor->shapeBlendData == nullptr && a_donor->tintAVMData.empty();
-            };
-            if (!initialized(backupDonor, backupFormID) ||
-                !initialized(presetDonor, presetFormID)) {
-                destroy(presetDonor, 1);
-                destroy(backupDonor, 1);
-                a_out("targettrial: donor pair failed registered-empty invariants; no mutation");
-                return;
+                trackedPreset = state->second.assignment.presetPath;
             }
 
-            copy(backupDonor, target, false);
-            copy(presetDonor, target, false);
-            PopulatePresetMorphs(presetDonor, *decoded.preset, setShape, setBody,
-                                 setBone, ensureBoneGroup);
-            PopulatePresetVisuals(presetDonor, *decoded.preset, resolved, expectedAvms,
-                                  removeHeadPart, changeHeadPart,
-                                  setAvmData, removeAvmData);
-
-            const bool backupExact = SameExactVisualValues(backupDonor, target);
-            const bool backupIndependent = HasIndependentVisualStorage(
-                targetVisualBefore, SnapshotVisualSeed(backupDonor));
-            const bool ownedSnapshotExact = !ownedSnapshotRequired ||
-                (SameExactVisualValues(target, originalOwnedVisual) &&
-                 SameExactVisualValues(backupDonor, originalOwnedVisual));
-            const bool presetMorphsValid =
-                ValidateDonorMorphPopulation(a_out, presetDonor, *decoded.preset);
-            const bool presetVisualsValid = ValidateDonorVisualPopulation(
-                a_out, presetDonor, *decoded.preset, resolved, expectedAvms);
-            const bool controlledDifference =
-                !SameExactVisualValues(presetDonor, backupDonor);
-            const bool controlledDifferenceRequired = !persistentLatch;
-            const bool rollbackBodyCompatible = backupDonor->unk3D8 &&
-                backupDonor->unk3D8->size() == decoded.preset->bodyMorphRegionValues.size();
-            if (!backupExact || !backupIndependent || !ownedSnapshotExact || !presetMorphsValid ||
-                !presetVisualsValid ||
-                (controlledDifferenceRequired && !controlledDifference) ||
-                !rollbackBodyCompatible ||
-                targetNonVisualBefore != Snapshot(target) ||
-                targetVisualBefore != SnapshotVisualSeed(target)) {
-                destroy(presetDonor, 1);
-                destroy(backupDonor, 1);
+            const std::filesystem::path requestedPreset{ JoinArguments(a_args, 4) };
+            std::error_code requestedError;
+            std::error_code trackedError;
+            const auto canonicalRequested =
+                std::filesystem::weakly_canonical(requestedPreset, requestedError);
+            const auto canonicalTracked =
+                std::filesystem::weakly_canonical(trackedPreset, trackedError);
+            if (requestedError || trackedError ||
+                canonicalRequested != canonicalTracked) {
                 a_out(std::format(
-                    "targettrial: preflight failed backupExact={} backupIndependent={} ownedSnapshotExact={} presetMorphsValid={} presetVisualsValid={} controlledDifference={} controlledDifferenceRequired={} rollbackBodyCompatible={}; no mutation",
-                    backupExact, backupIndependent, ownedSnapshotExact, presetMorphsValid,
-                    presetVisualsValid, controlledDifference, controlledDifferenceRequired,
-                    rollbackBodyCompatible));
+                    "targettrial: requested preset does not match the bracket-tracked winning assignment requested={} tracked={}; no mutation",
+                    requestedPreset.string(), trackedPreset.string()));
                 return;
             }
 
-            presetDonor->faceNPC = nullptr;
-            target->morphWeight.thin = static_cast<float>(decoded.preset->morphWeights.x);
-            target->morphWeight.muscular = static_cast<float>(decoded.preset->morphWeights.y);
-            target->morphWeight.fat = static_cast<float>(decoded.preset->morphWeights.z);
-            for (std::size_t i = 0; i < decoded.preset->bodyMorphRegionValues.size(); ++i) {
-                setBody(target, static_cast<std::uint32_t>(i),
-                        static_cast<float>(decoded.preset->bodyMorphRegionValues[i]));
+            if (!SilentApplyPresetToBase(a_out, target, trackedPreset)) {
+                a_out("targettrial: FAIL CLOSED during silent apply; tracked base remains bracket-owned");
+                return;
             }
-            target->skinToneIndex = static_cast<std::uint8_t>(decoded.preset->skinTone);
-            ownedCopy(target, presetDonor, false);
-
-            const bool targetMorphsValid =
-                ValidateDonorMorphPopulation(a_out, target, *decoded.preset);
-            const bool targetVisualsValid = ValidateDonorVisualPopulation(
-                a_out, target, *decoded.preset, resolved, expectedAvms);
-            const bool targetMatchesPreset = SameExactVisualValues(target, presetDonor);
-            const bool targetStorageIndependent = HasIndependentVisualStorage(
-                SnapshotVisualSeed(presetDonor), SnapshotVisualSeed(target));
-            const auto targetNonVisualAfterApply = Snapshot(target);
-            const bool targetNonVisualPreserved =
-                targetNonVisualBefore == targetNonVisualAfterApply;
-            const bool applyValidated = targetMorphsValid && targetVisualsValid &&
-                targetMatchesPreset && targetStorageIndependent &&
-                targetNonVisualPreserved && target->faceNPC == nullptr;
-
-            bool actor3DLoaded = false;
-            bool refreshIssued = false;
-            if (applyValidated) {
-                actor3DLoaded = HasLoaded3D(actor);
-                refreshIssued = NotifyAndKick(target, actor, *actorRefID);
+            if (!NotifyAndKick(target, actor, *actorRefID)) {
+                a_out("targettrial: FAIL CLOSED during notify/kick; do not save");
+                return;
             }
-            const auto targetNonVisualAfterApplyRefresh = Snapshot(target);
-            const auto applyRefreshDirtyMask =
-                targetNonVisualBefore.actorFlagsExceptSex ^
-                targetNonVisualAfterApplyRefresh.actorFlagsExceptSex;
-            const bool applyRefreshNonVisualExpected =
-                (applyRefreshDirtyMask & ~kAppearanceRefreshDirtyActorFlag) == 0 &&
-                SameNonVisualIgnoringRefreshDirtyFlag(
-                    targetNonVisualBefore, targetNonVisualAfterApplyRefresh);
-
-            // The outer ID 68122 worker is useful for seeding disposable donors,
-            // but it also writes nonvisual TESNPC fields. Restore with the proven
-            // lower visual-only worker plus its three explicitly excluded fields.
-            const auto restoreVisualOnly = [&]() {
-                target->morphWeight = backupDonor->morphWeight;
-                for (std::uint32_t i = 0; i < backupDonor->unk3D8->size(); ++i) {
-                    (*target->unk3D8)[i] = (*backupDonor->unk3D8)[i];
-                }
-                target->skinToneIndex = backupDonor->skinToneIndex;
-                ownedCopy(target, backupDonor, false);
-                target->faceNPC = originalFaceNPC;
-            };
-
-            if (persistentLatch) {
-                const bool persistentReady = applyValidated && refreshIssued && actor3DLoaded &&
-                    applyRefreshNonVisualExpected && ownedSnapshotExact;
-                if (persistentReady) {
-                    destroy(presetDonor, 1);
-                    presetDonor = nullptr;
-                    const bool presetDonorUnregistered =
-                        RE::TESForm::LookupByID<RE::TESNPC>(presetFormID) == nullptr;
-                    if (presetDonorUnregistered) {
-                        restoreVisualOnly();
-                        target->actorData.actorBaseFlags =
-                            static_cast<RE::ACTOR_BASE_DATA::Flag>(originalActorFlags);
-                        const bool baseOriginalNow =
-                            SameExactVisualValues(target, backupDonor) &&
-                            SameExactVisualValues(target, originalOwnedVisual) &&
-                            target->faceNPC == originalFaceNPC &&
-                            targetNonVisualBefore == Snapshot(target);
-                        if (baseOriginalNow) {
-                            destroy(backupDonor, 1);
-                            backupDonor = nullptr;
-                            const bool donorsUnregistered =
-                                RE::TESForm::LookupByID<RE::TESNPC>(backupFormID) == nullptr &&
-                                RE::TESForm::LookupByID<RE::TESNPC>(presetFormID) == nullptr;
-                            if (donorsUnregistered) {
-                                if (a_completed) {
-                                    *a_completed = true;
-                                }
-                                a_out(std::format(
-                                    "targetpersistent: APPLY + BASE RESTORE + DONOR TEARDOWN PASS targetMatchesPreset={} storageIndependent={} ownedSnapshotExact={} nonVisualPreserved={} actor3DLoaded={} refreshDirtyMask=0x{:08X} baseOriginalNow={} donorsUnregistered={}; rendered preset remains latched until an original-base refresh",
-                                    targetMatchesPreset, targetStorageIndependent,
-                                    ownedSnapshotExact, targetNonVisualPreserved,
-                                    actor3DLoaded, applyRefreshDirtyMask,
-                                    baseOriginalNow, donorsUnregistered));
-                                return;
-                            }
-
-                            static_cast<void>(NotifyAndKick(target, actor, *actorRefID));
-                            target->actorData.actorBaseFlags =
-                                static_cast<RE::ACTOR_BASE_DATA::Flag>(originalActorFlags);
-                            a_out("targetpersistent: donor teardown did not unregister both forms; original-base refresh issued and assignment not retained");
-                            return;
-                        }
-                        a_out("targetpersistent: immediate base restore failed; issuing ordinary exact rollback");
-                    }
-                } else {
-                    a_out(std::format(
-                        "targetpersistent: preflight failed applyValidated={} actor3DLoaded={} refreshIssued={} refreshNonVisualExpected={} ownedSnapshotExact={}; rolling back immediately",
-                        applyValidated, actor3DLoaded, refreshIssued,
-                        applyRefreshNonVisualExpected, ownedSnapshotExact));
-                }
-            }
-
-            if (holdForVisualProof) {
-                const bool holdReady = applyValidated && refreshIssued && actor3DLoaded &&
-                    applyRefreshNonVisualExpected;
-                if (holdReady) {
-                    destroy(presetDonor, 1);
-                    presetDonor = nullptr;
-                    const bool presetDonorUnregistered =
-                        RE::TESForm::LookupByID<RE::TESNPC>(presetFormID) == nullptr;
-                    if (presetDonorUnregistered) {
-                        bool latchBaseRestored = false;
-                        if (renderLatch) {
-                            restoreVisualOnly();
-                            target->actorData.actorBaseFlags =
-                                static_cast<RE::ACTOR_BASE_DATA::Flag>(originalActorFlags);
-                            latchBaseRestored =
-                                SameExactVisualValues(target, backupDonor) &&
-                                (!ownedSnapshotLatch ||
-                                 SameExactVisualValues(target, originalOwnedVisual)) &&
-                                target->faceNPC == originalFaceNPC &&
-                                targetNonVisualBefore == Snapshot(target);
-                            if (!latchBaseRestored) {
-                                a_out(std::format(
-                                    "{}: immediate base restore failed; issuing ordinary restore refresh",
-                                    trialLabel));
-                            }
-                        }
-
-                        if (renderLatch && !latchBaseRestored) {
-                            // Fall through to the ordinary immediate rollback path.
-                        } else {
-                            auto state = std::make_unique<TargetHoldState>();
-                            state->serial = g_nextTargetHoldSerial.fetch_add(
-                                1, std::memory_order_relaxed) + 1;
-                            state->targetFormID = target->GetFormID();
-                            state->actorRefID = *actorRefID;
-                            state->backupFormID = backupFormID;
-                            state->presetFormID = presetFormID;
-                            state->target = target;
-                            state->actor = actor;
-                            state->backup = backupDonor;
-                            state->originalFaceNPC = originalFaceNPC;
-                            state->originalNonVisual = targetNonVisualBefore;
-                            state->originalActorFlags = originalActorFlags;
-                            state->baseRestoredBeforeWait = renderLatch;
-
-                            bool donorsDestroyedBeforeWait = false;
-                            if (ownedSnapshotLatch) {
-                                state->originalVisual = std::move(originalOwnedVisual);
-                                destroy(backupDonor, 1);
-                                backupDonor = nullptr;
-                                state->backup = nullptr;
-                                donorsDestroyedBeforeWait =
-                                    RE::TESForm::LookupByID<RE::TESNPC>(backupFormID) == nullptr &&
-                                    RE::TESForm::LookupByID<RE::TESNPC>(presetFormID) == nullptr;
-                                state->donorsDestroyedBeforeWait = donorsDestroyedBeforeWait;
-                                if (!donorsDestroyedBeforeWait) {
-                                    static_cast<void>(NotifyAndKick(target, actor, *actorRefID));
-                                    target->actorData.actorBaseFlags =
-                                        static_cast<RE::ACTOR_BASE_DATA::Flag>(originalActorFlags);
-                                    a_out("targetsnapshot: donor teardown did not unregister both forms; original-base refresh issued and no hold armed");
-                                    return;
-                                }
-                            }
-
-                            const auto holdSerial = state->serial;
-                            {
-                                const std::scoped_lock lock{ g_targetHoldMutex };
-                                g_targetHold = std::move(state);
-                            }
-                            ScheduleTargetHoldRollback(holdSerial);
-                            if (ownedSnapshotLatch) {
-                                a_out(std::format(
-                                    "targetsnapshot: APPLY + BASE RESTORE + DONOR TEARDOWN PASS targetMatchesPreset={} storageIndependent={} ownedSnapshotExact={} nonVisualPreserved={} actor3DLoaded={} refreshDirtyMask=0x{:08X} baseOriginalNow={} donorsUnregistered={}",
-                                    targetMatchesPreset, targetStorageIndependent,
-                                    ownedSnapshotExact, targetNonVisualPreserved,
-                                    actor3DLoaded, applyRefreshDirtyMask,
-                                    latchBaseRestored, donorsDestroyedBeforeWait));
-                                a_out(std::format(
-                                    "targetsnapshot: ACTIVE render-latch observation for {} seconds; base is original, both donors are already destroyed, and only plugin-owned values remain",
-                                    kTargetHoldSeconds));
-                            } else if (renderLatch) {
-                                a_out(std::format(
-                                    "targetlatch: APPLY + BASE RESTORE PASS targetMatchesPreset={} storageIndependent={} nonVisualPreserved={} actor3DLoaded={} refreshDirtyMask=0x{:08X} baseOriginalNow={}",
-                                    targetMatchesPreset, targetStorageIndependent,
-                                    targetNonVisualPreserved, actor3DLoaded,
-                                    applyRefreshDirtyMask, latchBaseRestored));
-                                a_out(std::format(
-                                    "targetlatch: ACTIVE render-latch observation for {} seconds; base is already original and no second refresh has run; look for Afro now, then delayed original refresh",
-                                    kTargetHoldSeconds));
-                            } else {
-                                a_out(std::format(
-                                    "targethold: APPLY PASS targetMatchesPreset={} storageIndependent={} nonVisualPreserved={} actor3DLoaded={} refreshDirtyMask=0x{:08X}",
-                                    targetMatchesPreset, targetStorageIndependent,
-                                    targetNonVisualPreserved, actor3DLoaded, applyRefreshDirtyMask));
-                                a_out(std::format(
-                                    "targethold: ACTIVE for {} seconds; look at Sarah now; DO NOT SAVE, LOAD, FAST-TRAVEL, OR EXIT; automatic exact rollback is armed",
-                                    kTargetHoldSeconds));
-                            }
-                            return;
-                        }
-                    }
-                    a_out(std::format(
-                        "{}: setup failed; rolling back immediately", trialLabel));
-                } else {
-                    a_out(std::format(
-                        "{}: visual-hold preflight failed applyValidated={} actor3DLoaded={} refreshIssued={} refreshNonVisualExpected={}; rolling back immediately",
-                        trialLabel,
-                        applyValidated, actor3DLoaded, refreshIssued,
-                        applyRefreshNonVisualExpected));
-                }
-            }
-
-            restoreVisualOnly();
-            auto targetNonVisualAfterRestore = Snapshot(target);
-            bool restoreExact = SameExactVisualValues(target, backupDonor) &&
-                target->faceNPC == originalFaceNPC &&
-                SameNonVisualIgnoringRefreshDirtyFlag(
-                    targetNonVisualBefore, targetNonVisualAfterRestore);
-            std::uint32_t restoreAttempts = 1;
-            if (!restoreExact) {
-                restoreVisualOnly();
-                targetNonVisualAfterRestore = Snapshot(target);
-                restoreExact = SameExactVisualValues(target, backupDonor) &&
-                    target->faceNPC == originalFaceNPC &&
-                    SameNonVisualIgnoringRefreshDirtyFlag(
-                        targetNonVisualBefore, targetNonVisualAfterRestore);
-                restoreAttempts = 2;
-            }
-            if (refreshIssued) {
-                refreshIssued = NotifyAndKick(target, actor, *actorRefID);
-            }
-            const auto targetNonVisualAfterRestoreRefreshRaw = Snapshot(target);
-            const auto restoreRefreshDirtyMask =
-                targetNonVisualBefore.actorFlagsExceptSex ^
-                targetNonVisualAfterRestoreRefreshRaw.actorFlagsExceptSex;
-            const bool restoreRefreshNonVisualExpected =
-                (restoreRefreshDirtyMask & ~kAppearanceRefreshDirtyActorFlag) == 0 &&
-                SameNonVisualIgnoringRefreshDirtyFlag(
-                    targetNonVisualBefore, targetNonVisualAfterRestoreRefreshRaw);
-            target->actorData.actorBaseFlags =
-                static_cast<RE::ACTOR_BASE_DATA::Flag>(originalActorFlags);
-            const auto targetNonVisualAfterRestoreRefresh = Snapshot(target);
-
-            if (!restoreExact || !applyRefreshNonVisualExpected ||
-                !restoreRefreshNonVisualExpected ||
-                targetNonVisualBefore != targetNonVisualAfterRestoreRefresh) {
-                ReportSnapshot(a_out, "targettrial original       ", targetNonVisualBefore);
-                ReportSnapshot(a_out, "targettrial after apply    ", targetNonVisualAfterApply);
-                ReportSnapshot(a_out, "targettrial after applyRef ", targetNonVisualAfterApplyRefresh);
-                ReportSnapshot(a_out, "targettrial after restore  ", targetNonVisualAfterRestore);
-                ReportSnapshot(a_out, "targettrial after restoreRef", targetNonVisualAfterRestoreRefreshRaw);
-                ReportVisualSeedComparison(
-                    a_out, SnapshotVisualSeed(backupDonor), SnapshotVisualSeed(target));
-            }
-
-            if (presetDonor) {
-                destroy(presetDonor, 1);
-            }
-            destroy(backupDonor, 1);
-            const bool donorsUnregistered =
-                RE::TESForm::LookupByID<RE::TESNPC>(presetFormID) == nullptr &&
-                RE::TESForm::LookupByID<RE::TESNPC>(backupFormID) == nullptr;
-            const bool targetNonVisualAfter =
-                targetNonVisualBefore == targetNonVisualAfterRestoreRefresh;
-            const bool passed = applyValidated && refreshIssued && restoreExact &&
-                applyRefreshNonVisualExpected && restoreRefreshNonVisualExpected &&
-                donorsUnregistered && targetNonVisualAfter;
-
             a_out(std::format(
-                "targettrial: APPLY targetMorphsValid={} targetVisualsValid={} targetMatchesPreset={} storageIndependent={} nonVisualPreserved={} actor3DLoaded={} refreshIssued={}",
-                targetMorphsValid, targetVisualsValid, targetMatchesPreset,
-                targetStorageIndependent, targetNonVisualPreserved,
-                actor3DLoaded, refreshIssued));
-            a_out(std::format(
-                "targettrial: RESTORE exact={} attempts={} refreshDirtyMasks=0x{:08X}/0x{:08X} refreshNonVisualExpected={}/{} donorsUnregistered={} nonVisualAfter={} faceNPC=restored",
-                restoreExact, restoreAttempts, applyRefreshDirtyMask, restoreRefreshDirtyMask,
-                applyRefreshNonVisualExpected, restoreRefreshNonVisualExpected,
-                donorsUnregistered, targetNonVisualAfter));
-            a_out(passed ?
-                      "targettrial: PASS transient Sarah base application + vanilla refresh + exact rollback; final target is original" :
-                      "targettrial: FAIL CLOSED; inspect Sarah immediately before any save or further test");
-        }
-
-        void RunTargetRestore(const LineSink& a_out)
-        {
-            switch (FinishTargetHold("manual command")) {
-            case TargetHoldFinish::kNoActiveHold:
-                a_out("targetrestore: no visual hold is active");
-                break;
-            case TargetHoldFinish::kRestored:
-                a_out("targetrestore: PASS exact rollback; final target is original");
-                break;
-            case TargetHoldFinish::kFailed:
-                a_out("targetrestore: FAIL CLOSED; stop Starfield without saving");
-                break;
-            }
+                "targettrial: PASS production apply + one-shot notify/kick base=0x{:08X} actor=0x{:08X}",
+                target->GetFormID(), *actorRefID));
         }
 
         void RunCopyRef(const LineSink& a_out, const std::vector<std::string>& a_args)
@@ -5875,8 +4164,6 @@ namespace NpcAppearance
                                         NotifyBaseAppearanceChanged(target, 0x4000);
                                         notified = true;
                                         if (refreshRequired) {
-                                            SuppressNextSceneSet3d(
-                                                actorResolution.actorRefID);
                                             reinterpret_cast<RefreshActorAppearance>(
                                                 refreshAddress)(
                                                 actorResolution.actor, false,
@@ -6389,8 +4676,6 @@ namespace NpcAppearance
                             NotifyBaseAppearanceChanged(target, 0x4000);
                             notified = true;
                             if (refreshRequired) {
-                                SuppressNextSceneSet3d(
-                                    actorResolution.actorRefID);
                                 reinterpret_cast<RefreshActorAppearance>(
                                     refreshAddress)(
                                     actorResolution.actor, false, 0x28, false);
@@ -6528,8 +4813,6 @@ namespace NpcAppearance
         // ==================================================================
         void OnNpcAppearanceDataLoaded()
         {
-            g_startupPacksPresent.store(false, std::memory_order_release);
-            g_startupPersistentArmed.store(false, std::memory_order_release);
 
             if (!MutationOperational()) {
                 if (g_bracketOperational.load(std::memory_order_acquire) &&
@@ -6548,7 +4831,6 @@ namespace NpcAppearance
             std::error_code ec;
             const bool packsPresent =
                 std::filesystem::is_directory(packsRoot, ec) && !ec;
-            g_startupPacksPresent.store(packsPresent, std::memory_order_release);
             if (!packsPresent) {
                 REX::INFO("[NpcAppearance] startup disabled: packs directory is absent ({})",
                           packsRoot.string());
@@ -6585,9 +4867,68 @@ namespace NpcAppearance
             }
             g_bracketArmed.store(true, std::memory_order_release);
             REX::INFO(
-                "[NpcAppearance] save/load bracket ARMED assignments={} autoArm=true saveLoadEventRegistered={}; legacy scene lifecycle remains compiled but is unreachable from production startup",
+                "[NpcAppearance] save/load bracket ARMED assignments={} autoArm=true saveLoadEventRegistered={}; load-side recipe=base apply + notify + loaded-actor refresh",
                 assignments,
                 g_saveLoadEventRegistered.load(std::memory_order_relaxed));
+        }
+
+        void RunBracketStatus(const LineSink& a_out)
+        {
+            std::size_t assignments = 0;
+            {
+                const std::scoped_lock lock{ g_eventMutex };
+                assignments = g_sceneAssignments.size();
+            }
+            std::size_t appliedBases = 0;
+            std::size_t failedBases = 0;
+            std::size_t restoredBases = 0;
+            {
+                const std::scoped_lock lock{ g_appliedBasesMutex };
+                appliedBases = g_appliedBases.size();
+                failedBases = static_cast<std::size_t>(std::ranges::count_if(
+                    g_appliedBases, [](const auto& a_entry) {
+                        return a_entry.second.bracketFailed;
+                    }));
+                restoredBases = g_saveEntryRestoredBases.size();
+            }
+            bool loadPending = false;
+            bool loadInFlight = false;
+            {
+                const std::scoped_lock lock{ g_deferredC2LoadMutex };
+                loadPending = g_deferredC2LoadTask != nullptr;
+                loadInFlight = g_deferredC2LoadInFlight;
+            }
+            bool savePending = false;
+            bool saveInFlight = false;
+            {
+                const std::scoped_lock lock{ g_deferredC2SaveMutex };
+                savePending = g_deferredC2SaveTask != nullptr;
+                saveInFlight = g_deferredC2SaveInFlight;
+            }
+            const auto nativeDiagnostics =
+                Util::NativeMainThreadQueue::GetDiagnostics();
+            a_out(std::format(
+                "bracket: operational={} veto={} armed={} mutationKilled={} inBracket={} assignments={} appliedBases={} failedBases={} restoredAtSaveEntry={} preSaveReady={} gatewayEntered={} hookObserved={} entries={} saveReturns={} loadReturns={} loadGeneration={}",
+                g_bracketOperational.load(std::memory_order_relaxed),
+                SaveLoadHooks::SupportsSaveVeto(),
+                g_bracketArmed.load(std::memory_order_relaxed),
+                g_mutationKilled.load(std::memory_order_relaxed),
+                g_inBracket.load(std::memory_order_relaxed),
+                assignments, appliedBases, failedBases, restoredBases,
+                g_preSaveReady.load(std::memory_order_relaxed),
+                g_saveGatewayEntered.load(std::memory_order_relaxed),
+                g_saveHookObserved.load(std::memory_order_relaxed),
+                g_bracketSaveEntries.load(std::memory_order_relaxed),
+                g_bracketSaveReturns.load(std::memory_order_relaxed),
+                g_bracketLoadReturns.load(std::memory_order_relaxed),
+                g_bracketLoadGeneration.load(std::memory_order_relaxed)));
+            a_out(std::format(
+                "bracket: loadPending={} loadInFlight={} savePending={} saveInFlight={} retryScheduled={} insideDrain={} queueEnabled={} nativeTid={}",
+                loadPending, loadInFlight, savePending, saveInFlight,
+                g_deferredC2RetryScheduled.load(std::memory_order_relaxed),
+                nativeDiagnostics.insideDrain,
+                nativeDiagnostics.queueEnabled,
+                nativeDiagnostics.currentThreadID));
         }
 
     }
@@ -6667,23 +5008,13 @@ namespace NpcAppearance
         } else if (a_args[1] == "donorcopy") {
             RunDonorCopy(a_out, a_args);
         } else if (a_args[1] == "targettrial") {
-            RunTargetTrial(a_out, a_args, TargetTrialMode::kImmediate);
-        } else if (a_args[1] == "targethold") {
-            RunTargetTrial(a_out, a_args, TargetTrialMode::kHold);
-        } else if (a_args[1] == "targetlatch") {
-            RunTargetTrial(a_out, a_args, TargetTrialMode::kRenderLatch);
-        } else if (a_args[1] == "targetsnapshot") {
-            RunTargetTrial(a_out, a_args, TargetTrialMode::kOwnedSnapshotLatch);
-        } else if (a_args[1] == "targetrestore") {
-            RunTargetRestore(a_out);
-        } else if (a_args[1] == "event") {
-            RunEvent(a_out, a_args);
-        } else if (a_args[1] == "scene") {
-            RunSceneEvent(a_out, a_args);
+            RunTargetTrial(a_out, a_args);
+        } else if (a_args[1] == "bracket") {
+            RunBracketStatus(a_out);
         } else if (a_args[1] == "copyref") {
             RunCopyRef(a_out, a_args);
         } else {
-            a_out("npcapp: status|selftest|scan [packsRoot]|inspect <npc>|resolve <editorID>|refs <editorID> <npc>|avm <editorID> <npc>|donor [count]|donorseed <editorID> <npc>|donormorph <editorID> <npc>|donorvisual <editorID> <npc>|donorcopy <editorID> <npc>|targettrial <editorID> <actorRefID> <npc>|targethold <editorID> <actorRefID> <npc>|targetlatch <editorID> <actorRefID> <npc>|targetsnapshot <editorID> <actorRefID> <npc>|targetrestore|event <status|on|off>|scene <status|on|off|dispatch <on|off>|auto <on|off>|persistent <on [actorRefID]|off>>|copyref <targetRefID> <sourceRefID> [0|1]");
+            a_out("npcapp: status|bracket|selftest|scan [packsRoot]|inspect <npc>|resolve <editorID>|refs <editorID> <npc>|avm <editorID> <npc>|donor [count]|donorseed <editorID> <npc>|donormorph <editorID> <npc>|donorvisual <editorID> <npc>|donorcopy <editorID> <npc>|targettrial <editorID> <actorRefID> <npc>|copyref <targetRefID> <sourceRefID> [0|1]");
         }
     }
 }

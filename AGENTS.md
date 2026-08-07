@@ -1,7 +1,7 @@
 # OSF Identity
 
 - Game-object work runs only from the verified native BSService queue drain.
-- Preserve exact original-at-rest values and restore tracked appearances when a package or the framework is removed.
+- Applied bases may remain mutated in-session; restore every tracked appearance byte-exactly before serialization and veto the save if exact restoration cannot be proven.
 
 ## Build and verification
 

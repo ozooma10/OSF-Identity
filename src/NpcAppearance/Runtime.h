@@ -4,12 +4,14 @@
 #include <string>
 #include <vector>
 
-// Production runtime for OSF Identity's `.npc` appearance distribution. All
-// game-object reads and writes execute from the verified native BSService
-// queue's proven drain-owner thread. Startup stays fail-closed when no valid
-// package wins or the save/load bracket cannot operate safely.
+// Production runtime for OSF Identity's `.npc` appearance distribution.
+// Validated winners are applied after load and remain in memory during play.
+// Every game-object read/write runs from the verified native BSService queue
+// drain; tracked bases are restored byte-exactly before serialization and the
+// save is vetoed whenever exact restoration cannot be proven.
 //
 //   npcapp status
+//   npcapp bracket
 //   npcapp selftest
 //   npcapp scan [packsRoot]
 //   npcapp inspect <preset.npc>
@@ -17,19 +19,11 @@
 //   npcapp refs <editorID> <preset.npc>
 //   npcapp donor [count]
 //   npcapp targettrial <editorID> <actorRefID> <preset.npc>
-//   npcapp targethold <editorID> <actorRefID> <preset.npc>
-//   npcapp targetlatch <editorID> <actorRefID> <preset.npc>
-//   npcapp targetsnapshot <editorID> <actorRefID> <preset.npc>
-//   npcapp targetrestore
-//   npcapp event <status|on|off>
-//   npcapp scene <status|on|off|dispatch <on|off>|auto <on|off>|persistent <on [actorRefID]|off>>
 //   npcapp copyref <targetRefID> <sourceRefID> [sourceIsPlayer=0|1]
 //
-// `copyref` is the narrow runtime proof for the vanilla Actor.CopyAppearance
-// refresh path (AddressLib ID 97401). It is byte-contract gated and snapshots
-// nonvisual base data before/after, but intentionally mutates the target base in
-// the current game session. The file importer remains fail-closed until `.npc`
-// ownership and decoding are proven.
+// `targettrial` only re-applies the bracket-tracked winning assignment and
+// issues the selected one-shot notify/refresh recipe; arbitrary or untracked
+// mutation is refused.
 namespace NpcAppearance
 {
     using LineSink = std::function<void(const std::string&)>;

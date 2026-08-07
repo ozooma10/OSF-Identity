@@ -260,6 +260,36 @@ machinery remain in place for C4; C3 only changes load/save-return rendering beh
   Verify: verify.ps1 green; grep for deleted symbols empty; a soak run behaves identically
   to M3 with no `native-main-thread`/`targethold` log lines.
 
+### C4b result — complete 2026-08-07
+
+- Deleted the permanent pump, pending-scene machine and counters, all three lifecycle
+  sinks and registration commands, Set3d suppression, TargetHold/rollback, and persistent
+  uninstall machinery as connected components. The deleted-symbol grep is empty.
+- Retained the production save/load bracket and pipeline diagnostics. `targettrial` now
+  accepts only the bracket-tracked winning assignment and calls
+  `SilentApplyPresetToBase` plus the selected one-shot `NotifyAndKick`; `npcapp bracket`
+  reports bracket and deferred-task state.
+- Across two fresh processes using the OSF Animation cooperative broker, four load returns
+  completed with `applied=1 failed=0 tracked=1 insideDrain=true`. Six save brackets covered
+  an ordinary save, named `C4bDelete` save, fast-travel autosave, quicksave,
+  loading-door autosave, and quit-to-main-menu exitsave. Every target logged
+  `restoredExact=true bracketFailed=false`; every return logged
+  `reapplied=1 failed=0 insideDrain=true`.
+- Andreja retained the complete Sarah preset after initial load, named-save reapply,
+  mid-session load, fast-travel rebuild, quicksave reapply, and an interior loading-door
+  round trip. Both processes exited cleanly. Logs contained zero CRITICAL lines and zero
+  `native-main-thread`, `targethold`, `ReferenceSet3d`, `ReferenceDetach`, or
+  `TESObjectLoaded` lifecycle lines.
+- `tools/verify.ps1` and `tools/build-release.ps1` passed. The release artifact is
+  `dist/OSF-Identity-0.1.0.zip` (468,939 bytes, SHA-256
+  `2D76AE7CCE6BE4183E98580BE173C8CF1D4EFF30DBC6F5CC064F0331EA1DB18F`);
+  deployed and source DLLs matched at SHA-256
+  `4E79551FCA5C278E2781B101D2FCCE29392BE1E24F1BE1AE8021098BB6F0C46B`.
+- The protected C2 quicksave remains 2,386,768 bytes and both 208-byte veto artifacts
+  remain untouched. The new `C4bDelete.sfs` and C4b quicksave are retained; no save was
+  deleted. The Default MO2 profile was restored to OSF Identity disabled, OSF Animation
+  enabled, and OSF RE disabled.
+
 **C5 = Milestone 5 (docs/tests)**: `docs/PLAYER_GUIDE.md:27` (a save now carries a laundered
 NPC_ changed-form holding original values) + AUTHOR_GUIDE only if user-visible behavior
 changed; `tools/verify.ps1` + `tools/build-release.ps1` green; `git diff --check` clean.
