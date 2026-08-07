@@ -24,6 +24,7 @@ target("OSF Identity")
         "src/NpcAppearance/Preset.cpp",
         "src/NpcAppearance/Resolver.cpp",
         "src/NpcAppearance/Runtime.cpp",
+        "src/NpcAppearance/SaveLoadHooks.cpp",
         "src/Util/NativeMainThreadQueue.cpp"
     )
     add_headerfiles("src/**.h")

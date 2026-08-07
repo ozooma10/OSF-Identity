@@ -3,6 +3,7 @@
 #include "NpcAppearance/Config.h"
 #include "NpcAppearance/Preset.h"
 #include "NpcAppearance/Resolver.h"
+#include "NpcAppearance/SaveLoadHooks.h"
 #include "pch.h"
 
 #include "Util/NativeMainThreadQueue.h"
@@ -130,6 +131,8 @@ namespace NpcAppearance
         // native drain. Sets/maps are guarded by g_eventMutex; counters and
         // flags are atomics.
         // ==================================================================
+        std::atomic<bool>             g_bracketOperational{ false };
+        std::atomic<bool>             g_mutationKilled{ false };
         std::mutex                    g_eventMutex;
         std::unordered_set<RE::TESFormID> g_targetBaseIDs;
         std::unordered_set<RE::TESFormID> g_loadedTargetRefs;
@@ -203,6 +206,42 @@ namespace NpcAppearance
                             TargetTrialMode a_mode, bool* a_completed = nullptr);
         [[nodiscard]] bool TargetHoldActive();
         [[nodiscard]] bool ForgetPersistentState(RE::TESFormID a_refID);
+
+        [[nodiscard]] bool MutationOperational() noexcept
+        {
+            return g_bracketOperational.load(std::memory_order_acquire) &&
+                !g_mutationKilled.load(std::memory_order_acquire) &&
+                SaveLoadHooks::Operational();
+        }
+
+        void KillMutation(const std::string_view a_reason)
+        {
+            bool expected = false;
+            if (g_mutationKilled.compare_exchange_strong(
+                    expected, true, std::memory_order_acq_rel)) {
+                REX::CRITICAL("[NpcAppearance] mutation killed for this process: {}", a_reason);
+            }
+        }
+
+        [[nodiscard]] bool RequireMutationOperational(
+            const LineSink& a_out,
+            const std::string_view a_operation)
+        {
+            if (MutationOperational()) {
+                return true;
+            }
+            if (g_bracketOperational.load(std::memory_order_acquire) &&
+                !g_mutationKilled.load(std::memory_order_acquire) &&
+                !SaveLoadHooks::Operational()) {
+                KillMutation("save/load hook provider lost ownership");
+            }
+            a_out(std::format(
+                "{}: mutation disabled bracketOperational={} mutationKilled={}; FAIL CLOSED",
+                a_operation,
+                g_bracketOperational.load(std::memory_order_relaxed),
+                g_mutationKilled.load(std::memory_order_relaxed)));
+            return false;
+        }
 
         void SuppressNextSceneSet3d(const RE::TESFormID a_refID)
         {
@@ -2260,6 +2299,9 @@ namespace NpcAppearance
         {
             const auto root = DefaultPluginDirectory();
             a_out("OSF Identity diagnostics: disabled-by-default / explicit commands only");
+            a_out(std::format("saveLoadBracketOperational={} mutationKilled={}",
+                              g_bracketOperational.load(std::memory_order_relaxed),
+                              g_mutationKilled.load(std::memory_order_relaxed)));
             a_out(std::format("pluginDirectory={}", root.string()));
             a_out(std::format("packsDirectory={}", DefaultPacksDirectory().string()));
             a_out("manifestParser=implemented (strict package schema v1, EditorID targeting, containment, deterministic conflicts)");
@@ -3019,6 +3061,9 @@ namespace NpcAppearance
 
         void RunDonor(const LineSink& a_out, const std::vector<std::string>& a_args)
         {
+            if (!RequireMutationOperational(a_out, "donor")) {
+                return;
+            }
             std::uint32_t count = 1;
             if (a_args.size() >= 3) {
                 const auto [ptr, ec] = std::from_chars(
@@ -3106,6 +3151,9 @@ namespace NpcAppearance
 
         void RunDonorSeed(const LineSink& a_out, const std::vector<std::string>& a_args)
         {
+            if (!RequireMutationOperational(a_out, "donorseed")) {
+                return;
+            }
             if (a_args.size() < 4) {
                 a_out("usage: npcapp donorseed <editorID> <preset.npc>");
                 return;
@@ -3229,6 +3277,9 @@ namespace NpcAppearance
 
         void RunDonorMorph(const LineSink& a_out, const std::vector<std::string>& a_args)
         {
+            if (!RequireMutationOperational(a_out, "donormorph")) {
+                return;
+            }
             if (a_args.size() < 4) {
                 a_out("usage: npcapp donormorph <editorID> <preset.npc>");
                 return;
@@ -3381,6 +3432,9 @@ namespace NpcAppearance
 
         void RunDonorVisual(const LineSink& a_out, const std::vector<std::string>& a_args)
         {
+            if (!RequireMutationOperational(a_out, "donorvisual")) {
+                return;
+            }
             if (a_args.size() < 4) {
                 a_out("usage: npcapp donorvisual <editorID> <preset.npc>");
                 return;
@@ -3576,6 +3630,9 @@ namespace NpcAppearance
 
         void RunDonorCopy(const LineSink& a_out, const std::vector<std::string>& a_args)
         {
+            if (!RequireMutationOperational(a_out, "donorcopy")) {
+                return;
+            }
             if (a_args.size() < 4) {
                 a_out("usage: npcapp donorcopy <editorID> <preset.npc>");
                 return;
@@ -3831,6 +3888,9 @@ namespace NpcAppearance
             const std::string_view trialLabel = persistentLatch ? "targetpersistent" :
                 ownedSnapshotLatch ? "targetsnapshot" :
                 renderLatch ? "targetlatch" : holdForVisualProof ? "targethold" : "targettrial";
+            if (!RequireMutationOperational(a_out, trialLabel)) {
+                return;
+            }
             if (a_args.size() < 5) {
                 a_out(persistentLatch ?
                           "usage: npcapp targetpersistent <editorID> <actorRefID> <preset.npc>" :
@@ -4347,6 +4407,9 @@ namespace NpcAppearance
 
         void RunCopyRef(const LineSink& a_out, const std::vector<std::string>& a_args)
         {
+            if (!RequireMutationOperational(a_out, "copyref")) {
+                return;
+            }
             if (a_args.size() < 4) {
                 a_out("usage: npcapp copyref <targetRefID> <sourceRefID> [sourceIsPlayer=0|1]");
                 return;
@@ -4418,6 +4481,19 @@ namespace NpcAppearance
             g_startupPacksPresent.store(false, std::memory_order_release);
             g_startupPersistentArmed.store(false, std::memory_order_release);
 
+            if (!MutationOperational()) {
+                if (g_bracketOperational.load(std::memory_order_acquire) &&
+                    !g_mutationKilled.load(std::memory_order_acquire) &&
+                    !SaveLoadHooks::Operational()) {
+                    KillMutation("save/load hook provider lost ownership before startup arming");
+                }
+                REX::CRITICAL(
+                    "[NpcAppearance] startup mutation disabled because save/load hooks are not operational or the process kill switch is set; bracketOperational={} mutationKilled={}",
+                    g_bracketOperational.load(std::memory_order_relaxed),
+                    g_mutationKilled.load(std::memory_order_relaxed));
+                return;
+            }
+
             const auto packsRoot = DefaultPacksDirectory();
             std::error_code ec;
             const bool packsPresent =
@@ -4460,6 +4536,29 @@ namespace NpcAppearance
 
     void Initialize()
     {
+        const SaveLoadHooks::Callbacks callbacks{
+            .onSaveGameEntry = [] {
+                REX::INFO("[NpcAppearance] C1 SAVE entry callback tid={} mode=log-only",
+                          ::GetCurrentThreadId());
+            },
+            .onSaveGameReturn = [] {
+                REX::INFO("[NpcAppearance] C1 SAVE return callback tid={} mode=log-only",
+                          ::GetCurrentThreadId());
+            },
+            .onLoadGameReturn = [] {
+                REX::INFO("[NpcAppearance] C1 LOAD return callback tid={} mode=log-only",
+                          ::GetCurrentThreadId());
+            },
+        };
+        const bool hooksInstalled = SaveLoadHooks::Install(callbacks);
+        g_bracketOperational.store(hooksInstalled, std::memory_order_release);
+        if (!hooksInstalled) {
+            KillMutation("SaveGame/LoadGame hook installation failed");
+        }
+        REX::INFO(
+            "[NpcAppearance] C1 save/load hook state operational={} mutationKilled={} callbacks=log-only",
+            g_bracketOperational.load(std::memory_order_relaxed),
+            g_mutationKilled.load(std::memory_order_relaxed));
         OnNpcAppearanceDataLoaded();
     }
 
