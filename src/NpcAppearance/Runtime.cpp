@@ -5734,16 +5734,70 @@ namespace NpcAppearance
                                             "[NpcAppearance] C2 reapply base=0x{:08X}: {}",
                                             baseID, a_text);
                                     };
-                                    reapplied = target && SilentApplyPresetToBase(
-                                        out, target, state.assignment.presetPath);
-                                    if (!reapplied && target) {
+                                    const auto actorResolution =
+                                        target ? ResolveTargetActor(target) :
+                                                 TargetActorResolution{};
+                                    const bool hasLoaded3D =
+                                        HasLoaded3D(actorResolution.actor);
+                                    const bool refreshRequired =
+                                        actorResolution.actor != nullptr && hasLoaded3D;
+                                    const auto refreshAddress =
+                                        REL::Relocation<std::uintptr_t>{
+                                            kActorAppearanceRefreshID }.address();
+                                    const bool refreshGateValid =
+                                        !refreshRequired || HasExpectedBytes(
+                                            refreshAddress,
+                                            kActorAppearanceRefreshGate);
+                                    if (!refreshGateValid) {
+                                        KillMutation(
+                                            "save-return refresh byte gate failed");
+                                        REX::CRITICAL(
+                                            "[NpcAppearance] C2 SAVE-RETURN target=0x{:08X} actorMatches={} highActors={} processListsValid={} refreshRequired=true refreshGate=false; exact original remains at rest and reapply is skipped",
+                                            state.baseID, actorResolution.matches,
+                                            actorResolution.highActors,
+                                            actorResolution.processListsValid);
+                                    }
+
+                                    const bool silentlyApplied =
+                                        refreshGateValid && target &&
+                                        SilentApplyPresetToBase(
+                                            out, target,
+                                            state.assignment.presetPath);
+                                    bool notified = false;
+                                    bool actorRefreshed = !refreshRequired;
+                                    if (silentlyApplied) {
+                                        NotifyBaseAppearanceChanged(target, 0x800);
+                                        NotifyBaseAppearanceChanged(target, 0x4000);
+                                        notified = true;
+                                        if (refreshRequired) {
+                                            SuppressNextSceneSet3d(
+                                                actorResolution.actorRefID);
+                                            reinterpret_cast<RefreshActorAppearance>(
+                                                refreshAddress)(
+                                                actorResolution.actor, false,
+                                                0x28, false);
+                                            actorRefreshed = true;
+                                        }
+                                    }
+                                    reapplied = silentlyApplied && notified &&
+                                        actorRefreshed;
+                                    REX::INFO(
+                                        "[NpcAppearance] C2 SAVE-RETURN return={} target=0x{:08X} actor=0x{:08X} actorMatches={} highActors={} processListsValid={} hasLoaded3D={} baseApplied={} notified={} refreshRequired={} actorRefreshed={} reapplied={}",
+                                        saveReturn, state.baseID,
+                                        actorResolution.actorRefID,
+                                        actorResolution.matches,
+                                        actorResolution.highActors,
+                                        actorResolution.processListsValid,
+                                        hasLoaded3D, silentlyApplied, notified,
+                                        refreshRequired, actorRefreshed, reapplied);
+                                    if (!reapplied && target && refreshGateValid) {
                                         const bool safeOriginal =
                                             RestoreAppliedBaseState(out, target, state);
                                         REX::CRITICAL(
-                                            "[NpcAppearance] C2 SAVE-RETURN target=0x{:08X} reapply failed; exact-original fallback={}",
+                                            "[NpcAppearance] C2 SAVE-RETURN target=0x{:08X} apply/refresh failed; exact-original fallback={}",
                                             state.baseID, safeOriginal);
                                         if (!safeOriginal) {
-                                            KillMutation("save-return reapply and exact-original fallback failed");
+                                            KillMutation("save-return apply/refresh and exact-original fallback failed");
                                         }
                                     }
                                 } catch (const std::exception& e) {
@@ -6136,13 +6190,17 @@ namespace NpcAppearance
                         return true;
                     }
                     const auto actorResolution = ResolveTargetActor(target);
-                    if (!actorResolution.actor) {
+                    const bool hasLoaded3D =
+                        HasLoaded3D(actorResolution.actor);
+                    if (!actorResolution.actor || !hasLoaded3D) {
                         if (attempt == 1) {
                             REX::INFO(
-                                "[NpcAppearance] C2 LOAD-RETURN return={} generation={} readiness target=0x{:08X} actorMatches=0 highActors={} processListsValid={}; proceeding with base-only apply and no actor refresh tid={} insideDrain={}",
+                                "[NpcAppearance] C2 LOAD-RETURN return={} generation={} readiness target=0x{:08X} actorMatches={} highActors={} processListsValid={} hasLoaded3D={}; proceeding with apply+notify and no actor kick tid={} insideDrain={}",
                                 loadReturn, loadGeneration, expectedBaseID,
+                                actorResolution.matches,
                                 actorResolution.highActors,
                                 actorResolution.processListsValid,
+                                hasLoaded3D,
                                 ::GetCurrentThreadId(),
                                 diagnostics.insideDrain);
                         }
@@ -6190,8 +6248,10 @@ namespace NpcAppearance
                         const auto refreshAddress =
                             REL::Relocation<std::uintptr_t>{
                                 kActorAppearanceRefreshID }.address();
+                        const bool hasLoaded3D =
+                            HasLoaded3D(actorResolution.actor);
                         const bool refreshRequired =
-                            actorResolution.actor != nullptr;
+                            actorResolution.actor != nullptr && hasLoaded3D;
                         if (refreshRequired &&
                             !HasExpectedBytes(
                                 refreshAddress, kActorAppearanceRefreshGate)) {
@@ -6217,11 +6277,22 @@ namespace NpcAppearance
                         };
                         const bool silentlyApplied = SilentApplyPresetToBase(
                             out, target, assignment.presetPath);
-                        const bool actorRefreshed = !refreshRequired ||
-                            (silentlyApplied && NotifyAndKick(
-                                target, actorResolution.actor,
-                                actorResolution.actorRefID));
-                        applied = silentlyApplied && actorRefreshed;
+                        bool notified = false;
+                        bool actorRefreshed = !refreshRequired;
+                        if (silentlyApplied) {
+                            NotifyBaseAppearanceChanged(target, 0x800);
+                            NotifyBaseAppearanceChanged(target, 0x4000);
+                            notified = true;
+                            if (refreshRequired) {
+                                SuppressNextSceneSet3d(
+                                    actorResolution.actorRefID);
+                                reinterpret_cast<RefreshActorAppearance>(
+                                    refreshAddress)(
+                                    actorResolution.actor, false, 0x28, false);
+                                actorRefreshed = true;
+                            }
+                        }
+                        applied = silentlyApplied && notified && actorRefreshed;
                         if (!applied) {
                             const bool safeOriginal =
                                 RestoreAppliedBaseState(out, target, state);
@@ -6237,12 +6308,12 @@ namespace NpcAppearance
                                 expectedBaseID, state);
                         }
                         REX::INFO(
-                            "[NpcAppearance] C2 LOAD-RETURN return={} target=0x{:08X} actor=0x{:08X} actorMatches={} highActors={} processListsValid={} hasLoaded3D={} baseApplied={} refreshRequired={} actorRefreshed={} recorded={}",
+                            "[NpcAppearance] C2 LOAD-RETURN return={} target=0x{:08X} actor=0x{:08X} actorMatches={} highActors={} processListsValid={} hasLoaded3D={} baseApplied={} notified={} refreshRequired={} actorRefreshed={} recorded={}",
                             loadReturn, expectedBaseID,
                             actorResolution.actorRefID, actorResolution.matches,
                             actorResolution.highActors,
                             actorResolution.processListsValid,
-                            HasLoaded3D(actorResolution.actor), silentlyApplied,
+                            hasLoaded3D, silentlyApplied, notified,
                             refreshRequired, actorRefreshed, applied);
                     } catch (const std::exception& e) {
                         REX::CRITICAL(

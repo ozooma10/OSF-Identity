@@ -191,6 +191,46 @@ autosave, named save, one mid-session load, quit. Every SAVE-ENTRY `restoredExac
 zero CRITICAL, fresh-process verdict spot-checked on two session saves (one autosave + the
 exitsave).
 
+### C3 result — complete 2026-08-07
+
+The OSF RE `npcapp savebake loadprobe` experiment selected the minimal recipe mechanically:
+
+- With Andreja absent at LoadGame return (`actorMatches=0`, `hasLoaded3D=false`), silent
+  base apply plus both notifications rendered the Sarah preset on her first later 3D build.
+  No kick was issued.
+- With Andreja present at LoadGame return (`actorMatches=1`, `hasLoaded3D=true`), silent
+  apply plus both notifications and one immediate 101307 kick rendered the complete preset.
+- A loading-door interior round trip and a fast-travel detach/reattach round trip retained
+  the complete preset without another kick. Therefore C3 adds no first-Set3d or every-Set3d
+  sink.
+- Save-return initially exposed one additional rendering requirement: silent reapply alone
+  left the loaded actor with the preset face but a missing hair head part after a named save.
+  Reloading the clean save exercised the loaded-actor load kick and restored the hair. The
+  save-return path now uses the same recipe as load-return: always notify after successful
+  base apply, and issue exactly one immediate kick only when the matching actor already has
+  loaded 3D. The next named save retained the preset hair.
+
+Production soak with the repaired build:
+
+- Seven save brackets completed: two initial autosaves, one named save, one fast-travel
+  autosave, one quicksave, quit-to-main-menu exitsave, and quit-to-desktop exitsave.
+- All seven targets logged `restoredExact=true bracketFailed=false`; all seven returns
+  logged `reapplied=1 failed=0 insideDrain=true`; three load returns logged
+  `applied=1 failed=0 tracked=1 insideDrain=true`; zero CRITICAL lines.
+- Visual checks remained `preset hair` after named-save reapply, quicksave reapply,
+  fast-travel rebuild, and mid-session load.
+- A fresh process with both hook plugins disabled rendered original Andreja from the named
+  save, the new quicksave, the fast-travel autosave, and the quit-to-desktop exitsave.
+- The protected C2 quicksave remained 2,386,768 bytes and the 208-byte veto placeholder
+  remained untouched. No save was deleted.
+
+Required verification passed after the final change: `tools/verify.ps1` and
+`tools/build-release.ps1`. The release artifact was
+`dist/OSF-Identity-0.1.0.zip` (500,117 bytes, SHA-256
+`D8BF141D37D483ED61C60761E50DE289328C5A10331FA7366801717389473737`). The marker gate,
+old scene lifecycle, permanent frame pump, target-hold/rollback machinery, and suppression
+machinery remain in place for C4; C3 only changes load/save-return rendering behavior.
+
 **C4 = Milestone 4 (swap + delete)**, two commits:
 
 - **C4a swap**: the bracket arms whenever winners exist && operational (marker gate
