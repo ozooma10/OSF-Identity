@@ -5,7 +5,6 @@
 
 #include "pch.h"
 
-#include "Util/Hooking.h"
 #include "Util/StarfieldRuntime.h"
 
 #include <Windows.h>
@@ -651,11 +650,11 @@ namespace NpcAppearance::SaveLoadHooks
 
         [[nodiscard]] bool InstallDirectProvider()
         {
-            const bool saveGate = Util::Hooking::VerifyExpectedBytes(
+            const bool saveGate = Util::VerifyExpectedBytes(
                 "[SaveLoadHooks] SaveGame 98376 full gate",
                 kID_SaveGame.address(),
                 kSaveGameGate);
-            const bool loadGate = Util::Hooking::VerifyExpectedBytes(
+            const bool loadGate = Util::VerifyExpectedBytes(
                 "[SaveLoadHooks] LoadGame 98380 full gate",
                 kID_LoadGame.address(),
                 kLoadGameGate);
@@ -666,14 +665,14 @@ namespace NpcAppearance::SaveLoadHooks
                 return false;
             }
 
-            const auto saveGateway = Util::Hooking::InstallEntryHookWithGateway<5>(
+            const auto saveGateway = Util::InstallEntryHookWithGateway<5>(
                 REL::Offset(kID_SaveGame.offset()),
                 "[SaveLoadHooks] SaveGame 98376 entry",
                 kSaveGameEntry,
                 &SaveGameThunk);
             g_saveGateway = reinterpret_cast<SaveGameFn>(saveGateway);
             if (g_saveGateway) {
-                const auto loadGateway = Util::Hooking::InstallEntryHookWithGateway<7>(
+                const auto loadGateway = Util::InstallEntryHookWithGateway<7>(
                     REL::Offset(kID_LoadGame.offset()),
                     "[SaveLoadHooks] LoadGame 98380 entry",
                     kLoadGameEntry,
