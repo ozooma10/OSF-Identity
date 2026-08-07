@@ -36,6 +36,36 @@ try {
     & python .\tools\re\npc_appearance_fixture_check.py
     if ($LASTEXITCODE -ne 0) { throw "Fixture provenance gate failed with exit code $LASTEXITCODE" }
 
+    $sourceFiles = Get-ChildItem -LiteralPath (Join-Path $repoRoot 'src') -Recurse -File |
+        Where-Object { $_.Extension -in @('.cpp', '.h') }
+
+    $deletedTargetingSymbols = @(
+        'EditorIDTarget',
+        'PluginLocalFormIDTarget',
+        'AsEditorID',
+        'AsPluginLocalFormID',
+        'kEditorIDFilenameConvention',
+        'kEditorIDFilename',
+        'target_editorid_mismatch',
+        'LookupByEditorID<RE::TESNPC>'
+    )
+    foreach ($symbol in $deletedTargetingSymbols) {
+        $match = $sourceFiles |
+            Select-String -SimpleMatch -Pattern $symbol |
+            Select-Object -First 1
+        if ($match) {
+            throw "Deleted targeting symbol '$symbol' returned at $($match.Path):$($match.LineNumber)"
+        }
+    }
+    Write-Host '[verify] EditorID targeting symbols remain absent' -ForegroundColor Green
+
+    $resolverSourcePath = Join-Path $repoRoot 'src\NpcAppearance\Resolver.cpp'
+    $resolverTargetLookup = Select-String -LiteralPath $resolverSourcePath -SimpleMatch -Pattern 'GetFormEditorID'
+    if ($resolverTargetLookup) {
+        throw "Preset NPCFormEditorID returned to target equality at ${resolverSourcePath}:$($resolverTargetLookup[0].LineNumber)"
+    }
+    Write-Host '[verify] preset NPCFormEditorID is not used for target equality' -ForegroundColor Green
+
     if (Test-Path -LiteralPath (Join-Path $repoRoot '.git')) {
         & git diff --check
         if ($LASTEXITCODE -ne 0) { throw "git diff --check failed with exit code $LASTEXITCODE" }

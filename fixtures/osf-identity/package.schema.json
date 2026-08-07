@@ -2,23 +2,12 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:osf-identity:package:v1",
   "title": "OSF Identity appearance pack manifest",
-  "description": "Optional pack manifest. The containing folder name is always the pack ID. A pack without a package.json runs at priority 0 using flat EditorID filenames; explicit assignments may instead use load-order-safe plugin-local FormIDs.",
+  "description": "Optional pack manifest. The containing folder name is always the pack ID. Without assignments, presets are discovered from <OwningPlugin>/<localFormId>.npc. Explicit assignments use the same load-order-independent plugin-local identity.",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "schemaVersion",
-    "priority",
-    "requires"
-  ],
-  "oneOf": [
-    {
-      "required": ["assignments"],
-      "not": { "required": ["presetConvention"] }
-    },
-    {
-      "required": ["presetConvention"],
-      "not": { "required": ["assignments"] }
-    }
+    "priority"
   ],
   "properties": {
     "$schema": {
@@ -34,9 +23,6 @@
     },
     "requires": {
       "$ref": "#/$defs/requirements"
-    },
-    "presetConvention": {
-      "const": "editorIdFilename"
     },
     "assignments": {
       "type": "array",
@@ -54,26 +40,11 @@
           "target": {
             "type": "object",
             "additionalProperties": false,
-            "oneOf": [
-              {
-                "required": ["editorId"],
-                "not": {
-                  "anyOf": [
-                    { "required": ["plugin"] },
-                    { "required": ["localFormId"] }
-                  ]
-                }
-              },
-              {
-                "required": ["plugin", "localFormId"],
-                "not": { "required": ["editorId"] }
-              }
+            "required": [
+              "plugin",
+              "localFormId"
             ],
             "properties": {
-              "editorId": {
-                "type": "string",
-                "pattern": "^[A-Za-z0-9_]{1,128}$"
-              },
               "plugin": {
                 "$ref": "#/$defs/plugin"
               },

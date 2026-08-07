@@ -15,10 +15,10 @@
 //   npcapp selftest
 //   npcapp scan [packsRoot]
 //   npcapp inspect <preset.npc>
-//   npcapp resolve <editorID>
-//   npcapp refs <editorID> <preset.npc>
+//   npcapp resolve <plugin:localFormID>
+//   npcapp refs <plugin:localFormID> <preset.npc>
 //   npcapp donor [count]
-//   npcapp targettrial <editorID> <actorRefID> <preset.npc>
+//   npcapp targettrial <plugin:localFormID> <actorRefID> <preset.npc>
 //   npcapp copyref <targetRefID> <sourceRefID> [sourceIsPlayer=0|1]
 //
 // `targettrial` only re-applies the bracket-tracked winning assignment and

@@ -626,22 +626,10 @@ namespace NpcAppearance
             return result;
         }
 
+        // The package's plugin/local tuple is the sole target identity.
+        // NPCFormEditorID remains producer metadata and never participates in
+        // target lookup or equality.
         bool formsOK = true;
-        const auto* runtimeTargetEditorID = a_target->GetFormEditorID();
-        if (runtimeTargetEditorID && runtimeTargetEditorID[0] != '\0') {
-            if (!EqualEditorID(a_preset.npcFormEditorID, runtimeTargetEditorID)) {
-                formsOK = false;
-                AddIssue(result, "NPCFormEditorID", a_preset.npcFormEditorID,
-                         "target_editorid_mismatch",
-                         std::format("resolved target EditorID is '{}'", runtimeTargetEditorID));
-            }
-        } else {
-            // Sarah proves that base NPCs can expose neither GetFormEditorID()
-            // nor a global EditorID lookup entry at runtime. The package's
-            // resolved target locator is authoritative in this case; preset
-            // NPCFormEditorID metadata never drives target lookup.
-        }
-
         result.race = RE::TESForm::LookupByEditorID<RE::TESRace>(
             RE::BSFixedString{ a_preset.raceFormID });
         if (!result.race) {

@@ -49,11 +49,9 @@ Documents\My Games\Starfield\SFSE\Logs\osf-identity.log
   case-insensitive ID, so both were rejected; rename one folder
 - `required pack plugin or asset missing` - that pack is disabled
 - `required preset plugin or asset missing` - only that preset is disabled; a lower-priority candidate may win
-- `EditorID not found or not TESNPC` - that compatibility target is unavailable
-  in the runtime table; the pack author should use an explicit
-  `{ plugin, localFormId }` target
 - `target plugin absent, tier index invalid, or local FormID exceeds its tier` -
-  the explicit target is malformed or its owning plugin is not loaded
+  the canonical plugin-local target is malformed or its owning plugin is not
+  loaded
 - `package_rejected_duplicate_resolved_target` - two assignments in one pack
   resolve to the same NPC base, so the pack was rejected rather than choosing
   one nondeterministically

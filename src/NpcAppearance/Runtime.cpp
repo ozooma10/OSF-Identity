@@ -274,18 +274,30 @@ namespace NpcAppearance
             const std::string_view a_text)
         {
             const auto separator = a_text.rfind(':');
-            if (separator == std::string_view::npos) {
-                return Target{ std::string{ a_text } };
-            }
-            if (separator == 0 || separator + 1 >= a_text.size()) {
+            if (separator == std::string_view::npos || separator == 0 ||
+                separator + 1 >= a_text.size()) {
                 return std::nullopt;
             }
-            const auto localFormID = ParseFormID(a_text.substr(separator + 1));
+            const std::string plugin{ a_text.substr(0, separator) };
+            const auto extension = std::filesystem::path{ plugin }.extension().string();
+            if (plugin.size() <= 4 || plugin.size() > 260 || plugin.contains('/') ||
+                plugin.contains('\\') || plugin.contains(':') ||
+                (::_stricmp(extension.c_str(), ".esm") != 0 &&
+                 ::_stricmp(extension.c_str(), ".esp") != 0 &&
+                 ::_stricmp(extension.c_str(), ".esl") != 0)) {
+                return std::nullopt;
+            }
+            const auto localText = a_text.substr(separator + 1);
+            if (localText.size() > 8 || localText.starts_with("0x") ||
+                localText.starts_with("0X")) {
+                return std::nullopt;
+            }
+            const auto localFormID = ParseFormID(localText);
             if (!localFormID || *localFormID > 0x00FFFFFF) {
                 return std::nullopt;
             }
-            return Target{ PluginLocalFormIDTarget{
-                std::string{ a_text.substr(0, separator) }, *localFormID } };
+            return Target{
+                plugin, *localFormID };
         }
 
         [[nodiscard]] std::filesystem::path GetThisDllDirectory()
@@ -1508,8 +1520,7 @@ namespace NpcAppearance
 
         // ==================================================================
         // Target resolution
-        // EditorID compatibility or owning-plugin + local FormID -> eligible
-        // unique HumanRace TESNPC.
+        // Owning-plugin + local FormID -> eligible unique HumanRace TESNPC.
         // ==================================================================
         struct LoadedPlugin
         {
@@ -1553,7 +1564,7 @@ namespace NpcAppearance
         }
 
         [[nodiscard]] std::optional<RE::TESFormID> ResolveRuntimeFormID(
-            const PluginLocalFormIDTarget& a_target)
+            const Target& a_target)
         {
             const auto plugin = FindLoadedPlugin(a_target.plugin);
             if (!plugin) {
@@ -1565,32 +1576,17 @@ namespace NpcAppearance
 
         [[nodiscard]] RE::TESNPC* ResolveEligibleTarget(const LineSink& a_out, const Target& a_target)
         {
-            RE::TESNPC* npc = nullptr;
-            if (const auto* editorID = a_target.AsEditorID()) {
-                npc = RE::TESForm::LookupByEditorID<RE::TESNPC>(
-                    RE::BSFixedString{ editorID->editorID.c_str() });
-                if (!npc) {
-                    a_out(std::format("resolve {}: EditorID not found or not TESNPC",
-                                      a_target.CanonicalKey()));
-                    return nullptr;
-                }
-            } else if (const auto* pluginLocal = a_target.AsPluginLocalFormID()) {
-                const auto runtimeFormID = ResolveRuntimeFormID(*pluginLocal);
-                if (!runtimeFormID) {
-                    a_out(std::format(
-                        "resolve {}: target plugin absent, tier index invalid, or local FormID exceeds its tier",
-                        a_target.CanonicalKey()));
-                    return nullptr;
-                }
-                npc = RE::TESForm::LookupByID<RE::TESNPC>(*runtimeFormID);
-                if (!npc) {
-                    a_out(std::format("resolve {} -> 0x{:08X}: not found or not TESNPC",
-                                      a_target.CanonicalKey(), *runtimeFormID));
-                    return nullptr;
-                }
+            const auto runtimeFormID = ResolveRuntimeFormID(a_target);
+            if (!runtimeFormID) {
+                a_out(std::format(
+                    "resolve {}: target plugin absent, tier index invalid, or local FormID exceeds its tier",
+                    a_target.CanonicalKey()));
+                return nullptr;
             }
+            auto* npc = RE::TESForm::LookupByID<RE::TESNPC>(*runtimeFormID);
             if (!npc) {
-                a_out("resolve: invalid target locator; no lookup attempted");
+                a_out(std::format("resolve {} -> 0x{:08X}: not found or not TESNPC",
+                                  a_target.CanonicalKey(), *runtimeFormID));
                 return nullptr;
             }
             if (!npc->IsUnique()) {
@@ -1609,6 +1605,18 @@ namespace NpcAppearance
                               a_target.CanonicalKey(), npc->GetFormID(), SafeText(npc->GetFormEditorID()),
                               static_cast<void*>(npc)));
             return npc;
+        }
+
+        [[nodiscard]] RE::TESNPC* ResolveTargetArgument(
+            const LineSink& a_out,
+            const std::string_view a_text)
+        {
+            const auto target = ParseTargetToken(a_text);
+            if (!target) {
+                a_out("invalid target; expected <plugin:localFormID> with a 1-8 digit plugin-local hexadecimal FormID and no 0x prefix");
+                return nullptr;
+            }
+            return ResolveEligibleTarget(a_out, *target);
         }
 
         // ==================================================================
@@ -1649,7 +1657,7 @@ namespace NpcAppearance
                 g_bracketLoadGeneration.load(std::memory_order_relaxed)));
             a_out(std::format("pluginDirectory={}", root.string()));
             a_out(std::format("packsDirectory={}", DefaultPacksDirectory().string()));
-            a_out("manifestParser=implemented (strict package schema v1, EditorID or plugin/local targeting, containment, deterministic conflicts)");
+            a_out("manifestParser=implemented (strict package schema v1, canonical plugin/local targeting, containment, deterministic conflicts)");
             a_out("npcDecoder=implemented (strict CK 1.16.244 JSON contract; golden matrix and adversarial corpus pass)");
             a_out("dependencyResolver=RUNTIME-PROVEN read-only on Sarah (forms/headparts + facial shape/bone + FaceDB color/teeth/AVM catalogs)");
             a_out("runtimeNpcImporter=NO SAFE SEAM FOUND (SavePCFace is a parse-only console wrapper)");
@@ -1675,21 +1683,21 @@ namespace NpcAppearance
             };
 
             const auto valid = ParsePackageManifest(
-                R"({"schemaVersion":1,"priority":100,"requires":{"plugins":["Starfield.esm"],"assets":[]},"assignments":[{"target":{"editorId":"Companion_SarahMorgan"},"preset":"Sarah.npc","scope":"faceAndBody"}]})",
+                R"({"schemaVersion":1,"priority":100,"requires":{"plugins":[],"assets":[]},"assignments":[{"target":{"plugin":"Starfield.esm","localFormId":"5983"},"preset":"Sarah.npc","scope":"faceAndBody"}]})",
                 manifestPath, false);
             check(valid.manifest && valid.manifest->assignments.size() == 1 && valid.issues.empty(),
                   "valid production manifest");
             check(valid.manifest && valid.manifest->assignments[0].target.CanonicalKey() ==
-                                        "companion_sarahmorgan",
-                  "canonical case-insensitive EditorID target");
+                                        "starfield.esm:00005983",
+                  "canonical plugin-local target");
 
             const auto traversal = ParsePackageManifest(
-                R"({"schemaVersion":1,"priority":0,"requires":{"plugins":[],"assets":[]},"assignments":[{"target":{"editorId":"Companion_SarahMorgan"},"preset":"../escape.npc","scope":"faceAndBody"}]})",
+                R"({"schemaVersion":1,"priority":0,"requires":{"plugins":[],"assets":[]},"assignments":[{"target":{"plugin":"Starfield.esm","localFormId":"5983"},"preset":"../escape.npc","scope":"faceAndBody"}]})",
                 manifestPath, false);
             check(traversal.HasFatalError(), "parent traversal rejected");
 
             const auto unsupportedScope = ParsePackageManifest(
-                R"({"schemaVersion":1,"priority":0,"requires":{"plugins":[],"assets":[]},"assignments":[{"target":{"editorId":"Companion_SarahMorgan"},"preset":"Sarah.npc","scope":"faceOnly"}]})",
+                R"({"schemaVersion":1,"priority":0,"requires":{"plugins":[],"assets":[]},"assignments":[{"target":{"plugin":"Starfield.esm","localFormId":"5983"},"preset":"Sarah.npc","scope":"faceOnly"}]})",
                 manifestPath, false);
             check(unsupportedScope.HasFatalError(), "unproven scope rejected");
 
@@ -1985,10 +1993,10 @@ namespace NpcAppearance
         void RunRefs(const LineSink& a_out, const std::vector<std::string>& a_args)
         {
             if (a_args.size() < 4) {
-                a_out("usage: npcapp refs <editorID> <preset.npc>");
+                a_out("usage: npcapp refs <plugin:localFormID> <preset.npc>");
                 return;
             }
-            auto* target = ResolveEligibleTarget(a_out, Target{ a_args[2] });
+            auto* target = ResolveTargetArgument(a_out, a_args[2]);
             if (!target) {
                 return;
             }
@@ -2011,10 +2019,10 @@ namespace NpcAppearance
         void RunAvmInspect(const LineSink& a_out, const std::vector<std::string>& a_args)
         {
             if (a_args.size() < 4) {
-                a_out("usage: npcapp avm <editorID> <preset.npc>");
+                a_out("usage: npcapp avm <plugin:localFormID> <preset.npc>");
                 return;
             }
-            auto* target = ResolveEligibleTarget(a_out, Target{ a_args[2] });
+            auto* target = ResolveTargetArgument(a_out, a_args[2]);
             if (!target) {
                 return;
             }
@@ -2063,7 +2071,7 @@ namespace NpcAppearance
         void RunResolve(const LineSink& a_out, const std::vector<std::string>& a_args)
         {
             if (a_args.size() < 3) {
-                a_out("usage: npcapp resolve <editorID|plugin:localFormID>");
+                a_out("usage: npcapp resolve <plugin:localFormID>");
                 return;
             }
             const auto target = ParseTargetToken(a_args[2]);
@@ -2170,10 +2178,10 @@ namespace NpcAppearance
                 return;
             }
             if (a_args.size() < 4) {
-                a_out("usage: npcapp donorseed <editorID> <preset.npc>");
+                a_out("usage: npcapp donorseed <plugin:localFormID> <preset.npc>");
                 return;
             }
-            auto* target = ResolveEligibleTarget(a_out, Target{ a_args[2] });
+            auto* target = ResolveTargetArgument(a_out, a_args[2]);
             if (!target) {
                 return;
             }
@@ -2296,10 +2304,10 @@ namespace NpcAppearance
                 return;
             }
             if (a_args.size() < 4) {
-                a_out("usage: npcapp donormorph <editorID> <preset.npc>");
+                a_out("usage: npcapp donormorph <plugin:localFormID> <preset.npc>");
                 return;
             }
-            auto* target = ResolveEligibleTarget(a_out, Target{ a_args[2] });
+            auto* target = ResolveTargetArgument(a_out, a_args[2]);
             if (!target) {
                 return;
             }
@@ -2451,10 +2459,10 @@ namespace NpcAppearance
                 return;
             }
             if (a_args.size() < 4) {
-                a_out("usage: npcapp donorvisual <editorID> <preset.npc>");
+                a_out("usage: npcapp donorvisual <plugin:localFormID> <preset.npc>");
                 return;
             }
-            auto* target = ResolveEligibleTarget(a_out, Target{ a_args[2] });
+            auto* target = ResolveTargetArgument(a_out, a_args[2]);
             if (!target) {
                 return;
             }
@@ -2649,10 +2657,10 @@ namespace NpcAppearance
                 return;
             }
             if (a_args.size() < 4) {
-                a_out("usage: npcapp donorcopy <editorID> <preset.npc>");
+                a_out("usage: npcapp donorcopy <plugin:localFormID> <preset.npc>");
                 return;
             }
-            auto* target = ResolveEligibleTarget(a_out, Target{ a_args[2] });
+            auto* target = ResolveTargetArgument(a_out, a_args[2]);
             if (!target) {
                 return;
             }
@@ -3406,7 +3414,7 @@ namespace NpcAppearance
                 return;
             }
             if (a_args.size() < 5) {
-                a_out("usage: npcapp targettrial <editorID|plugin:localFormID> <actorRefID> <preset.npc>");
+                a_out("usage: npcapp targettrial <plugin:localFormID> <actorRefID> <preset.npc>");
                 return;
             }
 
@@ -5014,7 +5022,7 @@ namespace NpcAppearance
         } else if (a_args[1] == "copyref") {
             RunCopyRef(a_out, a_args);
         } else {
-            a_out("npcapp: status|bracket|selftest|scan [packsRoot]|inspect <npc>|resolve <editorID>|refs <editorID> <npc>|avm <editorID> <npc>|donor [count]|donorseed <editorID> <npc>|donormorph <editorID> <npc>|donorvisual <editorID> <npc>|donorcopy <editorID> <npc>|targettrial <editorID> <actorRefID> <npc>|copyref <targetRefID> <sourceRefID> [0|1]");
+            a_out("npcapp: status|bracket|selftest|scan [packsRoot]|inspect <npc>|resolve <plugin:localFormID>|refs <plugin:localFormID> <npc>|avm <plugin:localFormID> <npc>|donor [count]|donorseed <plugin:localFormID> <npc>|donormorph <plugin:localFormID> <npc>|donorvisual <plugin:localFormID> <npc>|donorcopy <plugin:localFormID> <npc>|targettrial <plugin:localFormID> <actorRefID> <npc>|copyref <targetRefID> <sourceRefID> [0|1]");
         }
     }
 }

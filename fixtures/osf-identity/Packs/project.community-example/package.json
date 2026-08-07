@@ -1,10 +1,5 @@
 {
   "$schema": "../../package.schema.json",
   "schemaVersion": 1,
-  "priority": 100,
-  "requires": {
-    "plugins": [],
-    "assets": []
-  },
-  "presetConvention": "editorIdFilename"
+  "priority": 100
 }

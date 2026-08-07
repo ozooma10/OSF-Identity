@@ -1,5 +1,5 @@
 {
-  "$schema": "../../preset-metadata.schema.json",
+  "$schema": "../../../preset-metadata.schema.json",
   "schemaVersion": 1,
   "requires": {
     "plugins": [

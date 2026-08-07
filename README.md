@@ -16,20 +16,21 @@ Install the release zip with a mod manager.
 Then install appearance packs as separate mods:
 ```text
 Data/SFSE/Plugins/OSFIdentity/Packs/   # shared root (packs must be in this folder to be found)
-  Sarah_Reimagined/       # arbitrary folder name; this is the pack ID
-    package.json          # explicit load-order-safe target
-    Sarah.npc
-    Sarah.json            # optional per-preset requirements
+  Sarah_Reimagined/                 # arbitrary folder name; this is the pack ID
+    package.json                    # optional priority/shared requirements
+    Starfield.esm/                  # plugin that owns the target NPC
+      00005983.npc                  # plugin-local FormID
+      00005983.json                 # optional per-preset requirements
 ```
 
 Removing a pack promotes the next valid one, or restores the original appearance. See the [Player Guide](docs/PLAYER_GUIDE.md).
 
 ## How packs are chosen
 
-For vanilla NPCs, explicit assignments using `{ plugin, localFormId }` are the
-recommended stable target because some NPC EditorIDs are absent from the
-runtime lookup table. Existing flat `<EditorID>.npc` packs remain supported;
-without a manifest they run at the default `priority` of `0`.
+Every target is identified by its owning plugin plus plugin-local FormID. Packs
+without `assignments` discover presets from
+`<OwningPlugin>/<localFormId>.npc`; explicit assignments use the same target
+tuple. Runtime/load-order FormIDs and EditorID targets are not accepted.
 
 When several valid packs resolve to the same NPC base, the highest `priority`
 wins; ties go to the case-insensitively alphabetical pack folder name.

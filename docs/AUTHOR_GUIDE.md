@@ -3,16 +3,16 @@
 ## Quickstart
 
 An appearance pack replaces the face and body of unique human NPCs with
-presets you export from Creation Kit or CharGenMenu. For vanilla NPCs, use an
-explicit plugin-local FormID target so the pack does not depend on runtime
-EditorID availability:
+presets you export from Creation Kit or CharGenMenu. Every target uses the
+plugin that owns the NPC plus its plugin-local FormID:
 
 ```text
 Data/SFSE/Plugins/OSFIdentity/Packs/
   Sarah Reimagined/               # folder name is the pack ID
-    package.json                  # maps Starfield.esm:00005983 to Sarah.npc
-    Sarah.npc
-    Sarah.json                    # optional per-preset dependencies
+    package.json                  # optional priority/shared requirements
+    Starfield.esm/
+      00005983.npc
+      00005983.json               # optional per-preset dependencies
 ```
 
 To build one:
@@ -20,9 +20,10 @@ To build one:
 1. **Export a preset** with Creation Kit `1.16.244` or the verified
    CharGenMenu/SFEE `1.16.244` build, and confirm the producer reloads the
    exact export. Never hand-edit the `.npc`.
-2. **Identify the target.** In `package.json`, use the plugin that owns the
-   base NPC plus its plugin-local hexadecimal FormID. Zero out the full-plugin
-   load-order byte; never use a load-order-prefixed runtime FormID.
+2. **Identify the target.** Use the plugin that owns the base NPC plus its
+   plugin-local hexadecimal FormID. Put the preset at
+   `<OwningPlugin>/<localFormId>.npc`, or use the same tuple in an explicit
+   assignment. Never use a load-order-prefixed runtime FormID.
 3. **Name the pack folder.** Its name is the pack ID, exactly as written, and
    can be any folder name accepted by the filesystem. Spaces, capitalization,
    and ordinary punctuation are supported. IDs are compared case-insensitively
@@ -42,19 +43,20 @@ To build one:
 ## When you need a manifest
 
 A manifest-less pack runs at priority `0` with no pack-wide requirements and
-uses flat EditorID filenames. That compatibility path works only when the
-target EditorID is present in Starfield's runtime lookup table. Add
-`package.json` for stable plugin-local targeting, a different priority,
-pack-wide `requires`, or explicit assignments:
+discovers `<OwningPlugin>/<localFormId>.npc` files. Add `package.json` only for
+a different priority, pack-wide `requires`, or explicit assignments:
 
 ```json
 {
   "schemaVersion": 1,
-  "priority": 100,
-  "requires": { "plugins": [], "assets": [] },
-  "presetConvention": "editorIdFilename"
+  "priority": 100
 }
 ```
+
+`requires` is optional. If omitted, the pack has no declared package-wide
+requirements; runtime preset-reference validation still runs before conflict
+selection. Declare it only when the pack has plugin or loose-asset
+preconditions that cannot be inferred reliably from the preset.
 
 The folder name remains the pack ID even when a manifest is present. Renaming
 the folder intentionally changes the ID.
@@ -65,11 +67,11 @@ the folder intentionally changes the ID.
   packs target the same NPC, the highest priority wins; ties go to ascending
   case-insensitive pack folder name. Mod-manager order is irrelevant. The
   `100` used in these examples outranks every manifest-less pack.
-- `requires` - plugins and loose Data-relative assets every preset needs. A
+- `requires` - optional plugins and loose Data-relative assets every preset needs. A
   missing pack-wide requirement disables the whole pack. An explicit
   plugin-local target automatically adds its owning plugin to that assignment.
-- Exactly one of `presetConvention: "editorIdFilename"` or
-  `assignments`.
+- If `assignments` is present, only those mappings are used. If it is absent,
+  the plugin-folder convention is scanned.
 
 Two folder names that resolve to the same case-insensitive pack ID are both
 rejected with `duplicate_package_id`.
@@ -81,8 +83,8 @@ traversal, and absolute preset paths.
 
 ## Per-preset dependencies
 
-If a single preset needs optional mods, add `<EditorID>.json` beside its
-matching `<EditorID>.npc` file:
+If a single preset needs optional mods, add `<localFormId>.json` beside its
+matching `<localFormId>.npc` file inside the owning-plugin directory:
 
 ```json
 {
@@ -94,21 +96,20 @@ matching `<EditorID>.npc` file:
 }
 ```
 
-Sidecar and manifest requirements are additive. A missing or malformed sidecar
-disables only its preset; the rest of the pack and lower-priority candidates
-still compete. List every plugin needed to resolve non-vanilla headparts and
-every loose asset that needs an availability check.
+Sidecar and manifest requirements are additive. `requires` is optional here too;
+if omitted, the sidecar adds no requirements. A malformed sidecar disables only
+its preset; the rest of the pack and lower-priority candidates still compete.
+List every plugin needed to resolve non-vanilla headparts and every loose asset
+that needs an availability check.
 
 ## Explicit assignments
 
-Instead of `presetConvention`, packs may map targets to presets directly, with
-per-assignment `requires`. This is the recommended form for vanilla NPCs:
+Packs may map targets to presets directly, with per-assignment `requires`:
 
 ```json
 {
   "schemaVersion": 1,
   "priority": 100,
-  "requires": { "plugins": [], "assets": [] },
   "assignments": [
     {
       "target": { "plugin": "Starfield.esm", "localFormId": "00005983" },
@@ -120,10 +121,10 @@ per-assignment `requires`. This is the recommended form for vanilla NPCs:
 }
 ```
 
-For compatibility with existing packs, an explicit assignment may instead use
-`"target": { "editorId": "Companion_SarahMorgan" }`. A target must contain
-exactly one locator. EditorID targeting is runtime-dependent and should be
-verified for every NPC before publishing.
+The target object must contain exactly `plugin` and `localFormId`.
+`localFormId` accepts one to eight hexadecimal digits without `0x`, and its
+numeric value must not exceed `00FFFFFF`. Equivalent spellings such as `5983`
+and `00005983` identify the same target and therefore conflict.
 
 ## Limits and rules
 
@@ -134,9 +135,11 @@ verified for every NPC before publishing.
   `NPCFormEditorID` and quantized tint encoding are part of its verified
   contract; renaming arbitrary JSON to `.npc` does not make it compatible.
 - Plugin-local targets support full, medium, and small plugins and are resolved
-  against the current load order. EditorID matching remains case-insensitive.
-- Conflicts are decided after resolution by the actual base FormID, so an
-  EditorID target and plugin-local target for the same NPC still compete.
+  against the current load order. The owning plugin is always an implicit
+  dependency, and the local ID must fit that plugin's resolved tier.
+- Conflicts are decided after resolution by the actual base FormID. Duplicate
+  spellings of one plugin-local tuple are rejected deterministically before
+  mutation.
 - Do not bundle the OSF Identity DLL in a pack — keeping framework, story
   mod, and appearance pack separate stops optional mods from becoming
   story-mod dependencies.

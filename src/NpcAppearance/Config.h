@@ -6,8 +6,6 @@
 #include <optional>
 #include <string>
 #include <string_view>
-#include <utility>
-#include <variant>
 #include <vector>
 
 namespace NpcAppearance
@@ -19,46 +17,11 @@ namespace NpcAppearance
     inline constexpr std::uintmax_t kMaxPresetBytes = 32 * 1024 * 1024;
     inline constexpr std::int32_t kMinPriority = -1'000'000;
     inline constexpr std::int32_t kMaxPriority = 1'000'000;
-    inline constexpr std::string_view kEditorIDFilenameConvention =
-        "editorIdFilename";
-
-    struct EditorIDTarget
-    {
-        std::string editorID;
-    };
-
-    struct PluginLocalFormIDTarget
-    {
-        std::string plugin;
-        std::uint32_t localFormID{ 0 };
-    };
-
-    using TargetLocator = std::variant<EditorIDTarget, PluginLocalFormIDTarget>;
 
     struct Target
     {
-        TargetLocator locator{ EditorIDTarget{} };
-
-        Target() = default;
-        explicit Target(std::string a_editorID) :
-            locator(EditorIDTarget{ std::move(a_editorID) })
-        {}
-        explicit Target(EditorIDTarget a_target) :
-            locator(std::move(a_target))
-        {}
-        explicit Target(PluginLocalFormIDTarget a_target) :
-            locator(std::move(a_target))
-        {}
-
-        [[nodiscard]] const EditorIDTarget* AsEditorID() const noexcept
-        {
-            return std::get_if<EditorIDTarget>(&locator);
-        }
-
-        [[nodiscard]] const PluginLocalFormIDTarget* AsPluginLocalFormID() const noexcept
-        {
-            return std::get_if<PluginLocalFormIDTarget>(&locator);
-        }
+        std::string plugin;
+        std::uint32_t localFormID{ 0 };
 
         [[nodiscard]] std::string CanonicalKey() const;
     };
@@ -101,7 +64,7 @@ namespace NpcAppearance
     enum class PackageFormat
     {
         kExplicitAssignments,
-        kEditorIDFilename
+        kPluginFolderLocalFormID
     };
 
     struct PackageManifest

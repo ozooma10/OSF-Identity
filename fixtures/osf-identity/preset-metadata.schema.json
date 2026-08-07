@@ -2,12 +2,11 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:osf-identity:preset-metadata:v1",
   "title": "OSF Identity preset dependency metadata",
-  "description": "Optional <EditorID>.json sidecar next to <EditorID>.npc. Present or absent, it governs only its own preset; a malformed sidecar disables that preset alone.",
+  "description": "Optional <localFormId>.json sidecar next to <localFormId>.npc inside an owning-plugin directory. Omitted requires defaults to an empty set; a malformed sidecar disables that preset alone.",
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "schemaVersion",
-    "requires"
+    "schemaVersion"
   ],
   "properties": {
     "$schema": {
