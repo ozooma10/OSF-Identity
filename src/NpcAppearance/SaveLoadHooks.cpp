@@ -69,6 +69,8 @@ namespace NpcAppearance::SaveLoadHooks
         std::atomic<std::uint64_t> g_directSaveSequence{ 0 };
         std::atomic<std::uint64_t> g_directLoadSequence{ 0 };
         std::atomic<const OSFSaveLoadHookAPI*> g_activeProvider{ nullptr };
+        std::atomic<bool> g_saveVetoSupported{ false };
+        thread_local bool* g_localSaveDecision = nullptr;
         char g_providerName[kMaxListenerName]{ "<none>" };
 
         struct CapturedName
@@ -450,6 +452,30 @@ namespace NpcAppearance::SaveLoadHooks
             });
         }
 
+        [[nodiscard]] bool InvokeSaveEntryCallback() noexcept
+        {
+            if (!g_callbacks.onSaveGameEntry) {
+                return true;
+            }
+            try {
+                return g_callbacks.onSaveGameEntry();
+            } catch (const std::exception& e) {
+                try {
+                    REX::CRITICAL(
+                        "[SaveLoadHooks] SAVE entry callback threw '{}'; save vetoed at thunk boundary",
+                        e.what());
+                } catch (...) {
+                }
+            } catch (...) {
+                try {
+                    REX::CRITICAL(
+                        "[SaveLoadHooks] SAVE entry callback threw; save vetoed at thunk boundary");
+                } catch (...) {
+                }
+            }
+            return false;
+        }
+
         void OSF_SAVE_LOAD_HOOK_CALL OnBrokerEvent(
             void*,
             const OSFSaveLoadHookEventV1* a_event) noexcept
@@ -467,7 +493,16 @@ namespace NpcAppearance::SaveLoadHooks
                         "[SaveLoadHooks] SAVE entry sequence={} tid={} name='{}' provider='{}' entries={}",
                         a_event->sequence, ::GetCurrentThreadId(), name, g_providerName, entries);
                 });
-                InvokeCallback(g_callbacks.onSaveGameEntry, "SAVE entry callback");
+                const bool proceed = InvokeSaveEntryCallback();
+                if (g_localSaveDecision) {
+                    *g_localSaveDecision = proceed;
+                } else if (!proceed) {
+                    SwallowAtThunkBoundary("SAVE veto capability log", [&] {
+                        REX::CRITICAL(
+                            "[SaveLoadHooks] SAVE entry requested a veto through provider='{}', but the public broker API cannot cancel the provider gateway",
+                            g_providerName);
+                    });
+                }
                 break;
             }
             case OSF_SAVE_LOAD_HOOK_PHASE_SAVE_RETURN: {
@@ -536,9 +571,24 @@ namespace NpcAppearance::SaveLoadHooks
                 .sequence = sequence,
                 .name = name.value,
             };
+            // The local broker must positively deliver OSF Identity's entry
+            // callback before serialization is allowed to begin.
+            bool proceed = false;
+            g_localSaveDecision = &proceed;
             LocalBroker::GetSingleton().Dispatch(event);
+            g_localSaveDecision = nullptr;
 
-            const auto result = g_saveGateway(a_game, a_context, a_writer, a_name);
+            std::uint64_t result = 0;
+            if (proceed) {
+                result = g_saveGateway(a_game, a_context, a_writer, a_name);
+            } else {
+                SwallowAtThunkBoundary("SAVE veto log", [&] {
+                    REX::CRITICAL(
+                        "[SaveLoadHooks] SAVE sequence={} name='{}' vetoed before the engine gateway",
+                        sequence,
+                        name.value[0] != '\0' ? name.value : "<none>");
+                });
+            }
 
             event.phase = OSF_SAVE_LOAD_HOOK_PHASE_SAVE_RETURN;
             event.flags = OSF_SAVE_LOAD_HOOK_EVENT_RESULT_VALID;
@@ -586,6 +636,8 @@ namespace NpcAppearance::SaveLoadHooks
             }
             CopyText(g_providerName, sizeof(g_providerName), a_providerName);
             g_activeProvider.store(a_provider, std::memory_order_release);
+            g_saveVetoSupported.store(
+                a_provider == &LocalAPITable(), std::memory_order_release);
             const auto flags = a_status.flags;
             REX::INFO(
                 "[SaveLoadHooks] installed: provider='{}' mode=broker | SaveGame(98376) gate={} hook={} | LoadGame(98380) gate={} hook={} operational=true",
@@ -700,6 +752,12 @@ namespace NpcAppearance::SaveLoadHooks
         } catch (...) {
             return false;
         }
+    }
+
+    bool SupportsSaveVeto() noexcept
+    {
+        return g_saveVetoSupported.load(std::memory_order_acquire) &&
+            Operational();
     }
 
     [[nodiscard]] const OSFSaveLoadHookAPI* RequestAPI(const std::uint32_t a_requestedVersion)

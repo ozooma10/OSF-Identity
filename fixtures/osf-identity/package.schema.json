@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:osf-identity:package:v1",
   "title": "OSF Identity appearance pack manifest",
-  "description": "Optional pack manifest. The containing folder name is always the pack ID. A pack without a package.json runs at priority 0 using flat EditorID filenames; add this file only to set a priority, share requires across presets, or use explicit assignments.",
+  "description": "Optional pack manifest. The containing folder name is always the pack ID. A pack without a package.json runs at priority 0 using flat EditorID filenames; explicit assignments may instead use load-order-safe plugin-local FormIDs.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -54,13 +54,32 @@
           "target": {
             "type": "object",
             "additionalProperties": false,
-            "required": [
-              "editorId"
+            "oneOf": [
+              {
+                "required": ["editorId"],
+                "not": {
+                  "anyOf": [
+                    { "required": ["plugin"] },
+                    { "required": ["localFormId"] }
+                  ]
+                }
+              },
+              {
+                "required": ["plugin", "localFormId"],
+                "not": { "required": ["editorId"] }
+              }
             ],
             "properties": {
               "editorId": {
                 "type": "string",
                 "pattern": "^[A-Za-z0-9_]{1,128}$"
+              },
+              "plugin": {
+                "$ref": "#/$defs/plugin"
+              },
+              "localFormId": {
+                "type": "string",
+                "pattern": "^(?:[0-9A-Fa-f]{1,6}|0[0-9A-Fa-f]{6}|00[0-9A-Fa-f]{6})$"
               }
             }
           },

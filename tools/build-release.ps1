@@ -62,11 +62,8 @@ try {
     }
     Copy-Item -LiteralPath (Join-Path $repoRoot 'README.md') -Destination $docsDir
     Copy-Item -LiteralPath (Join-Path $repoRoot 'LICENSE') -Destination $docsDir
-    Copy-Item -LiteralPath (Join-Path $repoRoot 'CHANGELOG.md') -Destination $docsDir
     Copy-Item -LiteralPath (Join-Path $repoRoot 'docs\PLAYER_GUIDE.md') -Destination $docsDir
     Copy-Item -LiteralPath (Join-Path $repoRoot 'docs\AUTHOR_GUIDE.md') -Destination $docsDir
-    Copy-Item -LiteralPath (Join-Path $repoRoot 'docs\COMPATIBILITY.md') -Destination $docsDir
-
     Compress-Archive -Path (Join-Path $stageRoot '*') -DestinationPath $zipPath -CompressionLevel Optimal
     $hash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash
     $size = (Get-Item -LiteralPath $zipPath).Length

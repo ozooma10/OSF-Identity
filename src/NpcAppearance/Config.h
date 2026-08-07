@@ -6,6 +6,8 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <variant>
 #include <vector>
 
 namespace NpcAppearance
@@ -20,12 +22,62 @@ namespace NpcAppearance
     inline constexpr std::string_view kEditorIDFilenameConvention =
         "editorIdFilename";
 
-    struct Target
+    struct EditorIDTarget
     {
         std::string editorID;
+    };
+
+    struct PluginLocalFormIDTarget
+    {
+        std::string plugin;
+        std::uint32_t localFormID{ 0 };
+    };
+
+    using TargetLocator = std::variant<EditorIDTarget, PluginLocalFormIDTarget>;
+
+    struct Target
+    {
+        TargetLocator locator{ EditorIDTarget{} };
+
+        Target() = default;
+        explicit Target(std::string a_editorID) :
+            locator(EditorIDTarget{ std::move(a_editorID) })
+        {}
+        explicit Target(EditorIDTarget a_target) :
+            locator(std::move(a_target))
+        {}
+        explicit Target(PluginLocalFormIDTarget a_target) :
+            locator(std::move(a_target))
+        {}
+
+        [[nodiscard]] const EditorIDTarget* AsEditorID() const noexcept
+        {
+            return std::get_if<EditorIDTarget>(&locator);
+        }
+
+        [[nodiscard]] const PluginLocalFormIDTarget* AsPluginLocalFormID() const noexcept
+        {
+            return std::get_if<PluginLocalFormIDTarget>(&locator);
+        }
 
         [[nodiscard]] std::string CanonicalKey() const;
     };
+
+    enum class PluginTier
+    {
+        kFull,
+        kMedium,
+        kSmall
+    };
+
+    [[nodiscard]] bool IsLocalFormIDValidForTier(
+        std::uint32_t a_localFormID,
+        PluginTier a_tier) noexcept;
+
+    [[nodiscard]] std::optional<std::uint32_t> EncodeRuntimeFormID(
+        std::uint32_t a_localFormID,
+        PluginTier a_tier,
+        std::uint32_t a_index) noexcept;
 
     struct Requirements
     {
@@ -129,6 +181,19 @@ namespace NpcAppearance
         std::vector<ConflictDecision> decisions;
     };
 
+    struct ResolvedAssignment
+    {
+        std::uint32_t baseFormID{ 0 };
+        SelectedAssignment assignment;
+    };
+
+    struct ResolvedSelectionResult
+    {
+        std::vector<ResolvedAssignment> winners;
+        std::vector<ConflictDecision> decisions;
+        std::vector<std::string> rejectedPackages;
+    };
+
     [[nodiscard]] ManifestResult ParsePackageManifest(
         std::string_view a_json,
         const std::filesystem::path& a_manifestPath,
@@ -152,4 +217,7 @@ namespace NpcAppearance
 
     [[nodiscard]] SelectionResult SelectAssignments(
         const std::vector<PackageManifest>& a_packages);
+
+    [[nodiscard]] ResolvedSelectionResult SelectResolvedAssignments(
+        const std::vector<ResolvedAssignment>& a_candidates);
 }

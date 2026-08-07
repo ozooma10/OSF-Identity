@@ -52,6 +52,31 @@ namespace
             return a_issue.code == a_code;
         });
     }
+
+    const NpcAppearance::EditorIDTarget* EditorTarget(
+        const NpcAppearance::Target& a_target)
+    {
+        return a_target.AsEditorID();
+    }
+
+    const NpcAppearance::PluginLocalFormIDTarget* PluginLocalTarget(
+        const NpcAppearance::Target& a_target)
+    {
+        return a_target.AsPluginLocalFormID();
+    }
+
+    NpcAppearance::SelectedAssignment SelectedFrom(
+        const NpcAppearance::PackageManifest& a_package)
+    {
+        const auto& assignment = a_package.assignments.front();
+        return {
+            assignment.target,
+            assignment.presetPath,
+            assignment.requirements,
+            a_package.packageID,
+            a_package.priority
+        };
+    }
 }
 
 int main()
@@ -71,8 +96,47 @@ int main()
                                  "companion_sarahmorgan",
           "canonical case-insensitive EditorID target key");
     Check(valid.manifest &&
+              EditorTarget(valid.manifest->assignments[0].target) &&
+              !PluginLocalTarget(valid.manifest->assignments[0].target),
+          "EditorID target uses the typed EditorID locator");
+    Check(valid.manifest &&
               HasPlugin(valid.manifest->assignments[0].requirements, "Starfield.esm"),
           "pack plugin requirement is inherited by the assignment");
+
+    const auto pluginLocal = NA::ParsePackageManifest(
+        R"({"schemaVersion":1,"priority":25,"requires":{"plugins":["SharedAssets.esm"],"assets":[]},"assignments":[{"target":{"plugin":"Starfield.esm","localFormId":"00005983"},"preset":"Sarah.npc","scope":"faceAndBody","requires":{"plugins":["ExampleHairMod.esm"],"assets":[]}}]})",
+        root / "author.plugin-local" / "package.json", false);
+    const auto* pluginLocalValue = pluginLocal.manifest ?
+        PluginLocalTarget(pluginLocal.manifest->assignments[0].target) : nullptr;
+    Check(pluginLocal.manifest && pluginLocalValue &&
+              pluginLocalValue->plugin == "Starfield.esm" &&
+              pluginLocalValue->localFormID == 0x00005983 &&
+              pluginLocal.manifest->assignments[0].target.CanonicalKey() ==
+                  "starfield.esm:00005983",
+          "plugin-local target parses into a load-order-independent canonical key");
+    Check(pluginLocal.manifest &&
+              HasPlugin(pluginLocal.manifest->assignments[0].requirements,
+                        "SharedAssets.esm") &&
+              HasPlugin(pluginLocal.manifest->assignments[0].requirements,
+                        "ExampleHairMod.esm") &&
+              HasPlugin(pluginLocal.manifest->assignments[0].requirements,
+                        "Starfield.esm") &&
+              pluginLocal.manifest->assignments[0].requirements.plugins.size() == 3,
+          "plugin-local owning plugin is an implicit additive requirement");
+    Check(NA::IsLocalFormIDValidForTier(0x00FFFFFF, NA::PluginTier::kFull) &&
+              !NA::IsLocalFormIDValidForTier(0x01000000, NA::PluginTier::kFull) &&
+              NA::IsLocalFormIDValidForTier(0x0000FFFF, NA::PluginTier::kMedium) &&
+              !NA::IsLocalFormIDValidForTier(0x00010000, NA::PluginTier::kMedium) &&
+              NA::IsLocalFormIDValidForTier(0x00000FFF, NA::PluginTier::kSmall) &&
+              !NA::IsLocalFormIDValidForTier(0x00001000, NA::PluginTier::kSmall),
+          "full, medium, and small plugin local FormID bounds are enforced");
+    Check(NA::EncodeRuntimeFormID(0x00123456u, NA::PluginTier::kFull, 5u) ==
+                  0x05123456u &&
+              NA::EncodeRuntimeFormID(0x00001234u, NA::PluginTier::kMedium, 3u) ==
+                  0xFD031234u &&
+              NA::EncodeRuntimeFormID(0x00000234u, NA::PluginTier::kSmall, 2u) ==
+                  0xFE002234u,
+          "full, medium, and small runtime FormID encoding is deterministic");
 
     const auto explicitPerPreset = NA::ParsePackageManifest(
         R"({"schemaVersion":1,"priority":0,"requires":{"plugins":["SharedAssets.esm"],"assets":["Textures/Shared.dds"]},"assignments":[{"target":{"editorId":"Crew_ConstellationDaniel"},"preset":"Daniel.npc","scope":"faceAndBody","requires":{"plugins":["ExampleHairMod.esm"],"assets":["Meshes/Hair/Example.mesh"]}}]})",
@@ -106,8 +170,13 @@ int main()
 
     const auto checkedInExample = NA::LoadPackageManifest(
         "fixtures/osf-identity/Packs/author.sarah-example/package.json", false);
-    Check(checkedInExample.manifest && checkedInExample.manifest->packageID == "author.sarah-example",
-          "checked-in example matches runtime schema");
+    const auto* checkedInTarget = checkedInExample.manifest ?
+        PluginLocalTarget(checkedInExample.manifest->assignments[0].target) : nullptr;
+    Check(checkedInExample.manifest && checkedInTarget &&
+              checkedInExample.manifest->packageID == "author.sarah-example" &&
+              checkedInTarget->plugin == "Starfield.esm" &&
+              checkedInTarget->localFormID == 0x00005983,
+          "checked-in stable example uses plugin-local targeting");
 
     const auto missing = NA::ParsePackageManifest(
         Manifest(0, "Companion_SarahMorgan", "Missing.npc"),
@@ -138,6 +207,34 @@ int main()
         Manifest(0, "Companion Sarah/Morgan"),
         root / "author.editor" / "package.json", false);
     Check(badEditorID.HasFatalError(), "invalid EditorID rejected");
+
+    const auto mixedTargetLocators = NA::ParsePackageManifest(
+        R"({"schemaVersion":1,"priority":0,"requires":{"plugins":[],"assets":[]},"assignments":[{"target":{"editorId":"Companion_SarahMorgan","plugin":"Starfield.esm","localFormId":"00005983"},"preset":"Sarah.npc","scope":"faceAndBody"}]})",
+        root / "author.mixed-target" / "package.json", false);
+    Check(mixedTargetLocators.HasFatalError() &&
+              HasIssue(mixedTargetLocators.issues, "invalid_target_locator"),
+          "mixed EditorID and plugin-local target is rejected");
+
+    const auto partialPluginTarget = NA::ParsePackageManifest(
+        R"({"schemaVersion":1,"priority":0,"requires":{"plugins":[],"assets":[]},"assignments":[{"target":{"plugin":"Starfield.esm"},"preset":"Sarah.npc","scope":"faceAndBody"}]})",
+        root / "author.partial-target" / "package.json", false);
+    Check(partialPluginTarget.HasFatalError() &&
+              HasIssue(partialPluginTarget.issues, "invalid_target_locator"),
+          "partial plugin-local target is rejected");
+
+    const auto badTargetPlugin = NA::ParsePackageManifest(
+        R"({"schemaVersion":1,"priority":0,"requires":{"plugins":[],"assets":[]},"assignments":[{"target":{"plugin":"not-a-plugin","localFormId":"00005983"},"preset":"Sarah.npc","scope":"faceAndBody"}]})",
+        root / "author.bad-target-plugin" / "package.json", false);
+    Check(badTargetPlugin.HasFatalError() &&
+              HasIssue(badTargetPlugin.issues, "invalid_plugin"),
+          "invalid target plugin is rejected");
+
+    const auto badLocalFormID = NA::ParsePackageManifest(
+        R"({"schemaVersion":1,"priority":0,"requires":{"plugins":[],"assets":[]},"assignments":[{"target":{"plugin":"Starfield.esm","localFormId":"01000000"},"preset":"Sarah.npc","scope":"faceAndBody"}]})",
+        root / "author.bad-local-form" / "package.json", false);
+    Check(badLocalFormID.HasFatalError() &&
+              HasIssue(badLocalFormID.issues, "invalid_local_form_id"),
+          "out-of-range plugin-local FormID is rejected");
 
     const auto badPriority = NA::ParsePackageManifest(
         Manifest(NA::kMaxPriority + 1),
@@ -200,7 +297,8 @@ int main()
     const auto convention = NA::LoadPackageManifest(conventionRoot / "package.json", true);
     const auto daniel = convention.manifest ?
         std::ranges::find_if(convention.manifest->assignments, [](const auto& a_assignment) {
-            return a_assignment.target.editorID == "Crew_ConstellationDaniel";
+            const auto* target = EditorTarget(a_assignment.target);
+            return target && target->editorID == "Crew_ConstellationDaniel";
         }) : std::vector<NA::Assignment>::const_iterator{};
     Check(convention.manifest &&
               convention.manifest->format == NA::PackageFormat::kEditorIDFilename &&
@@ -223,8 +321,10 @@ int main()
           R"({"schemaVersion":1,"requires":{"plugins":[],"assets":[]}})");
     Write(isolatedRoot / "Nested" / "NestedEditorID.npc", "fixture");
     const auto isolated = NA::LoadPackageManifest(isolatedRoot / "package.json", true);
-    Check(isolated.manifest && isolated.manifest->assignments.size() == 1 &&
-              isolated.manifest->assignments[0].target.editorID == "ValidEditorID",
+    const auto* isolatedTarget = isolated.manifest &&
+            isolated.manifest->assignments.size() == 1 ?
+        EditorTarget(isolated.manifest->assignments[0].target) : nullptr;
+    Check(isolatedTarget && isolatedTarget->editorID == "ValidEditorID",
           "malformed sidecar and invalid filename disable only affected presets");
     Check(HasIssue(isolated.issues, "invalid_preset_metadata_json") &&
               HasIssue(isolated.issues, "invalid_convention_editor_id") &&
@@ -275,6 +375,43 @@ int main()
     Check(promoted.winners.size() == 1 &&
               promoted.winners[0].packageID == "author.low",
           "removing an invalid high-priority candidate promotes a valid lower candidate");
+
+    auto editorResolvedAssignment = SelectedFrom(*low.manifest);
+    auto pluginResolvedAssignment = SelectedFrom(*pluginLocal.manifest);
+    const auto resolvedAliasConflict = NA::SelectResolvedAssignments({
+        { 0x00005983, editorResolvedAssignment },
+        { 0x00005983, pluginResolvedAssignment }
+    });
+    Check(resolvedAliasConflict.winners.size() == 1 &&
+              resolvedAliasConflict.winners[0].assignment.packageID ==
+                  "author.plugin-local" &&
+              resolvedAliasConflict.decisions.size() == 2,
+          "EditorID and plugin-local locators compete by resolved base FormID");
+
+    auto samePackageEditor = SelectedFrom(*valid.manifest);
+    auto samePackagePlugin = SelectedFrom(*pluginLocal.manifest);
+    samePackagePlugin.packageID = samePackageEditor.packageID;
+    samePackagePlugin.priority = samePackageEditor.priority;
+    const auto rejectedResolvedAlias = NA::SelectResolvedAssignments({
+        { 0x00005983, samePackageEditor },
+        { 0x00005983, samePackagePlugin }
+    });
+    Check(rejectedResolvedAlias.winners.empty() &&
+              rejectedResolvedAlias.rejectedPackages.size() == 1 &&
+              rejectedResolvedAlias.decisions.size() == 2 &&
+              std::ranges::all_of(rejectedResolvedAlias.decisions, [](const auto& a_decision) {
+                  return !a_decision.winner &&
+                      a_decision.reason ==
+                          "package_rejected_duplicate_resolved_target";
+              }),
+          "same-package locators resolving to one base reject the package");
+
+    const auto resolvedFallback = NA::SelectResolvedAssignments({
+        { 0x00005983, editorResolvedAssignment }
+    });
+    Check(resolvedFallback.winners.size() == 1 &&
+              resolvedFallback.winners[0].assignment.packageID == "author.low",
+          "an invalid higher candidate omitted by validation cannot block resolved fallback");
 
     const auto discoveryRoot = root / "discovery";
     Write(discoveryRoot / "Duplicate A!" / "package.json", Manifest(1));

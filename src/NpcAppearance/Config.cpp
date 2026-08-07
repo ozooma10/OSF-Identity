@@ -3,6 +3,7 @@
 #include "NpcAppearance/Json.h"
 
 #include <algorithm>
+#include <charconv>
 #include <cwchar>
 #include <fstream>
 #include <format>
@@ -102,6 +103,24 @@ namespace NpcAppearance
                        (a_ch >= 'a' && a_ch <= 'z') ||
                        (a_ch >= '0' && a_ch <= '9') || a_ch == '_';
             });
+        }
+
+        [[nodiscard]] bool ParseLocalFormID(
+            const std::string_view a_text,
+            std::uint32_t& a_out)
+        {
+            if (a_text.empty() || a_text.size() > 8) {
+                return false;
+            }
+            std::uint32_t value = 0;
+            const auto [ptr, ec] = std::from_chars(
+                a_text.data(), a_text.data() + a_text.size(), value, 16);
+            if (ec != std::errc{} || ptr != a_text.data() + a_text.size() ||
+                value > 0x00FFFFFF) {
+                return false;
+            }
+            a_out = value;
+            return true;
         }
 
         [[nodiscard]] bool PathComponentEquals(const std::filesystem::path& a_left,
@@ -288,7 +307,8 @@ namespace NpcAppearance
             const Requirements& a_package,
             const Requirements& a_assignment,
             Requirements& a_out,
-            std::string& a_error)
+            std::string& a_error,
+            const std::string_view a_implicitPlugin = {})
         {
             std::unordered_set<std::string> plugins;
             const auto addPlugin = [&](const std::string_view a_plugin) {
@@ -307,6 +327,9 @@ namespace NpcAppearance
             }
             for (const auto& plugin : a_assignment.plugins) {
                 if (!addPlugin(plugin)) return false;
+            }
+            if (!a_implicitPlugin.empty() && !addPlugin(a_implicitPlugin)) {
+                return false;
             }
             std::unordered_set<std::string> assets;
             const auto addAsset = [&](const std::filesystem::path& a_asset) {
@@ -676,7 +699,48 @@ namespace NpcAppearance
 
     std::string Target::CanonicalKey() const
     {
-        return FoldASCII(editorID);
+        if (const auto* editorID = AsEditorID()) {
+            return FoldASCII(editorID->editorID);
+        }
+        const auto* pluginLocal = AsPluginLocalFormID();
+        return pluginLocal ?
+            std::format("{}:{:08x}", FoldASCII(pluginLocal->plugin),
+                        pluginLocal->localFormID) :
+            std::string{};
+    }
+
+    bool IsLocalFormIDValidForTier(
+        const std::uint32_t a_localFormID,
+        const PluginTier a_tier) noexcept
+    {
+        switch (a_tier) {
+        case PluginTier::kSmall: return a_localFormID <= 0x00000FFF;
+        case PluginTier::kMedium: return a_localFormID <= 0x0000FFFF;
+        case PluginTier::kFull: return a_localFormID <= 0x00FFFFFF;
+        }
+        return false;
+    }
+
+    std::optional<std::uint32_t> EncodeRuntimeFormID(
+        const std::uint32_t a_localFormID,
+        const PluginTier a_tier,
+        const std::uint32_t a_index) noexcept
+    {
+        if (!IsLocalFormIDValidForTier(a_localFormID, a_tier)) {
+            return std::nullopt;
+        }
+        switch (a_tier) {
+        case PluginTier::kSmall:
+            if (a_index > 0xFFF) return std::nullopt;
+            return 0xFE000000u | (a_index << 12) | a_localFormID;
+        case PluginTier::kMedium:
+            if (a_index > 0xFF) return std::nullopt;
+            return 0xFD000000u | (a_index << 16) | a_localFormID;
+        case PluginTier::kFull:
+            if (a_index > 0xFC) return std::nullopt;
+            return (a_index << 24) | a_localFormID;
+        }
+        return std::nullopt;
     }
 
     ManifestResult ParsePackageManifest(const std::string_view a_json,
@@ -787,22 +851,63 @@ namespace NpcAppearance
                 const auto* scope = Require(rawAssignment, "scope", JsonValue::Kind::kString,
                                             result, a_manifestPath);
                 if (!target || !preset || !scope ||
-                    !HasOnlyProperties(*target, { "editorId" },
+                    !HasOnlyProperties(*target, { "editorId", "plugin", "localFormId" },
                                        result, a_manifestPath)) {
                     return result;
                 }
-                const auto* editorID = Require(*target, "editorId", JsonValue::Kind::kString,
-                                               result, a_manifestPath);
-                if (!editorID) {
-                    return result;
-                }
-                if (!IsEditorID(editorID->string)) {
-                    AddIssue(result, a_manifestPath, editorID->offset, "invalid_editor_id",
-                             "editorId must be 1-128 ASCII letters, digits, or '_'");
-                    return result;
-                }
+
                 Assignment assignment;
-                assignment.target.editorID = editorID->string;
+                const auto* editorID = target->Find("editorId");
+                const auto* plugin = target->Find("plugin");
+                const auto* localFormID = target->Find("localFormId");
+                const bool editorIDLocator = editorID && !plugin && !localFormID;
+                const bool pluginLocalLocator = !editorID && plugin && localFormID;
+                if (!editorIDLocator && !pluginLocalLocator) {
+                    AddIssue(result, a_manifestPath, target->offset,
+                             "invalid_target_locator",
+                             "target must contain exactly one locator: editorId, or plugin plus localFormId");
+                    return result;
+                }
+                std::string implicitTargetPlugin;
+                if (editorIDLocator) {
+                    if (editorID->kind != JsonValue::Kind::kString) {
+                        AddIssue(result, a_manifestPath, editorID->offset, "wrong_type",
+                                 "property 'editorId' has the wrong type");
+                        return result;
+                    }
+                    if (!IsEditorID(editorID->string)) {
+                        AddIssue(result, a_manifestPath, editorID->offset, "invalid_editor_id",
+                                 "editorId must be 1-128 ASCII letters, digits, or '_'");
+                        return result;
+                    }
+                    assignment.target = Target{ EditorIDTarget{ editorID->string } };
+                } else {
+                    if (plugin->kind != JsonValue::Kind::kString ||
+                        localFormID->kind != JsonValue::Kind::kString) {
+                        AddIssue(result, a_manifestPath,
+                                 plugin->kind != JsonValue::Kind::kString ? plugin->offset : localFormID->offset,
+                                 "wrong_type",
+                                 plugin->kind != JsonValue::Kind::kString ?
+                                     "property 'plugin' has the wrong type" :
+                                     "property 'localFormId' has the wrong type");
+                        return result;
+                    }
+                    if (!IsPluginName(plugin->string)) {
+                        AddIssue(result, a_manifestPath, plugin->offset, "invalid_plugin",
+                                 "target plugin name is invalid");
+                        return result;
+                    }
+                    std::uint32_t parsedLocalFormID = 0;
+                    if (!ParseLocalFormID(localFormID->string, parsedLocalFormID)) {
+                        AddIssue(result, a_manifestPath, localFormID->offset,
+                                 "invalid_local_form_id",
+                                 "localFormId must be 1-8 hexadecimal digits no greater than 00FFFFFF");
+                        return result;
+                    }
+                    implicitTargetPlugin = plugin->string;
+                    assignment.target = Target{ PluginLocalFormIDTarget{
+                        plugin->string, parsedLocalFormID } };
+                }
                 if (scope->string != "faceAndBody") {
                     AddIssue(result, a_manifestPath, scope->offset, "unsupported_scope",
                              "scope must be 'faceAndBody' in schema version 1");
@@ -819,7 +924,7 @@ namespace NpcAppearance
                 std::string requirementsError;
                 if (!MergeRequirements(manifest.requirements, assignmentRequirements,
                                        assignment.requirements,
-                                       requirementsError)) {
+                                       requirementsError, implicitTargetPlugin)) {
                     AddIssue(result, a_manifestPath, rawAssignment.offset,
                              "effective_requirements_invalid", requirementsError);
                     return result;
@@ -983,6 +1088,72 @@ namespace NpcAppearance
                 result.decisions.push_back({ targetKey, candidate.package->packageID,
                                              candidate.package->priority, won,
                                              won ? "winner" : "shadowed_by_" + winner.package->packageID });
+            }
+        }
+        return result;
+    }
+
+    ResolvedSelectionResult SelectResolvedAssignments(
+        const std::vector<ResolvedAssignment>& a_candidates)
+    {
+        using PackageBaseKey = std::pair<std::string, std::uint32_t>;
+        std::map<PackageBaseKey, std::size_t> packageBaseCounts;
+        std::map<std::string, std::string> packageNames;
+        for (const auto& candidate : a_candidates) {
+            const auto foldedPackage = FoldASCII(candidate.assignment.packageID);
+            packageNames.try_emplace(foldedPackage, candidate.assignment.packageID);
+            ++packageBaseCounts[{ foldedPackage, candidate.baseFormID }];
+        }
+
+        std::set<std::string> rejectedFoldedPackages;
+        for (const auto& [key, count] : packageBaseCounts) {
+            if (count > 1) {
+                rejectedFoldedPackages.insert(key.first);
+            }
+        }
+
+        std::map<std::uint32_t, std::vector<const ResolvedAssignment*>> groups;
+        ResolvedSelectionResult result;
+        for (const auto& rejected : rejectedFoldedPackages) {
+            result.rejectedPackages.push_back(packageNames.at(rejected));
+        }
+        for (const auto& candidate : a_candidates) {
+            const auto foldedPackage = FoldASCII(candidate.assignment.packageID);
+            if (rejectedFoldedPackages.contains(foldedPackage)) {
+                result.decisions.push_back({
+                    std::format("base:{:08x}", candidate.baseFormID),
+                    candidate.assignment.packageID,
+                    candidate.assignment.priority,
+                    false,
+                    "package_rejected_duplicate_resolved_target"
+                });
+                continue;
+            }
+            groups[candidate.baseFormID].push_back(&candidate);
+        }
+
+        for (auto& [baseFormID, candidates] : groups) {
+            std::ranges::sort(candidates, [](const auto* a_left, const auto* a_right) {
+                if (a_left->assignment.priority != a_right->assignment.priority) {
+                    return a_left->assignment.priority > a_right->assignment.priority;
+                }
+                const auto leftID = FoldASCII(a_left->assignment.packageID);
+                const auto rightID = FoldASCII(a_right->assignment.packageID);
+                return leftID != rightID ? leftID < rightID :
+                    a_left->assignment.packageID < a_right->assignment.packageID;
+            });
+            const auto* winner = candidates.front();
+            result.winners.push_back(*winner);
+            for (const auto* candidate : candidates) {
+                const bool won = candidate == winner;
+                result.decisions.push_back({
+                    std::format("base:{:08x}", baseFormID),
+                    candidate->assignment.packageID,
+                    candidate->assignment.priority,
+                    won,
+                    won ? "winner" :
+                          "shadowed_by_" + winner->assignment.packageID
+                });
             }
         }
         return result;

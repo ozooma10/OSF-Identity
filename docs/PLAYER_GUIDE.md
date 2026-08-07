@@ -15,7 +15,10 @@
 
 ## Conflicts
 
-When several valid packs target one NPC, the highest `priority` wins; ties go to the case-insensitively alphabetical pack folder name. Mod-manager order does not matter. A preset with a missing dependency is skipped so the next valid pack can win.
+When several valid packs resolve to one NPC base, the highest `priority` wins;
+ties go to the case-insensitively alphabetical pack folder name. Mod-manager
+order does not matter. A preset with a missing dependency is skipped so the
+next valid pack can win.
 
 ## Removing a pack
 
@@ -46,5 +49,13 @@ Documents\My Games\Starfield\SFSE\Logs\osf-identity.log
   case-insensitive ID, so both were rejected; rename one folder
 - `required pack plugin or asset missing` - that pack is disabled
 - `required preset plugin or asset missing` - only that preset is disabled; a lower-priority candidate may win
+- `EditorID not found or not TESNPC` - that compatibility target is unavailable
+  in the runtime table; the pack author should use an explicit
+  `{ plugin, localFormId }` target
+- `target plugin absent, tier index invalid, or local FormID exceeds its tier` -
+  the explicit target is malformed or its owning plugin is not loaded
+- `package_rejected_duplicate_resolved_target` - two assignments in one pack
+  resolve to the same NPC base, so the pack was rejected rather than choosing
+  one nondeterministically
 - `preset rejected` - malformed file or unsupported producer
 - `runtime contract mismatch` - game or Address Library version unsupported

@@ -22,6 +22,7 @@
 #include <cstring>
 #include <filesystem>
 #include <format>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -61,6 +62,8 @@ namespace NpcAppearance
         constexpr REL::ID kActorAppearanceRefreshID{ 101307 };
         constexpr std::uint32_t kAppearanceRefreshDirtyActorFlag = 0x00008000;
         constexpr std::uint32_t kTargetHoldSeconds = 12;
+        constexpr std::uintptr_t kProcessListsVtableRva = 0x4CC01B0;
+        constexpr std::uintptr_t kActorVtableRva = 0x4CB9248;
         constexpr REL::Offset kNpcOwnedVisualCopyOffset{ 0xCD56E0 };
         constexpr std::array<std::uint8_t, 17> kActorCopyAppearanceGate{
             0x48, 0x85, 0xD2,
@@ -132,7 +135,9 @@ namespace NpcAppearance
         // flags are atomics.
         // ==================================================================
         std::atomic<bool>             g_bracketOperational{ false };
+        std::atomic<bool>             g_bracketArmed{ false };
         std::atomic<bool>             g_mutationKilled{ false };
+        std::atomic<bool>             g_inBracket{ false };
         std::mutex                    g_eventMutex;
         std::unordered_set<RE::TESFormID> g_targetBaseIDs;
         std::unordered_set<RE::TESFormID> g_loadedTargetRefs;
@@ -560,6 +565,24 @@ namespace NpcAppearance
                 return std::nullopt;
             }
             return value;
+        }
+
+        [[nodiscard]] std::optional<Target> ParseTargetToken(
+            const std::string_view a_text)
+        {
+            const auto separator = a_text.rfind(':');
+            if (separator == std::string_view::npos) {
+                return Target{ std::string{ a_text } };
+            }
+            if (separator == 0 || separator + 1 >= a_text.size()) {
+                return std::nullopt;
+            }
+            const auto localFormID = ParseFormID(a_text.substr(separator + 1));
+            if (!localFormID || *localFormID > 0x00FFFFFF) {
+                return std::nullopt;
+            }
+            return Target{ PluginLocalFormIDTarget{
+                std::string{ a_text.substr(0, separator) }, *localFormID } };
         }
 
         [[nodiscard]] std::filesystem::path GetThisDllDirectory()
@@ -1182,6 +1205,50 @@ namespace NpcAppearance
 
         std::unordered_map<RE::TESFormID, PersistentAppliedState> g_persistentAppliedRefs;
 
+        struct AppliedBaseState
+        {
+            RE::TESFormID       baseID{ 0 };
+            SelectedAssignment assignment;
+            OwnedVisualSnapshot originalVisual;
+            NonVisualSnapshot   originalNonVisual;
+            RE::TESNPC*         originalFaceNPC{ nullptr };
+            std::uint32_t       originalActorFlags{ 0 };
+            bool                bracketFailed{ false };
+        };
+
+        std::mutex                                      g_appliedBasesMutex;
+        std::unordered_map<RE::TESFormID, AppliedBaseState> g_appliedBases;
+        std::unordered_set<RE::TESFormID>               g_saveEntryRestoredBases;
+        std::atomic<std::uint64_t>                      g_bracketSaveEntries{ 0 };
+        std::atomic<std::uint64_t>                      g_bracketSaveReturns{ 0 };
+        std::atomic<std::uint64_t>                      g_bracketLoadReturns{ 0 };
+        std::atomic<std::uint64_t>                      g_bracketLoadGeneration{ 0 };
+        std::atomic<std::uint64_t>                      g_preSaveGeneration{ 0 };
+        std::atomic<bool>                               g_preSaveReady{ false };
+        std::atomic<bool>                               g_saveGatewayEntered{ false };
+        std::atomic<bool>                               g_saveHookObserved{ false };
+        std::atomic<bool>                               g_saveLoadEventRegistered{ false };
+        constexpr std::uint32_t                         kC2LoadReadyMaxNativeFrames = 600;
+        struct DeferredC2LoadTask
+        {
+            std::uint64_t                    generation{ 0 };
+            std::function<bool(std::uint32_t)> run;
+            std::uint32_t                   attempts{ 0 };
+            bool                            deferralLogged{ false };
+        };
+        std::mutex                                      g_deferredC2LoadMutex;
+        std::shared_ptr<DeferredC2LoadTask>             g_deferredC2LoadTask;
+        bool                                            g_deferredC2LoadInFlight{ false };
+        struct DeferredC2SaveTask
+        {
+            std::uint64_t       sequence{ 0 };
+            std::function<void()> run;
+            bool                deferralLogged{ false };
+        };
+        std::mutex                                      g_deferredC2SaveMutex;
+        std::shared_ptr<DeferredC2SaveTask>             g_deferredC2SaveTask;
+        bool                                            g_deferredC2SaveInFlight{ false };
+
         [[nodiscard]] bool ForgetPersistentState(const RE::TESFormID a_refID)
         {
             const std::scoped_lock lock{ g_eventMutex };
@@ -1689,6 +1756,88 @@ namespace NpcAppearance
             reinterpret_cast<Notify>(vtable[0x17])(a_npc, a_flag);
         }
 
+        struct TargetActorResolution
+        {
+            RE::Actor*       actor{ nullptr };
+            RE::TESFormID    actorRefID{ 0 };
+            std::size_t      matches{ 0 };
+            std::size_t      highActors{ 0 };
+            bool             processListsValid{ false };
+        };
+
+        [[nodiscard]] TargetActorResolution ResolveTargetActor(RE::TESNPC* a_target)
+        {
+            TargetActorResolution result;
+            auto* processLists = RE::ProcessLists::GetSingleton();
+            if (!a_target || !processLists) {
+                return result;
+            }
+
+            std::uintptr_t processListsVtable = 0;
+            if (!Util::SafeReadQword(
+                    reinterpret_cast<std::uintptr_t>(processLists),
+                    processListsVtable) ||
+                Util::ToRva(processListsVtable) != kProcessListsVtableRva) {
+                return result;
+            }
+            result.processListsValid = true;
+            result.highActors = processLists->highActorHandles.size();
+            if (result.highActors > 0x4000) {
+                result.processListsValid = false;
+                return result;
+            }
+
+            for (auto& handle : processLists->highActorHandles) {
+                if (!static_cast<bool>(handle)) {
+                    continue;
+                }
+                const RE::NiPointer<RE::Actor> actorPointer = handle.get();
+                auto* actor = actorPointer.get();
+                std::uintptr_t actorVtable = 0;
+                if (!actor ||
+                    !Util::SafeReadQword(
+                        reinterpret_cast<std::uintptr_t>(actor), actorVtable) ||
+                    Util::ToRva(actorVtable) != kActorVtableRva ||
+                    actor->GetNPC() != a_target) {
+                    continue;
+                }
+                ++result.matches;
+                if (!result.actor) {
+                    result.actor = actor;
+                    result.actorRefID = actor->GetFormID();
+                }
+            }
+            return result;
+        }
+
+        [[nodiscard]] bool NotifyAndKick(
+            RE::TESNPC* a_target,
+            RE::Actor* a_actor,
+            const RE::TESFormID a_actorRefID)
+        {
+            if (!MutationOperational() || !a_target || !a_actor ||
+                a_actor->GetNPC() != a_target || a_actor->GetFormID() != a_actorRefID) {
+                if (!MutationOperational()) {
+                    KillMutation("save/load hook provider lost ownership before notify/kick");
+                }
+                return false;
+            }
+
+            const auto refreshAddress =
+                REL::Relocation<std::uintptr_t>{ kActorAppearanceRefreshID }.address();
+            if (!HasExpectedBytes(refreshAddress, kActorAppearanceRefreshGate)) {
+                KillMutation("actor appearance refresh byte gate failed");
+                return false;
+            }
+
+            NotifyBaseAppearanceChanged(a_target, 0x800);
+            NotifyBaseAppearanceChanged(a_target, 0x4000);
+            SuppressNextSceneSet3d(a_actorRefID);
+            reinterpret_cast<RefreshActorAppearance>(refreshAddress)(
+                a_actor, false, 0x28, false);
+            return true;
+        }
+
         [[nodiscard]] bool HasLoaded3D(RE::Actor* a_actor)
         {
             std::uintptr_t loadedData = 0;
@@ -1734,10 +1883,10 @@ namespace NpcAppearance
                 REL::Relocation<std::uintptr_t>{ kActorAppearanceRefreshID }.address();
             if (!HasExpectedBytes(refreshAddress, kActorAppearanceRefreshGate)) {
                 summary.failed = applied.size();
+                KillMutation("persistent removal refresh byte gate failed");
                 a_out("scene persistent: removal refresh contract mismatch; FAIL CLOSED");
                 return summary;
             }
-            const auto refresh = reinterpret_cast<RefreshActorAppearance>(refreshAddress);
 
             for (const auto& [refID, state] : applied) {
                 auto* actor = RE::TESForm::LookupByID<RE::Actor>(refID);
@@ -1763,10 +1912,13 @@ namespace NpcAppearance
                     continue;
                 }
 
-                NotifyBaseAppearanceChanged(target, 0x800);
-                NotifyBaseAppearanceChanged(target, 0x4000);
-                SuppressNextSceneSet3d(refID);
-                refresh(actor, false, 0x28, false);
+                if (!NotifyAndKick(target, actor, refID)) {
+                    ++summary.failed;
+                    a_out(std::format(
+                        "scene persistent: removal notify/kick failed ref=0x{:08X}; FAIL CLOSED",
+                        refID));
+                    continue;
+                }
                 const auto afterRefreshRaw = Snapshot(target);
                 const auto refreshDirtyMask =
                     state.originalNonVisual.actorFlagsExceptSex ^
@@ -1828,6 +1980,7 @@ namespace NpcAppearance
                 (!usesOwnedSnapshot &&
                  (!HasExpectedBytes(ownedCopyAddress, kNpcOwnedVisualCopyGate) ||
                   !HasExpectedBytes(destructorAddress, kNpcDestructorGate)))) {
+                KillMutation("target hold restore byte gate failed");
                 REX::CRITICAL(
                     "[NpcAppearance] targethold RESTORE FAILED reason={} because a runtime contract changed; stop without saving",
                     a_reason);
@@ -1893,11 +2046,7 @@ namespace NpcAppearance
             std::uint32_t refreshDirtyMask = 0;
             bool refreshNonVisualExpected = false;
             if (restoreExact) {
-                const auto refresh = reinterpret_cast<RefreshActorAppearance>(refreshAddress);
-                NotifyBaseAppearanceChanged(target, 0x800);
-                NotifyBaseAppearanceChanged(target, 0x4000);
-                SuppressNextSceneSet3d(state->actorRefID);
-                refresh(actor, false, 0x28, false);
+                restoreExact = NotifyAndKick(target, actor, state->actorRefID);
                 const auto afterRefreshRaw = Snapshot(target);
                 refreshDirtyMask = state->originalNonVisual.actorFlagsExceptSex ^
                     afterRefreshRaw.actorFlagsExceptSex;
@@ -2142,7 +2291,7 @@ namespace NpcAppearance
                 const std::vector<std::string> trialArgs{
                     "npcapp",
                     "targetpersistent",
-                    assignment->target.editorID,
+                    assignment->target.CanonicalKey(),
                     std::format("{:08X}", ready->refID),
                     assignment->presetPath.string()
                 };
@@ -2179,7 +2328,7 @@ namespace NpcAppearance
             const std::vector<std::string> trialArgs{
                 "npcapp",
                 "targethold",
-                assignment->target.editorID,
+                assignment->target.CanonicalKey(),
                 std::format("{:08X}", ready->refID),
                 assignment->presetPath.string()
             };
@@ -2241,35 +2390,89 @@ namespace NpcAppearance
 
         // ==================================================================
         // Target resolution
-        // EditorID -> eligible unique HumanRace TESNPC.
+        // EditorID compatibility or owning-plugin + local FormID -> eligible
+        // unique HumanRace TESNPC.
         // ==================================================================
-        [[nodiscard]] bool FindLoadedPlugin(const std::string_view a_name)
+        struct LoadedPlugin
+        {
+            RE::TESFile* file{ nullptr };
+            PluginTier tier{ PluginTier::kFull };
+            std::uint32_t index{ 0 };
+        };
+
+        [[nodiscard]] std::optional<LoadedPlugin> FindLoadedPlugin(
+            const std::string_view a_name)
         {
             const auto* handler = RE::TESDataHandler::GetSingleton();
             if (!handler) {
-                return false;
+                return std::nullopt;
             }
             const std::string needle{ a_name };
-            const auto find = [&](const auto& a_files) {
+            const auto find = [&](const auto& a_files, const PluginTier a_tier)
+                -> std::optional<LoadedPlugin> {
+                std::uint32_t tierIndex = 0;
                 for (auto* file : a_files) {
                     if (file && ::_stricmp(file->fileName, needle.c_str()) == 0) {
-                        return true;
+                        return LoadedPlugin{
+                            file,
+                            a_tier,
+                            a_tier == PluginTier::kFull ? file->compileIndex : tierIndex
+                        };
                     }
+                    ++tierIndex;
                 }
-                return false;
+                return std::nullopt;
             };
-            return find(handler->compiledFileCollection.files) ||
-                find(handler->compiledFileCollection.mediumFiles) ||
-                find(handler->compiledFileCollection.smallFiles);
+            if (auto found = find(
+                    handler->compiledFileCollection.files, PluginTier::kFull)) {
+                return found;
+            }
+            if (auto found = find(
+                    handler->compiledFileCollection.mediumFiles, PluginTier::kMedium)) {
+                return found;
+            }
+            return find(handler->compiledFileCollection.smallFiles, PluginTier::kSmall);
+        }
+
+        [[nodiscard]] std::optional<RE::TESFormID> ResolveRuntimeFormID(
+            const PluginLocalFormIDTarget& a_target)
+        {
+            const auto plugin = FindLoadedPlugin(a_target.plugin);
+            if (!plugin) {
+                return std::nullopt;
+            }
+            return EncodeRuntimeFormID(
+                a_target.localFormID, plugin->tier, plugin->index);
         }
 
         [[nodiscard]] RE::TESNPC* ResolveEligibleTarget(const LineSink& a_out, const Target& a_target)
         {
-            auto* npc = RE::TESForm::LookupByEditorID<RE::TESNPC>(
-                RE::BSFixedString{ a_target.editorID.c_str() });
+            RE::TESNPC* npc = nullptr;
+            if (const auto* editorID = a_target.AsEditorID()) {
+                npc = RE::TESForm::LookupByEditorID<RE::TESNPC>(
+                    RE::BSFixedString{ editorID->editorID.c_str() });
+                if (!npc) {
+                    a_out(std::format("resolve {}: EditorID not found or not TESNPC",
+                                      a_target.CanonicalKey()));
+                    return nullptr;
+                }
+            } else if (const auto* pluginLocal = a_target.AsPluginLocalFormID()) {
+                const auto runtimeFormID = ResolveRuntimeFormID(*pluginLocal);
+                if (!runtimeFormID) {
+                    a_out(std::format(
+                        "resolve {}: target plugin absent, tier index invalid, or local FormID exceeds its tier",
+                        a_target.CanonicalKey()));
+                    return nullptr;
+                }
+                npc = RE::TESForm::LookupByID<RE::TESNPC>(*runtimeFormID);
+                if (!npc) {
+                    a_out(std::format("resolve {} -> 0x{:08X}: not found or not TESNPC",
+                                      a_target.CanonicalKey(), *runtimeFormID));
+                    return nullptr;
+                }
+            }
             if (!npc) {
-                a_out(std::format("resolve {}: EditorID not found or not TESNPC",
-                                  a_target.CanonicalKey()));
+                a_out("resolve: invalid target locator; no lookup attempted");
                 return nullptr;
             }
             if (!npc->IsUnique()) {
@@ -2298,13 +2501,38 @@ namespace NpcAppearance
         void RunStatus(const LineSink& a_out)
         {
             const auto root = DefaultPluginDirectory();
+            std::size_t appliedBases = 0;
+            std::size_t failedBases = 0;
+            {
+                const std::scoped_lock lock{ g_appliedBasesMutex };
+                appliedBases = g_appliedBases.size();
+                failedBases = static_cast<std::size_t>(std::ranges::count_if(
+                    g_appliedBases, [](const auto& a_entry) {
+                        return a_entry.second.bracketFailed;
+                    }));
+            }
             a_out("OSF Identity diagnostics: disabled-by-default / explicit commands only");
-            a_out(std::format("saveLoadBracketOperational={} mutationKilled={}",
+            a_out(std::format("saveLoadBracketOperational={} saveVetoSupported={} mutationKilled={}",
                               g_bracketOperational.load(std::memory_order_relaxed),
+                              SaveLoadHooks::SupportsSaveVeto(),
                               g_mutationKilled.load(std::memory_order_relaxed)));
+            a_out(std::format(
+                "C2BracketArmed={} marker={} appliedBases={} failedBases={} inBracket={} preSaveReady={} saveGatewayEntered={} saveHookObserved={} saveLoadEventRegistered={} saveEntries={} saveReturns={} loadReturns={} loadGeneration={}",
+                g_bracketArmed.load(std::memory_order_relaxed),
+                (DefaultPluginDirectory() / L"bracket.armed").string(),
+                appliedBases, failedBases,
+                g_inBracket.load(std::memory_order_relaxed),
+                g_preSaveReady.load(std::memory_order_relaxed),
+                g_saveGatewayEntered.load(std::memory_order_relaxed),
+                g_saveHookObserved.load(std::memory_order_relaxed),
+                g_saveLoadEventRegistered.load(std::memory_order_relaxed),
+                g_bracketSaveEntries.load(std::memory_order_relaxed),
+                g_bracketSaveReturns.load(std::memory_order_relaxed),
+                g_bracketLoadReturns.load(std::memory_order_relaxed),
+                g_bracketLoadGeneration.load(std::memory_order_relaxed)));
             a_out(std::format("pluginDirectory={}", root.string()));
             a_out(std::format("packsDirectory={}", DefaultPacksDirectory().string()));
-            a_out("manifestParser=implemented (strict package schema v1, EditorID targeting, containment, deterministic conflicts)");
+            a_out("manifestParser=implemented (strict package schema v1, EditorID or plugin/local targeting, containment, deterministic conflicts)");
             a_out("npcDecoder=implemented (strict CK 1.16.244 JSON contract; golden matrix and adversarial corpus pass)");
             a_out("dependencyResolver=RUNTIME-PROVEN read-only on Sarah (forms/headparts + facial shape/bone + FaceDB color/teeth/AVM catalogs)");
             a_out("runtimeNpcImporter=NO SAFE SEAM FOUND (SavePCFace is a parse-only console wrapper)");
@@ -2435,7 +2663,8 @@ namespace NpcAppearance
 
             std::size_t decodedPresets = 0;
             std::size_t implicitPacks = 0;
-            std::vector<PackageManifest> validatedPacks;
+            std::size_t validPacks = 0;
+            std::vector<ResolvedAssignment> validatedCandidates;
             for (const auto& package : discovery.packages) {
                 if (package.implicitManifest) {
                     ++implicitPacks;
@@ -2466,9 +2695,37 @@ namespace NpcAppearance
                     continue;
                 }
 
-                PackageManifest validatedPackage = package;
-                validatedPackage.assignments.clear();
+                struct TargetResolution
+                {
+                    const Assignment* assignment{ nullptr };
+                    RE::TESNPC* npc{ nullptr };
+                };
+                std::vector<TargetResolution> targetResolutions;
+                targetResolutions.reserve(package.assignments.size());
+                std::unordered_map<RE::TESFormID, std::string> resolvedTargets;
+                bool duplicateResolvedTarget = false;
                 for (const auto& assignment : package.assignments) {
+                    auto* npc = ResolveEligibleTarget(a_out, assignment.target);
+                    if (npc) {
+                        const auto [found, inserted] = resolvedTargets.emplace(
+                            npc->GetFormID(), assignment.target.CanonicalKey());
+                        if (!inserted) {
+                            duplicateResolvedTarget = true;
+                            a_out(std::format(
+                                "pack '{}' rejected: code=package_rejected_duplicate_resolved_target targets {} and {} both resolve to base 0x{:08X}",
+                                package.packageID, found->second,
+                                assignment.target.CanonicalKey(), npc->GetFormID()));
+                        }
+                    }
+                    targetResolutions.push_back({ &assignment, npc });
+                }
+                if (duplicateResolvedTarget) {
+                    continue;
+                }
+
+                bool packageHasValidCandidate = false;
+                for (const auto& resolution : targetResolutions) {
+                    const auto& assignment = *resolution.assignment;
                     bool assignmentRequirementsComplete = true;
                     for (const auto& plugin : assignment.requirements.plugins) {
                         if (!FindLoadedPlugin(plugin)) {
@@ -2493,6 +2750,14 @@ namespace NpcAppearance
                         continue;
                     }
 
+                    auto* npc = resolution.npc;
+                    if (!npc) {
+                        a_out(std::format("candidate pack='{}' target={} rejected: target is absent or ineligible",
+                                          package.packageID,
+                                          assignment.target.CanonicalKey()));
+                        continue;
+                    }
+
                     const auto decoded = LoadCkPreset(assignment.presetPath);
                     if (!decoded.preset) {
                         a_out(std::format("candidate pack='{}' target={} rejected: preset '{}' does not satisfy a supported 1.16.244 producer contract",
@@ -2508,13 +2773,6 @@ namespace NpcAppearance
                     }
                     ++decodedPresets;
 
-                    auto* npc = ResolveEligibleTarget(a_out, assignment.target);
-                    if (!npc) {
-                        a_out(std::format("candidate pack='{}' target={} rejected: target is absent or ineligible",
-                                          package.packageID,
-                                          assignment.target.CanonicalKey()));
-                        continue;
-                    }
                     const auto resolved = ResolveAppearanceDependencies(*decoded.preset, npc);
                     ReportDependencyResolution(a_out, resolved);
                     if (!resolved.Complete()) {
@@ -2523,14 +2781,24 @@ namespace NpcAppearance
                                           assignment.target.CanonicalKey()));
                         continue;
                     }
-                    validatedPackage.assignments.push_back(assignment);
+                    validatedCandidates.push_back({
+                        npc->GetFormID(),
+                        SelectedAssignment{
+                            assignment.target,
+                            assignment.presetPath,
+                            assignment.requirements,
+                            package.packageID,
+                            package.priority
+                        }
+                    });
+                    packageHasValidCandidate = true;
                 }
-                if (!validatedPackage.assignments.empty()) {
-                    validatedPacks.push_back(std::move(validatedPackage));
+                if (packageHasValidCandidate) {
+                    ++validPacks;
                 }
             }
 
-            const auto selection = SelectAssignments(validatedPacks);
+            const auto selection = SelectResolvedAssignments(validatedCandidates);
             for (const auto& decision : selection.decisions) {
                 a_out(std::format("conflict target={} pack='{}' priority={} result={} reason={}",
                                   decision.targetKey, decision.packageID, decision.priority,
@@ -2539,11 +2807,17 @@ namespace NpcAppearance
 
             std::unordered_set<RE::TESFormID> resolvedBaseIDs;
             std::unordered_map<RE::TESFormID, SelectedAssignment> resolvedAssignments;
-            for (const auto& assignment : selection.winners) {
+            for (const auto& resolvedWinner : selection.winners) {
+                const auto& assignment = resolvedWinner.assignment;
                 auto* npc = ResolveEligibleTarget(a_out, assignment.target);
-                if (npc) {
-                    resolvedBaseIDs.insert(npc->GetFormID());
-                    resolvedAssignments.emplace(npc->GetFormID(), assignment);
+                if (npc && npc->GetFormID() == resolvedWinner.baseFormID) {
+                    resolvedBaseIDs.insert(resolvedWinner.baseFormID);
+                    resolvedAssignments.emplace(resolvedWinner.baseFormID, assignment);
+                } else if (npc) {
+                    a_out(std::format(
+                        "  winner pack='{}' target={} changed resolved base from 0x{:08X} to 0x{:08X}; rejected fail-closed",
+                        assignment.packageID, assignment.target.CanonicalKey(),
+                        resolvedWinner.baseFormID, npc->GetFormID()));
                 }
                 a_out(std::format("  winner pack='{}' priority={} target={} preset={} targetResolved={}",
                                   assignment.packageID, assignment.priority,
@@ -2563,8 +2837,8 @@ namespace NpcAppearance
             g_sceneDispatchObserveArmed.store(false, std::memory_order_release);
             g_sceneAutoTrialArmed.store(false, std::memory_order_release);
             a_out(std::format("scan: discoveredPacks={} implicitPacks={} validPacks={} decodedPresets={} validCandidates={} winners={} resolvedTargets={}; validation only, owned population/application gate prevents mutation",
-                              discovery.packages.size(), implicitPacks, validatedPacks.size(),
-                              decodedPresets, selection.decisions.size(), selection.winners.size(),
+                              discovery.packages.size(), implicitPacks, validPacks,
+                              decodedPresets, validatedCandidates.size(), selection.winners.size(),
                               resolvedCount));
         }
 
@@ -3053,10 +3327,15 @@ namespace NpcAppearance
         void RunResolve(const LineSink& a_out, const std::vector<std::string>& a_args)
         {
             if (a_args.size() < 3) {
-                a_out("usage: npcapp resolve <editorID>");
+                a_out("usage: npcapp resolve <editorID|plugin:localFormID>");
                 return;
             }
-            (void)ResolveEligibleTarget(a_out, Target{ a_args[2] });
+            const auto target = ParseTargetToken(a_args[2]);
+            if (!target) {
+                a_out("resolve: invalid target token");
+                return;
+            }
+            (void)ResolveEligibleTarget(a_out, *target);
         }
 
         void RunDonor(const LineSink& a_out, const std::vector<std::string>& a_args)
@@ -3871,6 +4150,520 @@ namespace NpcAppearance
                       "donorcopy: FAIL CLOSED; do not call the lower worker on a real target");
         }
 
+        using CreateNpc = RE::TESNPC* (*)(void*, bool);
+        using CopyNpcAppearance = void (*)(RE::TESNPC*, RE::TESNPC*, bool);
+
+        struct NpcDonorDeleter
+        {
+            DestroyNpc destroy{ nullptr };
+
+            void operator()(RE::TESNPC* a_donor) const noexcept
+            {
+                if (a_donor && destroy) {
+                    static_cast<void>(destroy(a_donor, 1));
+                }
+            }
+        };
+
+        using ScopedNpcDonor = std::unique_ptr<RE::TESNPC, NpcDonorDeleter>;
+
+        struct SnapshotDonorFunctions
+        {
+            std::uintptr_t          factoryAddress{ 0 };
+            std::uintptr_t          npcVtable{ 0 };
+            CreateNpc               create{ nullptr };
+            DestroyNpc              destroy{ nullptr };
+            SetShapeBlend           setShape{ nullptr };
+            SetBodyMorph            setBody{ nullptr };
+            SetFacialBone           setBone{ nullptr };
+            EnsureFacialBoneGroup   ensureBoneGroup{ nullptr };
+            ChangeHeadPart          changeHeadPart{ nullptr };
+            SetAvmData              setAvmData{ nullptr };
+            OwnedVisualCopy         ownedCopy{ nullptr };
+        };
+
+        struct BuiltSnapshotDonor
+        {
+            ScopedNpcDonor donor;
+            RE::TESFormID  formID{ 0 };
+        };
+
+        [[nodiscard]] std::optional<SnapshotDonorFunctions>
+        ResolveSnapshotDonorFunctions(const LineSink& a_out)
+        {
+            const auto factoryAddress =
+                REL::Relocation<std::uintptr_t>{ kNpcFactorySingletonID }.address();
+            const auto factoryVtable =
+                REL::Relocation<std::uintptr_t>{ kNpcFactoryVtableID }.address();
+            const auto createAddress =
+                REL::Relocation<std::uintptr_t>{ kNpcFactoryCreateID }.address();
+            const auto npcVtable =
+                REL::Relocation<std::uintptr_t>{ kNpcPrimaryVtableID }.address();
+            const auto destructorAddress =
+                REL::Relocation<std::uintptr_t>{ kNpcScalarDeletingDestructorID }.address();
+            const auto shapeAddress =
+                REL::Relocation<std::uintptr_t>{ kNpcSetShapeBlendID }.address();
+            const auto bodyAddress =
+                REL::Relocation<std::uintptr_t>{ kNpcSetBodyMorphID }.address();
+            const auto boneAddress =
+                REL::Relocation<std::uintptr_t>{ kNpcSetBoneValueID }.address();
+            const auto boneGroupAddress =
+                REL::Relocation<std::uintptr_t>{ kNpcSetBoneGroupValueID }.address();
+            const auto changeHeadAddress =
+                REL::Relocation<std::uintptr_t>{ kNpcChangeHeadPartID }.address();
+            const auto setAvmAddress =
+                REL::Relocation<std::uintptr_t>{ kNpcSetAvmDataID }.address();
+            const auto ownedCopyAddress = kNpcOwnedVisualCopyOffset.address();
+
+            if (!Util::IsReadableRange(factoryAddress, sizeof(std::uintptr_t)) ||
+                *reinterpret_cast<const std::uintptr_t*>(factoryAddress) != factoryVtable ||
+                !Util::IsReadableRange(
+                    factoryVtable + sizeof(std::uintptr_t), sizeof(std::uintptr_t)) ||
+                *reinterpret_cast<const std::uintptr_t*>(
+                    factoryVtable + sizeof(std::uintptr_t)) != createAddress ||
+                !HasExpectedBytes(createAddress, kNpcFactoryCreateGate) ||
+                !HasExpectedBytes(destructorAddress, kNpcDestructorGate) ||
+                !HasExpectedBytes(shapeAddress, kNpcSetShapeBlendGate) ||
+                !HasExpectedBytes(bodyAddress, kNpcSetBodyMorphGate) ||
+                !HasExpectedBytes(boneAddress, kNpcSetBoneValueGate) ||
+                !HasExpectedBytes(boneGroupAddress, kNpcSetBoneGroupValueGate) ||
+                !HasExpectedBytes(changeHeadAddress, kNpcChangeHeadPartGate) ||
+                !HasExpectedBytes(setAvmAddress, kNpcSetAvmDataGate) ||
+                !HasExpectedBytes(ownedCopyAddress, kNpcOwnedVisualCopyGate)) {
+                KillMutation("owned snapshot restore byte gate failed");
+                a_out("ownedrestore: donor/setter/copy/destructor contract mismatch; FAIL CLOSED");
+                return std::nullopt;
+            }
+
+            return SnapshotDonorFunctions{
+                .factoryAddress = factoryAddress,
+                .npcVtable = npcVtable,
+                .create = reinterpret_cast<CreateNpc>(createAddress),
+                .destroy = reinterpret_cast<DestroyNpc>(destructorAddress),
+                .setShape = reinterpret_cast<SetShapeBlend>(shapeAddress),
+                .setBody = reinterpret_cast<SetBodyMorph>(bodyAddress),
+                .setBone = reinterpret_cast<SetFacialBone>(boneAddress),
+                .ensureBoneGroup =
+                    reinterpret_cast<EnsureFacialBoneGroup>(boneGroupAddress),
+                .changeHeadPart = reinterpret_cast<ChangeHeadPart>(changeHeadAddress),
+                .setAvmData = reinterpret_cast<SetAvmData>(setAvmAddress),
+                .ownedCopy = reinterpret_cast<OwnedVisualCopy>(ownedCopyAddress),
+            };
+        }
+
+        [[nodiscard]] std::optional<BuiltSnapshotDonor> BuildOwnedVisualSnapshotDonor(
+            const LineSink& a_out,
+            const OwnedVisualSnapshot& a_snapshot,
+            const SnapshotDonorFunctions& a_functions)
+        {
+            auto* donor = a_functions.create(
+                reinterpret_cast<void*>(a_functions.factoryAddress), false);
+            if (!donor) {
+                a_out("ownedrestore: Create(false) returned null; no target mutation");
+                return std::nullopt;
+            }
+
+            const auto donorFormID = donor->GetFormID();
+            ScopedNpcDonor donorOwner{ donor, NpcDonorDeleter{ a_functions.destroy } };
+            std::size_t headPartCount = 0;
+            {
+                auto headParts = donor->headParts.Lock();
+                headPartCount = (*headParts).size();
+            }
+            const bool initialized =
+                *reinterpret_cast<const std::uintptr_t*>(donor) == a_functions.npcVtable &&
+                donorFormID != 0 &&
+                RE::TESForm::LookupByID<RE::TESNPC>(donorFormID) == donor &&
+                donor->QRefCount() == 0 && donor->GetRace() == nullptr &&
+                donor->faceNPC == nullptr && headPartCount == 0 &&
+                donor->unk3D8 == nullptr && donor->unk3E0 == nullptr &&
+                donor->unk3E8 == nullptr && donor->tintAVMData.empty() &&
+                donor->shapeBlendData == nullptr && donor->pronoun.underlying() == 0;
+            if (!initialized) {
+                a_out("ownedrestore: donor failed registered-empty invariants; no target mutation");
+                return std::nullopt;
+            }
+
+            donor->morphWeight.thin = a_snapshot.thin;
+            donor->morphWeight.muscular = a_snapshot.muscular;
+            donor->morphWeight.fat = a_snapshot.fat;
+            if (a_snapshot.hasBodyMorphRegions) {
+                for (std::size_t i = 0; i < a_snapshot.bodyMorphRegions.size(); ++i) {
+                    a_functions.setBody(
+                        donor, static_cast<std::uint32_t>(i),
+                        a_snapshot.bodyMorphRegions[i]);
+                }
+            }
+            if (a_snapshot.hasBoneValues) {
+                for (const auto& [key, value] : a_snapshot.boneValues) {
+                    a_functions.setBone(donor, key, value);
+                }
+            }
+            if (a_snapshot.hasBoneRegions) {
+                for (const auto& region : a_snapshot.boneRegions) {
+                    if (!region.hasValues) {
+                        continue;
+                    }
+                    for (const auto& [key, value] : region.values) {
+                        const RE::BSFixedStringCS fixedKey{ key.c_str() };
+                        a_functions.ensureBoneGroup(donor, region.regionID, &fixedKey);
+                        if (!donor->unk3E8) {
+                            continue;
+                        }
+                        const auto outer = donor->unk3E8->find(region.regionID);
+                        if (outer == donor->unk3E8->end() || !outer->value) {
+                            continue;
+                        }
+                        for (auto& entry : *outer->value) {
+                            if (std::string_view{ SafeText(entry.key.c_str()) } == key) {
+                                entry.value = value;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            if (a_snapshot.hasShapeBlends) {
+                for (const auto& [key, value] : a_snapshot.shapeBlends) {
+                    const RE::BSFixedStringCS fixedKey{ key.c_str() };
+                    a_functions.setShape(donor, &fixedKey, value);
+                }
+            }
+            for (const auto formID : a_snapshot.headPartFormIDs) {
+                auto* part = RE::TESForm::LookupByID<RE::BGSHeadPart>(formID);
+                if (!part) {
+                    a_out(std::format(
+                        "ownedrestore: headpart 0x{:08X} did not resolve; no target mutation",
+                        formID));
+                    return std::nullopt;
+                }
+                a_functions.changeHeadPart(donor, part);
+            }
+
+            donor->skinToneIndex = a_snapshot.skinToneIndex;
+            donor->pronoun = static_cast<RE::TESNPC::PRONOUN_TYPE>(a_snapshot.pronoun);
+            donor->teeth = a_snapshot.teeth;
+            donor->jewelryColor = a_snapshot.jewelryColor;
+            donor->eyeColor = a_snapshot.eyeColor;
+            donor->hairColor = a_snapshot.hairColor;
+            donor->facialColor = a_snapshot.facialColor;
+            donor->eyebrowColor = a_snapshot.eyebrowColor;
+            for (const auto& avm : a_snapshot.avms) {
+                RE::AVMData materialized{};
+                materialized.type = avm.type;
+                materialized.category = RE::BSFixedString{ avm.category.c_str() };
+                materialized.unk10.name = RE::BSFixedString{ avm.name.c_str() };
+                materialized.unk10.texturePath =
+                    RE::BSFixedString{ avm.texturePath.c_str() };
+                materialized.unk10.color = avm.color;
+                materialized.unk10.intensity = avm.intensity;
+                a_functions.setAvmData(donor, &materialized);
+            }
+
+            if (!SameExactVisualValues(donor, a_snapshot)) {
+                a_out("ownedrestore: constructed donor did not exactly match snapshot; no target mutation");
+                return std::nullopt;
+            }
+            return BuiltSnapshotDonor{
+                .donor = std::move(donorOwner),
+                .formID = donorFormID,
+            };
+        }
+
+        [[nodiscard]] bool RestoreOwnedVisualSnapshot(
+            const LineSink& a_out,
+            RE::TESNPC* a_target,
+            const OwnedVisualSnapshot& a_snapshot,
+            RE::TESNPC* a_originalFaceNPC)
+        {
+            if (!RequireMutationOperational(a_out, "ownedrestore") || !a_target) {
+                if (!a_target) {
+                    a_out("ownedrestore: target is null; no mutation");
+                }
+                return false;
+            }
+
+            const auto functions = ResolveSnapshotDonorFunctions(a_out);
+            if (!functions) {
+                return false;
+            }
+            auto built = BuildOwnedVisualSnapshotDonor(a_out, a_snapshot, *functions);
+            if (!built) {
+                return false;
+            }
+
+            a_target->morphWeight.thin = a_snapshot.thin;
+            a_target->morphWeight.muscular = a_snapshot.muscular;
+            a_target->morphWeight.fat = a_snapshot.fat;
+            if (a_snapshot.hasBodyMorphRegions) {
+                for (std::size_t i = 0; i < a_snapshot.bodyMorphRegions.size(); ++i) {
+                    functions->setBody(
+                        a_target, static_cast<std::uint32_t>(i),
+                        a_snapshot.bodyMorphRegions[i]);
+                }
+            }
+            a_target->skinToneIndex = a_snapshot.skinToneIndex;
+            functions->ownedCopy(a_target, built->donor.get(), false);
+            a_target->faceNPC = a_originalFaceNPC;
+            const bool targetExact = SameExactVisualValues(a_target, a_snapshot) &&
+                a_target->faceNPC == a_originalFaceNPC;
+
+            const auto donorFormID = built->formID;
+            built->donor.reset();
+            const bool donorUnregistered =
+                RE::TESForm::LookupByID<RE::TESNPC>(donorFormID) == nullptr;
+            a_out(std::format(
+                "ownedrestore: donorExact=true targetExact={} donorUnregistered={}",
+                targetExact, donorUnregistered));
+            return targetExact && donorUnregistered;
+        }
+
+        // Typed extraction of RunTargetTrial's proven apply pipeline. This
+        // mutates only the TESNPC base: no notifications, actor refresh, or
+        // retained donors. RunTargetTrial remains intact until C4b.
+        [[nodiscard]] bool SilentApplyPresetToBase(
+            const LineSink& a_out,
+            RE::TESNPC* a_target,
+            const std::filesystem::path& a_path)
+        {
+            if (!RequireMutationOperational(a_out, "silentapply") || !a_target) {
+                if (!a_target) {
+                    a_out("silentapply: target is null; no mutation");
+                }
+                return false;
+            }
+
+            const auto decoded = LoadCkPreset(a_path);
+            if (!decoded.preset) {
+                a_out(std::format(
+                    "silentapply: preset rejected path={} issues={}",
+                    a_path.string(), decoded.issues.size()));
+                return false;
+            }
+            const auto resolved = ResolveAppearanceDependencies(*decoded.preset, a_target);
+            if (!resolved.Complete()) {
+                a_out("silentapply: dependency resolution incomplete; no mutation");
+                return false;
+            }
+
+            const auto factoryAddress =
+                REL::Relocation<std::uintptr_t>{ kNpcFactorySingletonID }.address();
+            const auto factoryVtable =
+                REL::Relocation<std::uintptr_t>{ kNpcFactoryVtableID }.address();
+            const auto createAddress =
+                REL::Relocation<std::uintptr_t>{ kNpcFactoryCreateID }.address();
+            const auto npcVtable =
+                REL::Relocation<std::uintptr_t>{ kNpcPrimaryVtableID }.address();
+            const auto destructorAddress =
+                REL::Relocation<std::uintptr_t>{ kNpcScalarDeletingDestructorID }.address();
+            const auto copyAddress =
+                REL::Relocation<std::uintptr_t>{ kNpcCopyAppearanceID }.address();
+            const auto shapeAddress =
+                REL::Relocation<std::uintptr_t>{ kNpcSetShapeBlendID }.address();
+            const auto bodyAddress =
+                REL::Relocation<std::uintptr_t>{ kNpcSetBodyMorphID }.address();
+            const auto boneAddress =
+                REL::Relocation<std::uintptr_t>{ kNpcSetBoneValueID }.address();
+            const auto boneGroupAddress =
+                REL::Relocation<std::uintptr_t>{ kNpcSetBoneGroupValueID }.address();
+            const auto removeHeadAddress =
+                REL::Relocation<std::uintptr_t>{ kNpcRemoveHeadPartID }.address();
+            const auto changeHeadAddress =
+                REL::Relocation<std::uintptr_t>{ kNpcChangeHeadPartID }.address();
+            const auto resolveEntryAddress =
+                REL::Relocation<std::uintptr_t>{ kFaceDbResolveEntryID }.address();
+            const auto setAvmAddress =
+                REL::Relocation<std::uintptr_t>{ kNpcSetAvmDataID }.address();
+            const auto removeAvmAddress =
+                REL::Relocation<std::uintptr_t>{ kNpcRemoveAvmDataID }.address();
+            const auto ownedCopyAddress = kNpcOwnedVisualCopyOffset.address();
+
+            if (!Util::IsReadableRange(factoryAddress, sizeof(std::uintptr_t)) ||
+                *reinterpret_cast<const std::uintptr_t*>(factoryAddress) != factoryVtable ||
+                !Util::IsReadableRange(
+                    factoryVtable + sizeof(std::uintptr_t), sizeof(std::uintptr_t)) ||
+                *reinterpret_cast<const std::uintptr_t*>(
+                    factoryVtable + sizeof(std::uintptr_t)) != createAddress ||
+                !HasExpectedBytes(createAddress, kNpcFactoryCreateGate) ||
+                !HasExpectedBytes(destructorAddress, kNpcDestructorGate) ||
+                !HasExpectedBytes(copyAddress, kNpcCopyAppearanceGate) ||
+                !HasExpectedBytes(shapeAddress, kNpcSetShapeBlendGate) ||
+                !HasExpectedBytes(bodyAddress, kNpcSetBodyMorphGate) ||
+                !HasExpectedBytes(boneAddress, kNpcSetBoneValueGate) ||
+                !HasExpectedBytes(boneGroupAddress, kNpcSetBoneGroupValueGate) ||
+                !HasExpectedBytes(removeHeadAddress, kNpcRemoveHeadPartGate) ||
+                !HasExpectedBytes(changeHeadAddress, kNpcChangeHeadPartGate) ||
+                !HasExpectedBytes(resolveEntryAddress, kFaceDbResolveEntryGate) ||
+                !HasExpectedBytes(setAvmAddress, kNpcSetAvmDataGate) ||
+                !HasExpectedBytes(removeAvmAddress, kNpcRemoveAvmDataGate) ||
+                !HasExpectedBytes(ownedCopyAddress, kNpcOwnedVisualCopyGate)) {
+                KillMutation("silent preset apply byte gate failed");
+                a_out("silentapply: population/copy/destructor contract mismatch; FAIL CLOSED");
+                return false;
+            }
+
+            const auto resolveEntry =
+                reinterpret_cast<ResolveFaceDbEntry>(resolveEntryAddress);
+            std::vector<MaterializedAvmLayer> expectedAvms;
+            if (!MaterializeAvmLayers(
+                    a_out, *decoded.preset, resolveEntry, expectedAvms)) {
+                a_out("silentapply: AVM materialization incomplete; no mutation");
+                return false;
+            }
+
+            const auto create = reinterpret_cast<CreateNpc>(createAddress);
+            const auto copy = reinterpret_cast<CopyNpcAppearance>(copyAddress);
+            const auto ownedCopy = reinterpret_cast<OwnedVisualCopy>(ownedCopyAddress);
+            const auto setShape = reinterpret_cast<SetShapeBlend>(shapeAddress);
+            const auto setBody = reinterpret_cast<SetBodyMorph>(bodyAddress);
+            const auto setBone = reinterpret_cast<SetFacialBone>(boneAddress);
+            const auto ensureBoneGroup =
+                reinterpret_cast<EnsureFacialBoneGroup>(boneGroupAddress);
+            const auto removeHeadPart =
+                reinterpret_cast<RemoveHeadPart>(removeHeadAddress);
+            const auto changeHeadPart =
+                reinterpret_cast<ChangeHeadPart>(changeHeadAddress);
+            const auto setAvmData = reinterpret_cast<SetAvmData>(setAvmAddress);
+            const auto removeAvmData =
+                reinterpret_cast<RemoveAvmData>(removeAvmAddress);
+            const auto destroy = reinterpret_cast<DestroyNpc>(destructorAddress);
+
+            const auto targetNonVisualBefore = Snapshot(a_target);
+            const auto targetVisualBefore = SnapshotVisualSeed(a_target);
+            const auto originalActorFlags =
+                a_target->actorData.actorBaseFlags.underlying();
+            auto* const originalFaceNPC = a_target->faceNPC;
+
+            ScopedNpcDonor backupDonor{
+                create(reinterpret_cast<void*>(factoryAddress), false),
+                NpcDonorDeleter{ destroy }
+            };
+            ScopedNpcDonor presetDonor{
+                create(reinterpret_cast<void*>(factoryAddress), false),
+                NpcDonorDeleter{ destroy }
+            };
+            if (!backupDonor || !presetDonor) {
+                a_out("silentapply: failed to create the donor pair; no mutation");
+                return false;
+            }
+            const auto backupFormID = backupDonor->GetFormID();
+            const auto presetFormID = presetDonor->GetFormID();
+            const auto initialized = [&](RE::TESNPC* a_donor, RE::TESFormID a_formID) {
+                return *reinterpret_cast<const std::uintptr_t*>(a_donor) == npcVtable &&
+                    a_formID != 0 &&
+                    RE::TESForm::LookupByID<RE::TESNPC>(a_formID) == a_donor &&
+                    a_donor->QRefCount() == 0 && a_donor->unk3D8 == nullptr &&
+                    a_donor->unk3E0 == nullptr && a_donor->unk3E8 == nullptr &&
+                    a_donor->shapeBlendData == nullptr && a_donor->tintAVMData.empty();
+            };
+            if (!initialized(backupDonor.get(), backupFormID) ||
+                !initialized(presetDonor.get(), presetFormID)) {
+                a_out("silentapply: donor pair failed registered-empty invariants; no mutation");
+                return false;
+            }
+
+            copy(backupDonor.get(), a_target, false);
+            copy(presetDonor.get(), a_target, false);
+            PopulatePresetMorphs(
+                presetDonor.get(), *decoded.preset, setShape, setBody,
+                setBone, ensureBoneGroup);
+            PopulatePresetVisuals(
+                presetDonor.get(), *decoded.preset, resolved, expectedAvms,
+                removeHeadPart, changeHeadPart, setAvmData, removeAvmData);
+
+            const bool backupExact =
+                SameExactVisualValues(backupDonor.get(), a_target);
+            const bool backupIndependent = HasIndependentVisualStorage(
+                targetVisualBefore, SnapshotVisualSeed(backupDonor.get()));
+            const bool presetMorphsValid = ValidateDonorMorphPopulation(
+                a_out, presetDonor.get(), *decoded.preset);
+            const bool presetVisualsValid = ValidateDonorVisualPopulation(
+                a_out, presetDonor.get(), *decoded.preset, resolved, expectedAvms);
+            const bool bodyCompatible = backupDonor->unk3D8 &&
+                backupDonor->unk3D8->size() ==
+                    decoded.preset->bodyMorphRegionValues.size();
+            if (!backupExact || !backupIndependent || !presetMorphsValid ||
+                !presetVisualsValid || !bodyCompatible ||
+                targetNonVisualBefore != Snapshot(a_target) ||
+                targetVisualBefore != SnapshotVisualSeed(a_target)) {
+                a_out(std::format(
+                    "silentapply: preflight failed backupExact={} backupIndependent={} presetMorphsValid={} presetVisualsValid={} bodyCompatible={}; no mutation",
+                    backupExact, backupIndependent, presetMorphsValid,
+                    presetVisualsValid, bodyCompatible));
+                return false;
+            }
+
+            presetDonor->faceNPC = nullptr;
+            a_target->morphWeight.thin =
+                static_cast<float>(decoded.preset->morphWeights.x);
+            a_target->morphWeight.muscular =
+                static_cast<float>(decoded.preset->morphWeights.y);
+            a_target->morphWeight.fat =
+                static_cast<float>(decoded.preset->morphWeights.z);
+            for (std::size_t i = 0;
+                 i < decoded.preset->bodyMorphRegionValues.size(); ++i) {
+                setBody(
+                    a_target, static_cast<std::uint32_t>(i),
+                    static_cast<float>(decoded.preset->bodyMorphRegionValues[i]));
+            }
+            a_target->skinToneIndex =
+                static_cast<std::uint8_t>(decoded.preset->skinTone);
+            ownedCopy(a_target, presetDonor.get(), false);
+
+            const bool targetMorphsValid = ValidateDonorMorphPopulation(
+                a_out, a_target, *decoded.preset);
+            const bool targetVisualsValid = ValidateDonorVisualPopulation(
+                a_out, a_target, *decoded.preset, resolved, expectedAvms);
+            const bool targetMatchesPreset =
+                SameExactVisualValues(a_target, presetDonor.get());
+            const bool targetStorageIndependent = HasIndependentVisualStorage(
+                SnapshotVisualSeed(presetDonor.get()), SnapshotVisualSeed(a_target));
+            const bool targetNonVisualPreserved =
+                targetNonVisualBefore == Snapshot(a_target);
+            const bool applied = targetMorphsValid && targetVisualsValid &&
+                targetMatchesPreset && targetStorageIndependent &&
+                targetNonVisualPreserved && a_target->faceNPC == nullptr;
+
+            if (!applied) {
+                a_target->morphWeight = backupDonor->morphWeight;
+                for (std::uint32_t i = 0; i < backupDonor->unk3D8->size(); ++i) {
+                    setBody(a_target, i, (*backupDonor->unk3D8)[i]);
+                }
+                a_target->skinToneIndex = backupDonor->skinToneIndex;
+                ownedCopy(a_target, backupDonor.get(), false);
+                a_target->faceNPC = originalFaceNPC;
+                a_target->actorData.actorBaseFlags =
+                    static_cast<RE::ACTOR_BASE_DATA::Flag>(originalActorFlags);
+                const bool rolledBack =
+                    SameExactVisualValues(a_target, backupDonor.get()) &&
+                    a_target->faceNPC == originalFaceNPC &&
+                    targetNonVisualBefore == Snapshot(a_target);
+                a_out(std::format(
+                    "silentapply: post-validate failed morphs={} visuals={} matchesPreset={} storageIndependent={} nonVisualPreserved={} faceNPCCleared={}; rolledBack={}",
+                    targetMorphsValid, targetVisualsValid, targetMatchesPreset,
+                    targetStorageIndependent, targetNonVisualPreserved,
+                    a_target->faceNPC == nullptr, rolledBack));
+                if (!rolledBack) {
+                    KillMutation("silent preset apply rollback failed");
+                }
+            }
+
+            presetDonor.reset();
+            backupDonor.reset();
+            const bool donorsUnregistered =
+                RE::TESForm::LookupByID<RE::TESNPC>(presetFormID) == nullptr &&
+                RE::TESForm::LookupByID<RE::TESNPC>(backupFormID) == nullptr;
+            a_out(std::format(
+                "silentapply: applied={} morphsValid={} visualsValid={} matchesPreset={} storageIndependent={} nonVisualPreserved={} donorsUnregistered={} faceNPCCleared={}",
+                applied, targetMorphsValid, targetVisualsValid, targetMatchesPreset,
+                targetStorageIndependent, targetNonVisualPreserved,
+                donorsUnregistered, applied && a_target->faceNPC == nullptr));
+            if (!donorsUnregistered) {
+                KillMutation("silent preset donor teardown failed");
+            }
+            return applied && donorsUnregistered;
+        }
+
         void RunTargetTrial(const LineSink& a_out, const std::vector<std::string>& a_args,
                             const TargetTrialMode a_mode, bool* const a_completed)
         {
@@ -3893,14 +4686,14 @@ namespace NpcAppearance
             }
             if (a_args.size() < 5) {
                 a_out(persistentLatch ?
-                          "usage: npcapp targetpersistent <editorID> <actorRefID> <preset.npc>" :
+                          "usage: npcapp targetpersistent <editorID|plugin:localFormID> <actorRefID> <preset.npc>" :
                       ownedSnapshotLatch ?
-                          "usage: npcapp targetsnapshot <editorID> <actorRefID> <preset.npc>" :
+                          "usage: npcapp targetsnapshot <editorID|plugin:localFormID> <actorRefID> <preset.npc>" :
                       renderLatch ?
-                          "usage: npcapp targetlatch <editorID> <actorRefID> <preset.npc>" :
+                          "usage: npcapp targetlatch <editorID|plugin:localFormID> <actorRefID> <preset.npc>" :
                           holdForVisualProof ?
-                              "usage: npcapp targethold <editorID> <actorRefID> <preset.npc>" :
-                              "usage: npcapp targettrial <editorID> <actorRefID> <preset.npc>");
+                              "usage: npcapp targethold <editorID|plugin:localFormID> <actorRefID> <preset.npc>" :
+                              "usage: npcapp targettrial <editorID|plugin:localFormID> <actorRefID> <preset.npc>");
                 return;
             }
             if (TargetHoldActive()) {
@@ -3912,7 +4705,12 @@ namespace NpcAppearance
                 a_out("targettrial: invalid actorRefID");
                 return;
             }
-            auto* target = ResolveEligibleTarget(a_out, Target{ a_args[2] });
+            const auto targetIdentity = ParseTargetToken(a_args[2]);
+            if (!targetIdentity) {
+                a_out("targettrial: invalid target token");
+                return;
+            }
+            auto* target = ResolveEligibleTarget(a_out, *targetIdentity);
             if (!target) {
                 return;
             }
@@ -3984,6 +4782,7 @@ namespace NpcAppearance
                 !HasExpectedBytes(removeAvmAddress, kNpcRemoveAvmDataGate) ||
                 !HasExpectedBytes(ownedCopyAddress, kNpcOwnedVisualCopyGate) ||
                 !HasExpectedBytes(refreshAddress, kActorAppearanceRefreshGate)) {
+                KillMutation("target trial byte gate failed");
                 a_out("targettrial: population/copy/refresh/destructor contract mismatch; FAIL CLOSED");
                 return;
             }
@@ -3998,12 +4797,10 @@ namespace NpcAppearance
             using Create = RE::TESNPC* (*)(void*, bool);
             using Copy = void (*)(RE::TESNPC*, RE::TESNPC*, bool);
             using OwnedCopy = void (*)(RE::TESNPC*, RE::TESNPC*, bool);
-            using Refresh = void (*)(RE::Actor*, bool, std::uint32_t, bool);
             using Destroy = RE::TESNPC* (*)(RE::TESNPC*, std::uint32_t);
             const auto create = reinterpret_cast<Create>(createAddress);
             const auto copy = reinterpret_cast<Copy>(copyAddress);
             const auto ownedCopy = reinterpret_cast<OwnedCopy>(ownedCopyAddress);
-            const auto refresh = reinterpret_cast<Refresh>(refreshAddress);
             const auto setShape = reinterpret_cast<SetShapeBlend>(shapeAddress);
             const auto setBody = reinterpret_cast<SetBodyMorph>(bodyAddress);
             const auto setBone = reinterpret_cast<SetFacialBone>(boneAddress);
@@ -4118,11 +4915,7 @@ namespace NpcAppearance
             bool refreshIssued = false;
             if (applyValidated) {
                 actor3DLoaded = HasLoaded3D(actor);
-                NotifyBaseAppearanceChanged(target, 0x800);
-                NotifyBaseAppearanceChanged(target, 0x4000);
-                SuppressNextSceneSet3d(*actorRefID);
-                refresh(actor, false, 0x28, false);
-                refreshIssued = true;
+                refreshIssued = NotifyAndKick(target, actor, *actorRefID);
             }
             const auto targetNonVisualAfterApplyRefresh = Snapshot(target);
             const auto applyRefreshDirtyMask =
@@ -4182,10 +4975,7 @@ namespace NpcAppearance
                                 return;
                             }
 
-                            NotifyBaseAppearanceChanged(target, 0x800);
-                            NotifyBaseAppearanceChanged(target, 0x4000);
-                            SuppressNextSceneSet3d(*actorRefID);
-                            refresh(actor, false, 0x28, false);
+                            static_cast<void>(NotifyAndKick(target, actor, *actorRefID));
                             target->actorData.actorBaseFlags =
                                 static_cast<RE::ACTOR_BASE_DATA::Flag>(originalActorFlags);
                             a_out("targetpersistent: donor teardown did not unregister both forms; original-base refresh issued and assignment not retained");
@@ -4257,10 +5047,7 @@ namespace NpcAppearance
                                     RE::TESForm::LookupByID<RE::TESNPC>(presetFormID) == nullptr;
                                 state->donorsDestroyedBeforeWait = donorsDestroyedBeforeWait;
                                 if (!donorsDestroyedBeforeWait) {
-                                    NotifyBaseAppearanceChanged(target, 0x800);
-                                    NotifyBaseAppearanceChanged(target, 0x4000);
-                                    SuppressNextSceneSet3d(*actorRefID);
-                                    refresh(actor, false, 0x28, false);
+                                    static_cast<void>(NotifyAndKick(target, actor, *actorRefID));
                                     target->actorData.actorBaseFlags =
                                         static_cast<RE::ACTOR_BASE_DATA::Flag>(originalActorFlags);
                                     a_out("targetsnapshot: donor teardown did not unregister both forms; original-base refresh issued and no hold armed");
@@ -4333,10 +5120,7 @@ namespace NpcAppearance
                 restoreAttempts = 2;
             }
             if (refreshIssued) {
-                NotifyBaseAppearanceChanged(target, 0x800);
-                NotifyBaseAppearanceChanged(target, 0x4000);
-                SuppressNextSceneSet3d(*actorRefID);
-                refresh(actor, false, 0x28, false);
+                refreshIssued = NotifyAndKick(target, actor, *actorRefID);
             }
             const auto targetNonVisualAfterRestoreRefreshRaw = Snapshot(target);
             const auto restoreRefreshDirtyMask =
@@ -4471,6 +5255,1096 @@ namespace NpcAppearance
                       : "copyref: FAIL nonvisual snapshot changed; do not use this path");
         }
 
+        [[nodiscard]] bool ExactOriginalState(
+            RE::TESNPC* a_target,
+            const AppliedBaseState& a_state)
+        {
+            return a_target &&
+                SameExactVisualValues(a_target, a_state.originalVisual) &&
+                a_target->faceNPC == a_state.originalFaceNPC &&
+                a_target->actorData.actorBaseFlags.underlying() ==
+                    a_state.originalActorFlags &&
+                a_state.originalNonVisual == Snapshot(a_target);
+        }
+
+        [[nodiscard]] bool RestoreAppliedBaseState(
+            const LineSink& a_out,
+            RE::TESNPC* a_target,
+            const AppliedBaseState& a_state)
+        {
+            const bool visualRestored = RestoreOwnedVisualSnapshot(
+                a_out, a_target, a_state.originalVisual, a_state.originalFaceNPC);
+            if (a_target) {
+                a_target->actorData.actorBaseFlags =
+                    static_cast<RE::ACTOR_BASE_DATA::Flag>(
+                        a_state.originalActorFlags);
+            }
+            return visualRestored && ExactOriginalState(a_target, a_state);
+        }
+
+        [[nodiscard]] bool QueueOrRunNativeTask(
+            std::function<void()> a_task,
+            const std::string_view a_label)
+        {
+            const auto before = Util::NativeMainThreadQueue::GetDiagnostics();
+            if (before.insideDrain) {
+                try {
+                    a_task();
+                    return true;
+                } catch (const std::exception& e) {
+                    REX::CRITICAL(
+                        "[NpcAppearance] native task '{}' threw '{}' inside the verified drain",
+                        a_label, e.what());
+                } catch (...) {
+                    REX::CRITICAL(
+                        "[NpcAppearance] native task '{}' threw inside the verified drain",
+                        a_label);
+                }
+                return false;
+            }
+
+            const auto postResult = Util::NativeMainThreadQueue::Post(
+                std::move(a_task), a_label);
+            if (postResult == Util::NativeMainThreadQueue::PostResult::kQueued) {
+                return true;
+            }
+            REX::CRITICAL(
+                "[NpcAppearance] native task '{}' post failed result={} tid={} drainOwnerTid={} queueEnabled={}",
+                a_label, Util::NativeMainThreadQueue::ToString(postResult),
+                before.currentThreadID, before.drainOwnerThreadID,
+                before.queueEnabled);
+            return false;
+        }
+
+        [[nodiscard]] bool RestoreBasesForSave(
+            const std::uint64_t a_entry,
+            const std::vector<AppliedBaseState>& a_states)
+        {
+            const auto totalStarted = std::chrono::steady_clock::now();
+            const auto diagnostics =
+                Util::NativeMainThreadQueue::GetDiagnostics();
+            if (!diagnostics.insideDrain) {
+                REX::CRITICAL(
+                    "[NpcAppearance] C2 PRE-SAVE entry={} reached outside the verified native drain tid={} drainOwnerTid={}; no game-object access",
+                    a_entry, diagnostics.currentThreadID,
+                    diagnostics.drainOwnerThreadID);
+                return false;
+            }
+
+            std::size_t restoredCount = 0;
+            std::size_t failedCount = 0;
+            for (const auto& state : a_states) {
+                const auto started = std::chrono::steady_clock::now();
+                bool restoredExact = false;
+                try {
+                    auto* target =
+                        RE::TESForm::LookupByID<RE::TESNPC>(state.baseID);
+                    const LineSink out = [baseID = state.baseID](
+                                             const std::string& a_text) {
+                        REX::INFO(
+                            "[NpcAppearance] C2 bracket base=0x{:08X}: {}",
+                            baseID, a_text);
+                    };
+                    restoredExact = RestoreAppliedBaseState(out, target, state);
+                } catch (const std::exception& e) {
+                    REX::CRITICAL(
+                        "[NpcAppearance] C2 PRE-SAVE target=0x{:08X} restore threw '{}'; swallowed per target",
+                        state.baseID, e.what());
+                } catch (...) {
+                    REX::CRITICAL(
+                        "[NpcAppearance] C2 PRE-SAVE target=0x{:08X} restore threw; swallowed per target",
+                        state.baseID);
+                }
+
+                {
+                    const std::scoped_lock lock{ g_appliedBasesMutex };
+                    const auto found = g_appliedBases.find(state.baseID);
+                    if (found != g_appliedBases.end()) {
+                        if (restoredExact) {
+                            g_saveEntryRestoredBases.insert(state.baseID);
+                        } else {
+                            found->second.bracketFailed = true;
+                        }
+                    } else {
+                        restoredExact = false;
+                    }
+                }
+                if (restoredExact) {
+                    ++restoredCount;
+                } else {
+                    ++failedCount;
+                }
+                const auto elapsedMs = std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - started).count();
+                REX::INFO(
+                    "[NpcAppearance] C2 PRE-SAVE entry={} target=0x{:08X} tid={} insideDrain={} drainOwnerTid={} restoredExact={} bracketFailed={} ms={:.3f}",
+                    a_entry, state.baseID, ::GetCurrentThreadId(),
+                    diagnostics.insideDrain, diagnostics.drainOwnerThreadID,
+                    restoredExact, !restoredExact, elapsedMs);
+                if (!restoredExact) {
+                    REX::CRITICAL(
+                        "[NpcAppearance] C2 PRE-SAVE target=0x{:08X} exact restoration FAILED; engine save must be vetoed",
+                        state.baseID);
+                }
+            }
+
+            const auto totalMs = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - totalStarted).count();
+            REX::INFO(
+                "[NpcAppearance] C2 PRE-SAVE done entry={} targets={} restored={} failed={} tid={} insideDrain={} ms={:.3f}",
+                a_entry, a_states.size(), restoredCount, failedCount,
+                ::GetCurrentThreadId(), diagnostics.insideDrain, totalMs);
+            return failedCount == 0;
+        }
+
+        void PumpDeferredC2LoadTask() noexcept
+        {
+            std::shared_ptr<DeferredC2LoadTask> pending;
+            try {
+                {
+                    const std::scoped_lock lock{ g_deferredC2LoadMutex };
+                    if (!g_deferredC2LoadTask || g_deferredC2LoadInFlight) {
+                        return;
+                    }
+                    pending = g_deferredC2LoadTask;
+                    g_deferredC2LoadInFlight = true;
+                }
+
+                auto execute = [pending] {
+                    bool complete = true;
+                    std::uint32_t attempt = 0;
+                    try {
+                        {
+                            const std::scoped_lock lock{ g_deferredC2LoadMutex };
+                            attempt = ++pending->attempts;
+                        }
+                        complete = pending->run(attempt);
+                        if (!complete &&
+                            attempt >= kC2LoadReadyMaxNativeFrames) {
+                            KillMutation("load-return actor readiness timed out");
+                            REX::CRITICAL(
+                                "[NpcAppearance] C2 LOAD-RETURN generation={} readiness TIMEOUT after {} verified native frames; no mutation",
+                                pending->generation, attempt);
+                            complete = true;
+                        }
+                    } catch (const std::exception& e) {
+                        KillMutation("deferred load-return native task threw");
+                        REX::CRITICAL(
+                            "[NpcAppearance] deferred C2 LOAD-RETURN generation={} threw '{}' inside the verified drain",
+                            pending->generation, e.what());
+                    } catch (...) {
+                        KillMutation("deferred load-return native task threw");
+                        REX::CRITICAL(
+                            "[NpcAppearance] deferred C2 LOAD-RETURN generation={} threw inside the verified drain",
+                            pending->generation);
+                    }
+                    const std::scoped_lock lock{ g_deferredC2LoadMutex };
+                    if (complete && g_deferredC2LoadTask == pending) {
+                        g_deferredC2LoadTask.reset();
+                    }
+                    g_deferredC2LoadInFlight = false;
+                };
+
+                const auto diagnostics =
+                    Util::NativeMainThreadQueue::GetDiagnostics();
+                if (diagnostics.insideDrain) {
+                    execute();
+                    return;
+                }
+
+                const auto postResult = Util::NativeMainThreadQueue::Post(
+                    std::move(execute), "NpcAppearance.C2.LoadApply");
+                if (postResult ==
+                    Util::NativeMainThreadQueue::PostResult::kQueued) {
+                    if (pending->attempts == 0) {
+                        REX::INFO(
+                            "[NpcAppearance] C2 LOAD-RETURN generation={} queued for verified native drain after queueDeferral={}",
+                            pending->generation, pending->deferralLogged);
+                    }
+                    return;
+                }
+
+                bool logDeferral = false;
+                {
+                    const std::scoped_lock lock{ g_deferredC2LoadMutex };
+                    g_deferredC2LoadInFlight = false;
+                    if (g_deferredC2LoadTask == pending &&
+                        !pending->deferralLogged) {
+                        pending->deferralLogged = true;
+                        logDeferral = true;
+                    }
+                }
+                if (logDeferral) {
+                    REX::INFO(
+                        "[NpcAppearance] C2 LOAD-RETURN generation={} deferred until native queue is available result={} tid={} queueEnabled={} singleton=0x{:X}",
+                        pending->generation,
+                        Util::NativeMainThreadQueue::ToString(postResult),
+                        diagnostics.currentThreadID, diagnostics.queueEnabled,
+                        diagnostics.singleton);
+                }
+            } catch (const std::exception& e) {
+                {
+                    const std::scoped_lock lock{ g_deferredC2LoadMutex };
+                    g_deferredC2LoadInFlight = false;
+                }
+                KillMutation("deferred load-return scheduling threw");
+                REX::CRITICAL(
+                    "[NpcAppearance] deferred C2 LOAD-RETURN scheduling threw '{}'; no mutation",
+                    e.what());
+            } catch (...) {
+                {
+                    const std::scoped_lock lock{ g_deferredC2LoadMutex };
+                    g_deferredC2LoadInFlight = false;
+                }
+                KillMutation("deferred load-return scheduling threw");
+                REX::CRITICAL(
+                    "[NpcAppearance] deferred C2 LOAD-RETURN scheduling threw; no mutation");
+            }
+        }
+
+        void PumpDeferredC2SaveTask() noexcept
+        {
+            std::shared_ptr<DeferredC2SaveTask> pending;
+            try {
+                {
+                    const std::scoped_lock lock{ g_deferredC2SaveMutex };
+                    if (!g_deferredC2SaveTask || g_deferredC2SaveInFlight) {
+                        return;
+                    }
+                    pending = g_deferredC2SaveTask;
+                    g_deferredC2SaveInFlight = true;
+                }
+
+                auto execute = [pending] {
+                    try {
+                        pending->run();
+                    } catch (const std::exception& e) {
+                        KillMutation("deferred save-return native task threw");
+                        REX::CRITICAL(
+                            "[NpcAppearance] deferred C2 SAVE-RETURN sequence={} threw '{}' inside the verified drain; restored originals remain at rest",
+                            pending->sequence, e.what());
+                    } catch (...) {
+                        KillMutation("deferred save-return native task threw");
+                        REX::CRITICAL(
+                            "[NpcAppearance] deferred C2 SAVE-RETURN sequence={} threw inside the verified drain; restored originals remain at rest",
+                            pending->sequence);
+                    }
+                    const std::scoped_lock lock{ g_deferredC2SaveMutex };
+                    if (g_deferredC2SaveTask == pending) {
+                        g_deferredC2SaveTask.reset();
+                    }
+                    g_deferredC2SaveInFlight = false;
+                };
+
+                const auto diagnostics =
+                    Util::NativeMainThreadQueue::GetDiagnostics();
+                if (diagnostics.insideDrain) {
+                    execute();
+                    return;
+                }
+
+                const auto postResult = Util::NativeMainThreadQueue::Post(
+                    std::move(execute), "NpcAppearance.C2.SaveReapply");
+                if (postResult ==
+                    Util::NativeMainThreadQueue::PostResult::kQueued) {
+                    REX::INFO(
+                        "[NpcAppearance] C2 SAVE-RETURN sequence={} queued for verified native drain after queueDeferral={}",
+                        pending->sequence, pending->deferralLogged);
+                    return;
+                }
+
+                bool logDeferral = false;
+                {
+                    const std::scoped_lock lock{ g_deferredC2SaveMutex };
+                    g_deferredC2SaveInFlight = false;
+                    if (g_deferredC2SaveTask == pending &&
+                        !pending->deferralLogged) {
+                        pending->deferralLogged = true;
+                        logDeferral = true;
+                    }
+                }
+                if (logDeferral) {
+                    REX::INFO(
+                        "[NpcAppearance] C2 SAVE-RETURN sequence={} deferred until native queue is available result={} tid={} queueEnabled={} singleton=0x{:X}; restored originals remain at rest",
+                        pending->sequence,
+                        Util::NativeMainThreadQueue::ToString(postResult),
+                        diagnostics.currentThreadID, diagnostics.queueEnabled,
+                        diagnostics.singleton);
+                }
+            } catch (const std::exception& e) {
+                {
+                    const std::scoped_lock lock{ g_deferredC2SaveMutex };
+                    g_deferredC2SaveInFlight = false;
+                }
+                KillMutation("deferred save-return scheduling threw");
+                REX::CRITICAL(
+                    "[NpcAppearance] deferred C2 SAVE-RETURN scheduling threw '{}'; restored originals remain at rest",
+                    e.what());
+            } catch (...) {
+                {
+                    const std::scoped_lock lock{ g_deferredC2SaveMutex };
+                    g_deferredC2SaveInFlight = false;
+                }
+                KillMutation("deferred save-return scheduling threw");
+                REX::CRITICAL(
+                    "[NpcAppearance] deferred C2 SAVE-RETURN scheduling threw; restored originals remain at rest");
+            }
+        }
+
+        [[nodiscard]] bool OnSaveGameEntryImpl() noexcept
+        {
+            if (!g_bracketArmed.load(std::memory_order_acquire)) {
+                return true;
+            }
+            try {
+                std::size_t tracked = 0;
+                std::size_t restored = 0;
+                {
+                    const std::scoped_lock lock{ g_appliedBasesMutex };
+                    tracked = g_appliedBases.size();
+                    restored = g_saveEntryRestoredBases.size();
+                }
+                if (tracked == 0) {
+                    REX::INFO(
+                        "[NpcAppearance] C2 SAVE-ENTRY no tracked mutation; engine save allowed without a bracket tid={}",
+                        ::GetCurrentThreadId());
+                    return true;
+                }
+                g_saveHookObserved.store(true, std::memory_order_release);
+                if (!MutationOperational()) {
+                    KillMutation("save/load hook provider lost ownership at save entry");
+                    REX::CRITICAL(
+                        "[NpcAppearance] C2 SAVE-ENTRY mutation is not operational; save veto requested");
+                    return false;
+                }
+                if (!g_saveLoadEventRegistered.load(std::memory_order_acquire)) {
+                    KillMutation("save entry arrived without SaveLoadEvent pre-save registration");
+                    REX::CRITICAL(
+                        "[NpcAppearance] C2 SAVE-ENTRY tracked={} but the pre-save event sink is not registered; save veto requested",
+                        tracked);
+                    return false;
+                }
+
+                const bool active =
+                    g_inBracket.load(std::memory_order_acquire);
+                const bool ready =
+                    g_preSaveReady.exchange(false, std::memory_order_acq_rel);
+                const bool reentrant =
+                    g_saveGatewayEntered.exchange(true, std::memory_order_acq_rel);
+                if (!active || !ready || reentrant || restored != tracked) {
+                    g_saveGatewayEntered.store(false, std::memory_order_release);
+                    g_preSaveGeneration.fetch_add(1, std::memory_order_acq_rel);
+                    KillMutation("pre-save restoration was not ready at engine save entry");
+                    REX::CRITICAL(
+                        "[NpcAppearance] C2 SAVE-ENTRY pre-save validation FAILED active={} ready={} reentrant={} tracked={} restored={}; SAVE VETO requested and engine gateway must not run",
+                        active, ready, reentrant, tracked, restored);
+                    return false;
+                }
+
+                REX::INFO(
+                    "[NpcAppearance] C2 SAVE-ENTRY accepted pre-restored bracket entry={} tracked={} restored={} tid={}; engine gateway may run",
+                    g_bracketSaveEntries.load(std::memory_order_relaxed),
+                    tracked, restored, ::GetCurrentThreadId());
+                return true;
+            } catch (const std::exception& e) {
+                REX::CRITICAL(
+                    "[NpcAppearance] C2 SAVE-ENTRY callback threw '{}'; save veto requested",
+                    e.what());
+            } catch (...) {
+                REX::CRITICAL(
+                    "[NpcAppearance] C2 SAVE-ENTRY callback threw; save veto requested");
+            }
+            KillMutation("save-entry callback threw");
+            return false;
+        }
+
+        void OnSaveGameReturnImpl() noexcept
+        {
+            if (!g_bracketArmed.load(std::memory_order_acquire)) {
+                return;
+            }
+            try {
+                g_saveGatewayEntered.store(false, std::memory_order_release);
+                g_preSaveReady.store(false, std::memory_order_release);
+                g_preSaveGeneration.fetch_add(1, std::memory_order_acq_rel);
+
+                std::vector<AppliedBaseState> states;
+                {
+                    const std::scoped_lock lock{ g_appliedBasesMutex };
+                    if (!g_inBracket.load(std::memory_order_acquire)) {
+                        REX::INFO(
+                            "[NpcAppearance] C2 SAVE-RETURN has no active pre-save bracket; no tracked mutation was serialized and reapply is unnecessary");
+                        return;
+                    }
+                    states.reserve(g_saveEntryRestoredBases.size());
+                    for (const auto baseID : g_saveEntryRestoredBases) {
+                        const auto found = g_appliedBases.find(baseID);
+                        if (found != g_appliedBases.end() &&
+                            !found->second.bracketFailed) {
+                            states.push_back(found->second);
+                        }
+                    }
+                }
+
+                const auto saveReturn =
+                    g_bracketSaveReturns.fetch_add(1, std::memory_order_relaxed) + 1;
+                auto pending = std::make_shared<DeferredC2SaveTask>();
+                pending->sequence = saveReturn;
+                pending->run = [saveReturn, states = std::move(states)] {
+                        try {
+                            const auto diagnostics =
+                                Util::NativeMainThreadQueue::GetDiagnostics();
+                            if (!diagnostics.insideDrain) {
+                                KillMutation("save-return reapply reached outside verified native drain");
+                                {
+                                    const std::scoped_lock lock{ g_appliedBasesMutex };
+                                    g_saveEntryRestoredBases.clear();
+                                }
+                                g_inBracket.store(false, std::memory_order_release);
+                                REX::CRITICAL(
+                                    "[NpcAppearance] C2 SAVE-RETURN return={} reached outside verified native drain; no game-object access and restored originals remain at rest tid={} drainOwnerTid={}",
+                                    saveReturn, diagnostics.currentThreadID,
+                                    diagnostics.drainOwnerThreadID);
+                                return;
+                            }
+                            if (!MutationOperational()) {
+                                {
+                                    const std::scoped_lock lock{ g_appliedBasesMutex };
+                                    g_saveEntryRestoredBases.clear();
+                                }
+                                g_inBracket.store(false, std::memory_order_release);
+                                REX::CRITICAL(
+                                    "[NpcAppearance] C2 SAVE-RETURN return={} mutation disabled; restored originals remain at rest and reapply is skipped tid={} insideDrain={}",
+                                    saveReturn, ::GetCurrentThreadId(),
+                                    diagnostics.insideDrain);
+                                return;
+                            }
+
+                            const auto totalStarted = std::chrono::steady_clock::now();
+                            std::size_t reappliedCount = 0;
+                            std::size_t failedCount = 0;
+                            for (const auto& state : states) {
+                                bool reapplied = false;
+                                RE::TESNPC* target = nullptr;
+                                try {
+                                    target = RE::TESForm::LookupByID<RE::TESNPC>(state.baseID);
+                                    const LineSink out = [baseID = state.baseID](
+                                                             const std::string& a_text) {
+                                        REX::INFO(
+                                            "[NpcAppearance] C2 reapply base=0x{:08X}: {}",
+                                            baseID, a_text);
+                                    };
+                                    reapplied = target && SilentApplyPresetToBase(
+                                        out, target, state.assignment.presetPath);
+                                    if (!reapplied && target) {
+                                        const bool safeOriginal =
+                                            RestoreAppliedBaseState(out, target, state);
+                                        REX::CRITICAL(
+                                            "[NpcAppearance] C2 SAVE-RETURN target=0x{:08X} reapply failed; exact-original fallback={}",
+                                            state.baseID, safeOriginal);
+                                        if (!safeOriginal) {
+                                            KillMutation("save-return reapply and exact-original fallback failed");
+                                        }
+                                    }
+                                } catch (const std::exception& e) {
+                                    REX::CRITICAL(
+                                        "[NpcAppearance] C2 SAVE-RETURN target=0x{:08X} reapply threw '{}'; swallowed per target",
+                                        state.baseID, e.what());
+                                    try {
+                                        const LineSink fallbackOut = [baseID = state.baseID](
+                                                                         const std::string& a_text) {
+                                            REX::INFO(
+                                                "[NpcAppearance] C2 reapply fallback base=0x{:08X}: {}",
+                                                baseID, a_text);
+                                        };
+                                        const bool safeOriginal = RestoreAppliedBaseState(
+                                            fallbackOut, target, state);
+                                        REX::CRITICAL(
+                                            "[NpcAppearance] C2 SAVE-RETURN target=0x{:08X} exception fallback exactOriginal={}",
+                                            state.baseID, safeOriginal);
+                                        if (!safeOriginal) {
+                                            KillMutation("save-return exception fallback failed");
+                                        }
+                                    } catch (...) {
+                                        KillMutation("save-return exception fallback threw");
+                                    }
+                                } catch (...) {
+                                    REX::CRITICAL(
+                                        "[NpcAppearance] C2 SAVE-RETURN target=0x{:08X} reapply threw; swallowed per target",
+                                        state.baseID);
+                                    try {
+                                        const LineSink fallbackOut = [baseID = state.baseID](
+                                                                         const std::string& a_text) {
+                                            REX::INFO(
+                                                "[NpcAppearance] C2 reapply fallback base=0x{:08X}: {}",
+                                                baseID, a_text);
+                                        };
+                                        const bool safeOriginal = RestoreAppliedBaseState(
+                                            fallbackOut, target, state);
+                                        REX::CRITICAL(
+                                            "[NpcAppearance] C2 SAVE-RETURN target=0x{:08X} exception fallback exactOriginal={}",
+                                            state.baseID, safeOriginal);
+                                        if (!safeOriginal) {
+                                            KillMutation("save-return exception fallback failed");
+                                        }
+                                    } catch (...) {
+                                        KillMutation("save-return exception fallback threw");
+                                    }
+                                }
+
+                                {
+                                    const std::scoped_lock lock{ g_appliedBasesMutex };
+                                    const auto found = g_appliedBases.find(state.baseID);
+                                    if (found != g_appliedBases.end()) {
+                                        found->second.bracketFailed = !reapplied;
+                                    }
+                                }
+                                if (reapplied) {
+                                    ++reappliedCount;
+                                } else {
+                                    ++failedCount;
+                                }
+                            }
+
+                            {
+                                const std::scoped_lock lock{ g_appliedBasesMutex };
+                                g_saveEntryRestoredBases.clear();
+                            }
+                            g_inBracket.store(false, std::memory_order_release);
+                            const auto totalMs = std::chrono::duration<double, std::milli>(
+                                std::chrono::steady_clock::now() - totalStarted).count();
+                            REX::INFO(
+                                "[NpcAppearance] C2 SAVE-RETURN done return={} candidates={} reapplied={} failed={} tid={} insideDrain={} ms={:.3f}",
+                                saveReturn, states.size(), reappliedCount, failedCount,
+                                ::GetCurrentThreadId(), diagnostics.insideDrain, totalMs);
+                        } catch (const std::exception& e) {
+                            {
+                                const std::scoped_lock lock{ g_appliedBasesMutex };
+                                g_saveEntryRestoredBases.clear();
+                            }
+                            g_inBracket.store(false, std::memory_order_release);
+                            KillMutation("save-return native task threw");
+                            REX::CRITICAL(
+                                "[NpcAppearance] C2 SAVE-RETURN native task threw '{}'; restored originals remain at rest",
+                                e.what());
+                        } catch (...) {
+                            {
+                                const std::scoped_lock lock{ g_appliedBasesMutex };
+                                g_saveEntryRestoredBases.clear();
+                            }
+                            g_inBracket.store(false, std::memory_order_release);
+                            KillMutation("save-return native task threw");
+                            REX::CRITICAL(
+                                "[NpcAppearance] C2 SAVE-RETURN native task threw; restored originals remain at rest");
+                        }
+                    };
+                {
+                    const std::scoped_lock lock{ g_deferredC2SaveMutex };
+                    if (g_deferredC2SaveTask) {
+                        KillMutation("overlapping deferred save-return tasks");
+                        REX::CRITICAL(
+                            "[NpcAppearance] C2 SAVE-RETURN return={} found an existing deferred reapply sequence={}; restored originals remain at rest",
+                            saveReturn, g_deferredC2SaveTask->sequence);
+                        return;
+                    }
+                    g_deferredC2SaveTask = std::move(pending);
+                }
+                PumpDeferredC2SaveTask();
+            } catch (const std::exception& e) {
+                {
+                    const std::scoped_lock lock{ g_appliedBasesMutex };
+                    g_saveEntryRestoredBases.clear();
+                }
+                g_inBracket.store(false, std::memory_order_release);
+                KillMutation("save-return callback threw");
+                REX::CRITICAL(
+                    "[NpcAppearance] C2 SAVE-RETURN callback threw '{}'; swallowed at callback boundary",
+                    e.what());
+            } catch (...) {
+                {
+                    const std::scoped_lock lock{ g_appliedBasesMutex };
+                    g_saveEntryRestoredBases.clear();
+                }
+                g_inBracket.store(false, std::memory_order_release);
+                KillMutation("save-return callback threw");
+                REX::CRITICAL(
+                    "[NpcAppearance] C2 SAVE-RETURN callback threw; swallowed at callback boundary");
+            }
+        }
+
+        [[nodiscard]] constexpr bool IsC2SaveOperation(
+            const RE::SaveLoadEvent::OpType a_op) noexcept
+        {
+            switch (a_op) {
+            case RE::SaveLoadEvent::OpType::kAutosave:
+            case RE::SaveLoadEvent::OpType::kQuicksave:
+            case RE::SaveLoadEvent::OpType::kManualSave:
+            case RE::SaveLoadEvent::OpType::kExitSaveToMainMenu:
+            case RE::SaveLoadEvent::OpType::kExitSaveToDesktop:
+                return true;
+            default:
+                return false;
+            }
+        }
+
+        void OnC2SaveLoadEvent(const RE::SaveLoadEvent& a_event) noexcept
+        {
+            if (!g_bracketArmed.load(std::memory_order_acquire) ||
+                !IsC2SaveOperation(a_event.opType)) {
+                return;
+            }
+
+            try {
+                const auto op = static_cast<std::uint32_t>(a_event.opType);
+                const auto status = static_cast<std::uint32_t>(a_event.status);
+                if (a_event.status == RE::SaveLoadEvent::Status::kBegin) {
+                    g_preSaveReady.store(false, std::memory_order_release);
+                    g_saveGatewayEntered.store(false, std::memory_order_release);
+                    g_saveHookObserved.store(false, std::memory_order_release);
+                    const auto generation =
+                        g_preSaveGeneration.fetch_add(
+                            1, std::memory_order_acq_rel) + 1;
+
+                    std::vector<AppliedBaseState> states;
+                    {
+                        const std::scoped_lock lock{ g_appliedBasesMutex };
+                        g_saveEntryRestoredBases.clear();
+                        states.reserve(g_appliedBases.size());
+                        for (auto& [baseID, state] : g_appliedBases) {
+                            static_cast<void>(baseID);
+                            state.bracketFailed = false;
+                            states.push_back(state);
+                        }
+                    }
+                    if (states.empty()) {
+                        g_inBracket.store(false, std::memory_order_release);
+                        REX::INFO(
+                            "[NpcAppearance] C2 PRE-SAVE event op={} status={} generation={} has no tracked mutation; no bracket required tid={}",
+                            op, status, generation, ::GetCurrentThreadId());
+                        return;
+                    }
+                    if (g_inBracket.exchange(true, std::memory_order_acq_rel)) {
+                        KillMutation("overlapping SaveLoadEvent pre-save brackets");
+                        REX::CRITICAL(
+                            "[NpcAppearance] C2 PRE-SAVE event op={} generation={} overlapped an active bracket; save will be vetoed",
+                            op, generation);
+                        return;
+                    }
+
+                    const auto entry =
+                        g_bracketSaveEntries.fetch_add(
+                            1, std::memory_order_relaxed) + 1;
+                    const auto eventTid = ::GetCurrentThreadId();
+                    REX::INFO(
+                        "[NpcAppearance] C2 PRE-SAVE event BEGIN op={} generation={} entry={} targets={} eventTid={}; publishing restoration to verified native drain",
+                        op, generation, entry, states.size(), eventTid);
+                    const bool queued = QueueOrRunNativeTask(
+                        [generation, entry, op, eventTid,
+                         states = std::move(states)] {
+                            if (g_preSaveGeneration.load(
+                                    std::memory_order_acquire) != generation ||
+                                !g_inBracket.load(std::memory_order_acquire)) {
+                                REX::INFO(
+                                    "[NpcAppearance] C2 PRE-SAVE op={} generation={} entry={} superseded before native restoration eventTid={} nativeTid={}; no mutation",
+                                    op, generation, entry, eventTid,
+                                    ::GetCurrentThreadId());
+                                return;
+                            }
+                            if (!MutationOperational()) {
+                                REX::CRITICAL(
+                                    "[NpcAppearance] C2 PRE-SAVE op={} generation={} entry={} mutation is not operational; save will be vetoed",
+                                    op, generation, entry);
+                                return;
+                            }
+                            const bool restored =
+                                RestoreBasesForSave(entry, states);
+                            const bool current =
+                                g_preSaveGeneration.load(
+                                    std::memory_order_acquire) == generation &&
+                                g_inBracket.load(std::memory_order_acquire);
+                            if (restored && current) {
+                                g_preSaveReady.store(
+                                    true, std::memory_order_release);
+                                REX::INFO(
+                                    "[NpcAppearance] C2 PRE-SAVE READY op={} generation={} entry={} targets={} eventTid={} nativeTid={}",
+                                    op, generation, entry, states.size(),
+                                    eventTid, ::GetCurrentThreadId());
+                                return;
+                            }
+                            KillMutation(
+                                "pre-save native restoration failed or was superseded");
+                            REX::CRITICAL(
+                                "[NpcAppearance] C2 PRE-SAVE NOT READY op={} generation={} entry={} restored={} current={}; save will be vetoed",
+                                op, generation, entry, restored, current);
+                        },
+                        "NpcAppearance.C2.PreSaveRestore");
+                    if (!queued) {
+                        KillMutation(
+                            "pre-save restoration could not enter verified native queue");
+                        REX::CRITICAL(
+                            "[NpcAppearance] C2 PRE-SAVE op={} generation={} entry={} could not queue restoration; save will be vetoed",
+                            op, generation, entry);
+                    }
+                    return;
+                }
+
+                if (a_event.status == RE::SaveLoadEvent::Status::kFailed) {
+                    g_preSaveReady.store(false, std::memory_order_release);
+                    g_preSaveGeneration.fetch_add(1, std::memory_order_acq_rel);
+                    const bool hookObserved =
+                        g_saveHookObserved.exchange(
+                            false, std::memory_order_acq_rel);
+                    const bool active =
+                        g_inBracket.load(std::memory_order_acquire);
+                    REX::INFO(
+                        "[NpcAppearance] C2 PRE-SAVE event END op={} status={} failed active={} hookObserved={} elapsedMs={} fileSize={} tid={}",
+                        op, status, active, hookObserved, a_event.elapsedMs,
+                        a_event.fileSizeBytes, ::GetCurrentThreadId());
+                    if (active && !hookObserved) {
+                        REX::INFO(
+                            "[NpcAppearance] C2 PRE-SAVE op={} failed before the save gateway; scheduling restoration-state reapply",
+                            op);
+                        OnSaveGameReturnImpl();
+                    }
+                    return;
+                }
+
+                if (a_event.status ==
+                    RE::SaveLoadEvent::Status::kSaveCompleted) {
+                    const bool hookObserved =
+                        g_saveHookObserved.exchange(
+                            false, std::memory_order_acq_rel);
+                    REX::INFO(
+                        "[NpcAppearance] C2 PRE-SAVE event END op={} status={} completed hookObserved={} elapsedMs={} fileSize={} tid={}",
+                        op, status, hookObserved, a_event.elapsedMs,
+                        a_event.fileSizeBytes, ::GetCurrentThreadId());
+                }
+            } catch (const std::exception& e) {
+                KillMutation("SaveLoadEvent callback threw");
+                g_preSaveReady.store(false, std::memory_order_release);
+                REX::CRITICAL(
+                    "[NpcAppearance] C2 SaveLoadEvent callback threw '{}'; save must fail closed",
+                    e.what());
+            } catch (...) {
+                KillMutation("SaveLoadEvent callback threw");
+                g_preSaveReady.store(false, std::memory_order_release);
+                REX::CRITICAL(
+                    "[NpcAppearance] C2 SaveLoadEvent callback threw; save must fail closed");
+            }
+        }
+
+        class C2SaveLoadEventSink :
+            public RE::BSTEventSink<RE::SaveLoadEvent>
+        {
+        public:
+            static C2SaveLoadEventSink& GetSingleton() noexcept
+            {
+                static C2SaveLoadEventSink singleton;
+                return singleton;
+            }
+
+            RE::BSEventNotifyControl ProcessEvent(
+                const RE::SaveLoadEvent& a_event,
+                RE::BSTEventSource<RE::SaveLoadEvent>*) override
+            {
+                OnC2SaveLoadEvent(a_event);
+                return RE::BSEventNotifyControl::kContinue;
+            }
+        };
+
+        void OnLoadGameReturnImpl() noexcept
+        {
+            if (!g_bracketArmed.load(std::memory_order_acquire)) {
+                return;
+            }
+            try {
+                const auto loadGeneration =
+                    g_bracketLoadGeneration.fetch_add(
+                        1, std::memory_order_acq_rel) + 1;
+                {
+                    const std::scoped_lock lock{ g_appliedBasesMutex };
+                    g_appliedBases.clear();
+                    g_saveEntryRestoredBases.clear();
+                }
+                if (!MutationOperational()) {
+                    KillMutation("save/load hook provider lost ownership at load return");
+                    REX::CRITICAL(
+                        "[NpcAppearance] C2 LOAD-RETURN cleared stale applied-base state but mutation is not operational");
+                    return;
+                }
+
+                const auto loadReturn =
+                    g_bracketLoadReturns.fetch_add(1, std::memory_order_relaxed) + 1;
+                std::vector<std::pair<RE::TESFormID, SelectedAssignment>> assignments;
+                {
+                    const std::scoped_lock lock{ g_eventMutex };
+                    assignments.reserve(g_sceneAssignments.size());
+                    for (const auto& assignment : g_sceneAssignments) {
+                        assignments.push_back(assignment);
+                    }
+                }
+
+                auto pending = std::make_shared<DeferredC2LoadTask>();
+                pending->generation = loadGeneration;
+                pending->run = [loadReturn, loadGeneration,
+                                assignments = std::move(assignments)](
+                                   const std::uint32_t attempt) {
+                try {
+                if (g_bracketLoadGeneration.load(std::memory_order_acquire) !=
+                    loadGeneration) {
+                    REX::WARN(
+                        "[NpcAppearance] C2 LOAD-RETURN return={} generation={} superseded before native execution; no mutation",
+                        loadReturn, loadGeneration);
+                    return true;
+                }
+                if (!MutationOperational()) {
+                    KillMutation("mutation lost before queued load-return work");
+                    REX::CRITICAL(
+                        "[NpcAppearance] C2 LOAD-RETURN return={} generation={} mutation is not operational inside native drain; no mutation",
+                        loadReturn, loadGeneration);
+                    return true;
+                }
+
+                const auto diagnostics =
+                    Util::NativeMainThreadQueue::GetDiagnostics();
+                auto* ui = RE::UI::GetSingleton();
+                const bool menusBlockMutation = !ui ||
+                    ui->IsMenuOpen(RE::BSFixedString{ "MainMenu" }) ||
+                    ui->IsMenuOpen(RE::BSFixedString{ "LoadingMenu" });
+                if (menusBlockMutation) {
+                    if (attempt == 1 || (attempt % 60) == 0) {
+                        REX::INFO(
+                            "[NpcAppearance] C2 LOAD-RETURN return={} generation={} readiness WAIT attempt={} reason=blocking-menu tid={} insideDrain={}",
+                            loadReturn, loadGeneration, attempt,
+                            ::GetCurrentThreadId(), diagnostics.insideDrain);
+                    }
+                    return false;
+                }
+
+                for (const auto& [expectedBaseID, assignment] : assignments) {
+                    const LineSink quietOut = [](const std::string&) {};
+                    auto* target = ResolveEligibleTarget(
+                        quietOut, assignment.target);
+                    if (!target || target->GetFormID() != expectedBaseID) {
+                        KillMutation("load-return readiness target identity mismatch");
+                        REX::CRITICAL(
+                            "[NpcAppearance] C2 LOAD-RETURN return={} generation={} readiness FAILED target={} expectedBase=0x{:08X} resolvedBase={}; no mutation",
+                            loadReturn, loadGeneration,
+                            assignment.target.CanonicalKey(), expectedBaseID,
+                            target ? std::format("0x{:08X}", target->GetFormID()) :
+                                     std::string{ "<none>" });
+                        return true;
+                    }
+                    const auto actorResolution = ResolveTargetActor(target);
+                    if (!actorResolution.actor) {
+                        if (attempt == 1) {
+                            REX::INFO(
+                                "[NpcAppearance] C2 LOAD-RETURN return={} generation={} readiness target=0x{:08X} actorMatches=0 highActors={} processListsValid={}; proceeding with base-only apply and no actor refresh tid={} insideDrain={}",
+                                loadReturn, loadGeneration, expectedBaseID,
+                                actorResolution.highActors,
+                                actorResolution.processListsValid,
+                                ::GetCurrentThreadId(),
+                                diagnostics.insideDrain);
+                        }
+                        continue;
+                    }
+                    const auto refreshAddress =
+                        REL::Relocation<std::uintptr_t>{
+                            kActorAppearanceRefreshID }.address();
+                    if (!HasExpectedBytes(
+                            refreshAddress, kActorAppearanceRefreshGate)) {
+                        KillMutation("load-return readiness refresh byte gate failed");
+                        REX::CRITICAL(
+                            "[NpcAppearance] C2 LOAD-RETURN return={} generation={} readiness FAILED refreshGate=false; no mutation",
+                            loadReturn, loadGeneration);
+                        return true;
+                    }
+                }
+
+                const auto totalStarted = std::chrono::steady_clock::now();
+                std::size_t appliedCount = 0;
+                std::size_t failedCount = 0;
+                for (const auto& [expectedBaseID, assignment] : assignments) {
+                    bool applied = false;
+                    AppliedBaseState state;
+                    RE::TESNPC* target = nullptr;
+                    try {
+                        const LineSink out = [expectedBaseID](
+                                                 const std::string& a_text) {
+                            REX::INFO(
+                                "[NpcAppearance] C2 load base=0x{:08X}: {}",
+                                expectedBaseID, a_text);
+                        };
+                        target = ResolveEligibleTarget(out, assignment.target);
+                        if (!target || target->GetFormID() != expectedBaseID) {
+                            REX::CRITICAL(
+                                "[NpcAppearance] C2 LOAD-RETURN winner target={} expectedBase=0x{:08X} resolvedBase={} mismatch; no mutation",
+                                assignment.target.CanonicalKey(), expectedBaseID,
+                                target ? std::format("0x{:08X}", target->GetFormID()) :
+                                         std::string{ "<none>" });
+                            ++failedCount;
+                            continue;
+                        }
+
+                        const auto actorResolution = ResolveTargetActor(target);
+                        const auto refreshAddress =
+                            REL::Relocation<std::uintptr_t>{
+                                kActorAppearanceRefreshID }.address();
+                        const bool refreshRequired =
+                            actorResolution.actor != nullptr;
+                        if (refreshRequired &&
+                            !HasExpectedBytes(
+                                refreshAddress, kActorAppearanceRefreshGate)) {
+                            KillMutation("load-return refresh byte gate failed");
+                            REX::CRITICAL(
+                                "[NpcAppearance] C2 LOAD-RETURN target=0x{:08X} actorMatches={} highActors={} processListsValid={} refreshRequired=true refreshGate=false; no mutation",
+                                expectedBaseID, actorResolution.matches,
+                                actorResolution.highActors,
+                                actorResolution.processListsValid);
+                            ++failedCount;
+                            continue;
+                        }
+
+                        state = AppliedBaseState{
+                            .baseID = expectedBaseID,
+                            .assignment = assignment,
+                            .originalVisual = CaptureOwnedVisualSnapshot(target),
+                            .originalNonVisual = Snapshot(target),
+                            .originalFaceNPC = target->faceNPC,
+                            .originalActorFlags =
+                                target->actorData.actorBaseFlags.underlying(),
+                            .bracketFailed = false,
+                        };
+                        const bool silentlyApplied = SilentApplyPresetToBase(
+                            out, target, assignment.presetPath);
+                        const bool actorRefreshed = !refreshRequired ||
+                            (silentlyApplied && NotifyAndKick(
+                                target, actorResolution.actor,
+                                actorResolution.actorRefID));
+                        applied = silentlyApplied && actorRefreshed;
+                        if (!applied) {
+                            const bool safeOriginal =
+                                RestoreAppliedBaseState(out, target, state);
+                            REX::CRITICAL(
+                                "[NpcAppearance] C2 LOAD-RETURN target=0x{:08X} apply/refresh failed; exact-original fallback={}; state not recorded",
+                                expectedBaseID, safeOriginal);
+                            if (!safeOriginal) {
+                                KillMutation("load-return apply and exact-original fallback failed");
+                            }
+                        } else {
+                            const std::scoped_lock lock{ g_appliedBasesMutex };
+                            g_appliedBases.insert_or_assign(
+                                expectedBaseID, state);
+                        }
+                        REX::INFO(
+                            "[NpcAppearance] C2 LOAD-RETURN return={} target=0x{:08X} actor=0x{:08X} actorMatches={} highActors={} processListsValid={} hasLoaded3D={} baseApplied={} refreshRequired={} actorRefreshed={} recorded={}",
+                            loadReturn, expectedBaseID,
+                            actorResolution.actorRefID, actorResolution.matches,
+                            actorResolution.highActors,
+                            actorResolution.processListsValid,
+                            HasLoaded3D(actorResolution.actor), silentlyApplied,
+                            refreshRequired, actorRefreshed, applied);
+                    } catch (const std::exception& e) {
+                        REX::CRITICAL(
+                            "[NpcAppearance] C2 LOAD-RETURN target=0x{:08X} threw '{}'; swallowed per target and no state recorded",
+                            expectedBaseID, e.what());
+                        if (target && state.baseID == expectedBaseID) {
+                            try {
+                                const LineSink fallbackOut = [expectedBaseID](
+                                                                 const std::string& a_text) {
+                                    REX::INFO(
+                                        "[NpcAppearance] C2 load fallback base=0x{:08X}: {}",
+                                        expectedBaseID, a_text);
+                                };
+                                const bool safeOriginal = RestoreAppliedBaseState(
+                                    fallbackOut, target, state);
+                                REX::CRITICAL(
+                                    "[NpcAppearance] C2 LOAD-RETURN target=0x{:08X} exception fallback exactOriginal={}",
+                                    expectedBaseID, safeOriginal);
+                                if (!safeOriginal) {
+                                    KillMutation("load-return exception fallback failed");
+                                }
+                            } catch (...) {
+                                KillMutation("load-return exception fallback threw");
+                            }
+                        }
+                    } catch (...) {
+                        REX::CRITICAL(
+                            "[NpcAppearance] C2 LOAD-RETURN target=0x{:08X} threw; swallowed per target and no state recorded",
+                            expectedBaseID);
+                        if (target && state.baseID == expectedBaseID) {
+                            try {
+                                const LineSink fallbackOut = [expectedBaseID](
+                                                                 const std::string& a_text) {
+                                    REX::INFO(
+                                        "[NpcAppearance] C2 load fallback base=0x{:08X}: {}",
+                                        expectedBaseID, a_text);
+                                };
+                                const bool safeOriginal = RestoreAppliedBaseState(
+                                    fallbackOut, target, state);
+                                REX::CRITICAL(
+                                    "[NpcAppearance] C2 LOAD-RETURN target=0x{:08X} exception fallback exactOriginal={}",
+                                    expectedBaseID, safeOriginal);
+                                if (!safeOriginal) {
+                                    KillMutation("load-return exception fallback failed");
+                                }
+                            } catch (...) {
+                                KillMutation("load-return exception fallback threw");
+                            }
+                        }
+                    }
+                    if (applied) {
+                        ++appliedCount;
+                    } else {
+                        ++failedCount;
+                    }
+                    if (!MutationOperational()) {
+                        break;
+                    }
+                }
+
+                const auto totalMs = std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - totalStarted).count();
+                std::size_t tracked = 0;
+                {
+                    const std::scoped_lock lock{ g_appliedBasesMutex };
+                    tracked = g_appliedBases.size();
+                }
+                REX::INFO(
+                    "[NpcAppearance] C2 LOAD-RETURN done return={} generation={} winners={} applied={} failed={} tracked={} tid={} insideDrain={} ms={:.3f}",
+                    loadReturn, loadGeneration, assignments.size(), appliedCount,
+                    failedCount, tracked, ::GetCurrentThreadId(),
+                    diagnostics.insideDrain, totalMs);
+                return true;
+            } catch (const std::exception& e) {
+                KillMutation("load-return native task threw");
+                REX::CRITICAL(
+                    "[NpcAppearance] C2 LOAD-RETURN native task threw '{}'; swallowed inside verified drain",
+                    e.what());
+            } catch (...) {
+                KillMutation("load-return native task threw");
+                REX::CRITICAL(
+                    "[NpcAppearance] C2 LOAD-RETURN native task threw; swallowed inside verified drain");
+            }
+                return true;
+                };
+                {
+                    const std::scoped_lock lock{ g_deferredC2LoadMutex };
+                    g_deferredC2LoadTask = std::move(pending);
+                }
+                PumpDeferredC2LoadTask();
+            } catch (const std::exception& e) {
+                KillMutation("load-return callback scheduling threw");
+                REX::CRITICAL(
+                    "[NpcAppearance] C2 LOAD-RETURN scheduling threw '{}'; no mutation",
+                    e.what());
+            } catch (...) {
+                KillMutation("load-return callback scheduling threw");
+                REX::CRITICAL(
+                    "[NpcAppearance] C2 LOAD-RETURN scheduling threw; no mutation");
+            }
+        }
+
         // ==================================================================
         // Startup
         // Fail-closed arming sequence: packs directory -> scan ->
@@ -4520,6 +6394,28 @@ namespace NpcAppearance
                 return;
             }
 
+            if (g_bracketArmed.load(std::memory_order_acquire)) {
+                auto* saveLoadSource = RE::SaveLoadEvent::GetEventSource();
+                if (!saveLoadSource) {
+                    KillMutation("SaveLoadEvent source unavailable during C2 arming");
+                    REX::CRITICAL(
+                        "[NpcAppearance] C2 save/load bracket could not register the pre-save event sink; mutation disabled and saves with tracked state will be vetoed");
+                    return;
+                }
+                if (!g_saveLoadEventRegistered.load(std::memory_order_acquire)) {
+                    saveLoadSource->RegisterSink(
+                        &C2SaveLoadEventSink::GetSingleton());
+                    g_saveLoadEventRegistered.store(
+                        true, std::memory_order_release);
+                }
+                REX::INFO(
+                    "[NpcAppearance] C2 save/load bracket ARMED assignments={} marker={} markerIsOnlyArm=true saveLoadEventRegistered={}; legacy scene lifecycle remains compiled but is not armed",
+                    assignments,
+                    (DefaultPluginDirectory() / L"bracket.armed").string(),
+                    g_saveLoadEventRegistered.load(std::memory_order_relaxed));
+                return;
+            }
+
             RunSceneEvent(startupOut, { "npcapp", "scene", "on" });
             if (!g_sceneRegistered.load(std::memory_order_acquire)) {
                 REX::WARN("[NpcAppearance] startup could not register scene lifecycle sinks; persistent mutation remains disabled");
@@ -4536,36 +6432,59 @@ namespace NpcAppearance
 
     void Initialize()
     {
+        const auto markerPath = DefaultPluginDirectory() / L"bracket.armed";
+        std::error_code markerError;
+        const bool markerPresent =
+            std::filesystem::is_regular_file(markerPath, markerError) &&
+            !markerError;
+        g_bracketArmed.store(markerPresent, std::memory_order_release);
         const SaveLoadHooks::Callbacks callbacks{
-            .onSaveGameEntry = [] {
-                REX::INFO("[NpcAppearance] C1 SAVE entry callback tid={} mode=log-only",
-                          ::GetCurrentThreadId());
-            },
-            .onSaveGameReturn = [] {
-                REX::INFO("[NpcAppearance] C1 SAVE return callback tid={} mode=log-only",
-                          ::GetCurrentThreadId());
-            },
-            .onLoadGameReturn = [] {
-                REX::INFO("[NpcAppearance] C1 LOAD return callback tid={} mode=log-only",
-                          ::GetCurrentThreadId());
-            },
+            .onSaveGameEntry = &OnSaveGameEntryImpl,
+            .onSaveGameReturn = &OnSaveGameReturnImpl,
+            .onLoadGameReturn = &OnLoadGameReturnImpl,
         };
         const bool hooksInstalled = SaveLoadHooks::Install(callbacks);
         g_bracketOperational.store(hooksInstalled, std::memory_order_release);
         if (!hooksInstalled) {
             KillMutation("SaveGame/LoadGame hook installation failed");
         }
+        const bool saveVetoSupported = SaveLoadHooks::SupportsSaveVeto();
+        if (markerPresent && hooksInstalled && !saveVetoSupported) {
+            g_bracketArmed.store(false, std::memory_order_release);
+            KillMutation(
+                "C2 marker requires OSF Identity's direct save hook so failed restoration can veto serialization");
+        }
         REX::INFO(
-            "[NpcAppearance] C1 save/load hook state operational={} mutationKilled={} callbacks=log-only",
+            "[NpcAppearance] C2 save/load hook state operational={} saveVetoSupported={} mutationKilled={} bracketArmed={} markerPresent={} marker={} callbacks=native-queue-shaped",
             g_bracketOperational.load(std::memory_order_relaxed),
-            g_mutationKilled.load(std::memory_order_relaxed));
-        OnNpcAppearanceDataLoaded();
+            saveVetoSupported,
+            g_mutationKilled.load(std::memory_order_relaxed),
+            g_bracketArmed.load(std::memory_order_relaxed), markerPresent,
+            markerPath.string());
+        try {
+            if (!QueueOrRunNativeTask(
+                    [] { OnNpcAppearanceDataLoaded(); },
+                    "NpcAppearance.StartupScan")) {
+                KillMutation("startup scan could not enter the verified native queue");
+            }
+        } catch (const std::exception& e) {
+            KillMutation("startup scan scheduling threw");
+            REX::CRITICAL(
+                "[NpcAppearance] startup scan scheduling threw '{}'; no mutation",
+                e.what());
+        } catch (...) {
+            KillMutation("startup scan scheduling threw");
+            REX::CRITICAL(
+                "[NpcAppearance] startup scan scheduling threw; no mutation");
+        }
     }
 
     void OnFrame()
     {
         // SFSE's rotating worker only requests native BSService queue work.
         // All game-object access remains on the verified drain-owner thread.
+        PumpDeferredC2SaveTask();
+        PumpDeferredC2LoadTask();
         RequestNpcAppearanceNativeFrame();
     }
 
