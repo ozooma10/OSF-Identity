@@ -27,17 +27,15 @@ Removing a pack promotes the next valid one, or restores the original appearance
 
 ## How packs are chosen
 
-Every target is identified by its owning plugin plus plugin-local FormID. Packs
-without `assignments` discover presets from
-`<OwningPlugin>/<localFormId>.npc`; explicit assignments use the same target
-tuple. Runtime/load-order FormIDs and EditorID targets are not accepted.
+Every target is identified by its owning plugin plus plugin-local FormID; 
+Packs discover presets from `<OwningPlugin>/<localFormId>.npc`.
 
-When several valid packs resolve to the same NPC base, the highest `priority`
-wins; ties go to the case-insensitively alphabetical pack folder name.
+Runtime/load-order FormIDs and EditorID targets are not accepted.
+
+When several valid packs resolve to the same NPC base, the highest `priority` wins; ties go to the case-insensitively alphabetical pack folder name.
 Mod-manager load order is irrelevant.
 
-A candidate with a missing plugin or asset is skipped — never partially
-applied — and the next valid pack wins instead.
+A candidate with a missing plugin or asset is skipped and the next valid pack wins instead.
 
 See the [Author Guide](docs/AUTHOR_GUIDE.md) for the pack format.
 
