@@ -11,7 +11,7 @@
 
 1. Install the framework archive with your mod manager.
 2. Install appearance packs as separate mods, plus any hair, beard, or asset dependencies they need.
-3. Launch through SFSE and the targetted NPC will have its appearance replaced
+3. Launch through SFSE and the targeted NPC will have its appearance replaced.
 
 ## Conflicts
 
@@ -27,7 +27,16 @@ next valid pack can win.
 
 The next valid pack takes over, or the NPC reverts to the original appearance. Packs are scanned once after game data load, so always restart Starfield after adding, changing, or removing one.
 
-The framework keeps the base NPC's original values at rest and never writes appearance data into your save. To remove it entirely, disable the framework and its packs; NPCs revert on their next vanilla regeneration.
+During play, the winning preset remains applied to the NPC base in memory. Immediately
+before Starfield serializes any save, OSF Identity restores and verifies the exact original
+appearance. The save is allowed only after that check succeeds, and the preset is reapplied
+after the save returns.
+
+The appearance notifications can make Starfield include an `NPC_` changed-form in the
+save, but that record contains the verified original values—not the preset. This is what
+makes saves uninstall-safe. To remove the framework entirely, exit Starfield, disable OSF
+Identity and its packs, then load the save; the NPC uses its original appearance without a
+cleanup step.
 
 ## Troubleshooting
 
@@ -57,3 +66,6 @@ Documents\My Games\Starfield\SFSE\Logs\osf-identity.log
   one nondeterministically
 - `preset rejected` - malformed file or unsupported producer
 - `runtime contract mismatch` - game or Address Library version unsupported
+- `SAVE-ENTRY vetoed` or `mutation killed` - exact pre-save restoration could not be
+  proven, so OSF Identity refused the save rather than serialize an uncertain appearance;
+  exit without relying on that attempted save and inspect the full log

@@ -11,7 +11,7 @@ OSF Identity applies appearance presets to starfield NPCs from drop-in packs at 
 
 ## Install
 
-Install the release zip with a mod manager.
+Install the release zip with MO2/Vortex.
 
 Then install appearance packs as separate mods:
 ```text

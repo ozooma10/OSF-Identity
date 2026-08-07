@@ -40,6 +40,23 @@ To build one:
    `Documents\My Games\Starfield\SFSE\Logs\osf-identity.log` — failures are
    silent in-game and explained only in the log.
 
+## Runtime and save behavior
+
+The winning preset is applied after every successful load. If the matching actor already
+has loaded 3D, OSF Identity issues one immediate appearance refresh; actors encountered
+later build from the already-applied base without a lifecycle sink.
+
+Applied bases remain modified in memory during play. Before any quicksave, autosave,
+manual save, or exitsave is serialized, OSF Identity reconstructs and verifies the exact
+original appearance inside the native save bracket. The save may contain an `NPC_`
+changed-form because appearance notifications registered it, but the serialized values are
+the original values. A failed exact restoration vetoes the save. After a successful save
+returns, the winning preset is reapplied.
+
+Pack removal requires a full Starfield restart, not a mid-session file change. With the
+pack absent, the next valid candidate wins; with no winner or with the framework disabled,
+the save loads the original appearance without a cleanup command.
+
 ## When you need a manifest
 
 A manifest-less pack runs at priority `0` with no pack-wide requirements and
@@ -144,6 +161,7 @@ and `00005983` identify the same target and therefore conflict.
   mod, and appearance pack separate stops optional mods from becoming
   story-mod dependencies.
 
-Before publishing, test for every target: a full load, quickload or cell
-return, a missing optional dependency, pack removal, fallback promotion,
-and exact restoration of the original appearance.
+Before publishing, test for every target: a fresh-process load, mid-session load, named
+save, quicksave, autosave, interior-cell round trip, fast-travel rebuild, missing optional
+dependency, pack removal, fallback promotion, and a fresh-process original-appearance
+check with the pack disabled.

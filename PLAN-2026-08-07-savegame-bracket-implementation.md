@@ -294,6 +294,30 @@ machinery remain in place for C4; C3 only changes load/save-return rendering beh
 NPC_ changed-form holding original values) + AUTHOR_GUIDE only if user-visible behavior
 changed; `tools/verify.ps1` + `tools/build-release.ps1` green; `git diff --check` clean.
 
+### C5 result — complete 2026-08-07
+
+- The player guide now explains in-session base mutation, exact original restoration before
+  serialization, save veto on an unproven restore, the original-valued `NPC_`
+  changed-form, and restart-only uninstall/removal.
+- The author guide records the selected load-side rendering recipe, save-bracket behavior,
+  and the required load/save/rebuild/removal publication matrix.
+- `tools/verify.ps1` now fails if any deleted pump, sink, Set3d suppression, TargetHold,
+  or persistent-uninstall symbol returns. The new gate passed.
+- `tools/verify.ps1`, `tools/build-release.ps1`, and `git diff --check` passed. The C5
+  release artifact is `dist/OSF-Identity-0.1.0.zip` (469,723 bytes, SHA-256
+  `08529274675A837300F7A6F7B5B33BBB8F015578AD714E980D960B6AE77CD1ED`).
+  Source and deployed DLLs matched at SHA-256
+  `4E79551FCA5C278E2781B101D2FCCE29392BE1E24F1BE1AE8021098BB6F0C46B`.
+- A fresh process using that exact deployed DLL acquired the OSF Animation broker with veto
+  support, armed one validated assignment inside the verified native drain, and loaded
+  `C4bDelete` with `applied=1 failed=0 tracked=1 insideDrain=true`. Andreja rendered the
+  complete preset hair. The process exited cleanly with zero CRITICAL and zero deleted
+  lifecycle log lines.
+- No save was created, deleted, or overwritten during the C5 smoke. The protected C2
+  quicksave remains 2,386,768 bytes and both 208-byte artifacts remain untouched. The
+  Default profile was restored to OSF Identity disabled, OSF Animation enabled, and OSF RE
+  disabled.
+
 ## Restore-writer decision (recorded rationale)
 
 Donor-mediated restore: all fallible construction happens on a disposable donor verified

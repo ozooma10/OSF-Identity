@@ -38,6 +38,29 @@ try {
 
     $sourceFiles = Get-ChildItem -LiteralPath (Join-Path $repoRoot 'src') -Recurse -File |
         Where-Object { $_.Extension -in @('.cpp', '.h') }
+    $deletedLifecycleSymbols = @(
+        'RequestNpcAppearanceNativeFrame',
+        'OnNpcAppearanceNativeFrame',
+        'PendingSceneApply',
+        'ObjectLoadedSink',
+        'ReferenceSet3dSink',
+        'ReferenceDetachSink',
+        'SuppressNextSceneSet3d',
+        'TargetHoldState',
+        'RunTargetRestore',
+        'PersistentAppliedState',
+        'g_persistentAppliedRefs',
+        'RemovePersistentAppearances'
+    )
+    foreach ($symbol in $deletedLifecycleSymbols) {
+        $match = $sourceFiles |
+            Select-String -SimpleMatch -Pattern $symbol |
+            Select-Object -First 1
+        if ($match) {
+            throw "Deleted lifecycle symbol '$symbol' returned at $($match.Path):$($match.LineNumber)"
+        }
+    }
+    Write-Host '[verify] deleted lifecycle symbols remain absent' -ForegroundColor Green
 
     $deletedTargetingSymbols = @(
         'EditorIDTarget',
