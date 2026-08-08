@@ -1749,23 +1749,24 @@ namespace NpcAppearance
             };
 
             const auto valid = ParsePackageManifest(
-                R"({"schemaVersion":1,"priority":100,"requires":{"plugins":[],"assets":[]},"assignments":[{"target":{"plugin":"Starfield.esm","localFormId":"5983"},"preset":"Sarah.npc","scope":"faceAndBody"}]})",
+                R"({"schemaVersion":1,"requires":{},"assignments":[{"target":{"plugin":"Starfield.esm","localFormId":"5983"},"preset":"Sarah.npc"}]})",
                 manifestPath, false);
-            check(valid.manifest && valid.manifest->assignments.size() == 1 && valid.issues.empty(),
+            check(valid.manifest && valid.manifest->priority == 0 &&
+                      valid.manifest->assignments.size() == 1 && valid.issues.empty(),
                   "valid production manifest");
             check(valid.manifest && valid.manifest->assignments[0].target.CanonicalKey() ==
                                         "starfield.esm:00005983",
                   "canonical plugin-local target");
 
             const auto traversal = ParsePackageManifest(
-                R"({"schemaVersion":1,"priority":0,"requires":{"plugins":[],"assets":[]},"assignments":[{"target":{"plugin":"Starfield.esm","localFormId":"5983"},"preset":"../escape.npc","scope":"faceAndBody"}]})",
+                R"({"schemaVersion":1,"assignments":[{"target":{"plugin":"Starfield.esm","localFormId":"5983"},"preset":"../escape.npc"}]})",
                 manifestPath, false);
             check(traversal.HasFatalError(), "parent traversal rejected");
 
-            const auto unsupportedScope = ParsePackageManifest(
-                R"({"schemaVersion":1,"priority":0,"requires":{"plugins":[],"assets":[]},"assignments":[{"target":{"plugin":"Starfield.esm","localFormId":"5983"},"preset":"Sarah.npc","scope":"faceOnly"}]})",
+            const auto removedScope = ParsePackageManifest(
+                R"({"schemaVersion":1,"assignments":[{"target":{"plugin":"Starfield.esm","localFormId":"5983"},"preset":"Sarah.npc","scope":"faceAndBody"}]})",
                 manifestPath, false);
-            check(unsupportedScope.HasFatalError(), "unproven scope rejected");
+            check(removedScope.HasFatalError(), "removed scope property rejected");
 
             const auto unsupported = ParsePackageManifest(
                 R"({"schemaVersion":2,"priority":0,"requires":{"plugins":[],"assets":[]},"assignments":[]})",

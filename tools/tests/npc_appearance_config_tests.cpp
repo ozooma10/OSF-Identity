@@ -23,12 +23,11 @@ namespace
     std::string Manifest(const int a_priority = 100,
                          const std::string& a_localFormID = "5983",
                          const std::string& a_preset = "Sarah.npc",
-                         const std::string& a_scope = "faceAndBody",
                          const std::string& a_plugin = "Starfield.esm")
     {
         return std::format(
-            R"({{"schemaVersion":1,"priority":{},"requires":{{"plugins":["SharedAssets.esm"],"assets":[]}},"assignments":[{{"target":{{"plugin":"{}","localFormId":"{}"}},"preset":"{}","scope":"{}"}}]}})",
-            a_priority, a_plugin, a_localFormID, a_preset, a_scope);
+            R"({{"schemaVersion":1,"priority":{},"requires":{{"plugins":["SharedAssets.esm"]}},"assignments":[{{"target":{{"plugin":"{}","localFormId":"{}"}},"preset":"{}"}}]}})",
+            a_priority, a_plugin, a_localFormID, a_preset);
     }
 
     void Write(const std::filesystem::path& a_path, const std::string_view a_text)
@@ -90,19 +89,20 @@ int main()
           "pack and implicit target plugin requirements are inherited by the assignment");
 
     const auto omittedRequirements = NA::ParsePackageManifest(
-        R"({"schemaVersion":1,"priority":0,"assignments":[{"target":{"plugin":"Starfield.esm","localFormId":"5983"},"preset":"Sarah.npc","scope":"faceAndBody"}]})",
+        R"({"schemaVersion":1,"assignments":[{"target":{"plugin":"Starfield.esm","localFormId":"5983"},"preset":"Sarah.npc"}]})",
         root / "author.no-requirements" / "package.json", false);
     Check(omittedRequirements.manifest && omittedRequirements.issues.empty() &&
+              omittedRequirements.manifest->priority == 0 &&
               omittedRequirements.manifest->requirements.plugins.empty() &&
               omittedRequirements.manifest->requirements.assets.empty() &&
               omittedRequirements.manifest->assignments[0].requirements.plugins.size() == 1 &&
               HasPlugin(omittedRequirements.manifest->assignments[0].requirements,
                         "Starfield.esm") &&
               omittedRequirements.manifest->assignments[0].requirements.assets.empty(),
-          "omitted package requirements default to only the implicit target plugin");
+          "omitted priority and package requirements use their defaults");
 
     const auto pluginLocal = NA::ParsePackageManifest(
-        R"({"schemaVersion":1,"priority":25,"requires":{"plugins":["SharedAssets.esm"],"assets":[]},"assignments":[{"target":{"plugin":"Starfield.esm","localFormId":"00005983"},"preset":"Sarah.npc","scope":"faceAndBody","requires":{"plugins":["ExampleHairMod.esm"],"assets":[]}}]})",
+        R"({"schemaVersion":1,"priority":25,"requires":{"plugins":["SharedAssets.esm"]},"assignments":[{"target":{"plugin":"Starfield.esm","localFormId":"00005983"},"preset":"Sarah.npc","requires":{"plugins":["ExampleHairMod.esm"]}}]})",
         root / "author.plugin-local" / "package.json", false);
     Check(pluginLocal.manifest &&
               pluginLocal.manifest->assignments[0].target.plugin == "Starfield.esm" &&
@@ -135,7 +135,7 @@ int main()
           "full, medium, and small runtime FormID encoding is deterministic");
 
     const auto explicitPerPreset = NA::ParsePackageManifest(
-        R"({"schemaVersion":1,"priority":0,"requires":{"plugins":["SharedAssets.esm"],"assets":["Textures/Shared.dds"]},"assignments":[{"target":{"plugin":"Starfield.esm","localFormId":"29A8EB"},"preset":"Daniel.npc","scope":"faceAndBody","requires":{"plugins":["ExampleHairMod.esm"],"assets":["Meshes/Hair/Example.mesh"]}}]})",
+        R"({"schemaVersion":1,"requires":{"plugins":["SharedAssets.esm"],"assets":["Textures/Shared.dds"]},"assignments":[{"target":{"plugin":"Starfield.esm","localFormId":"29A8EB"},"preset":"Daniel.npc","requires":{"plugins":["ExampleHairMod.esm"],"assets":["Meshes/Hair/Example.mesh"]}}]})",
         root / "explicit-per-preset" / "package.json", false);
     Check(explicitPerPreset.manifest &&
               explicitPerPreset.manifest->assignments[0].requirements.plugins.size() == 3 &&
@@ -147,7 +147,7 @@ int main()
           "explicit per-assignment requirements are additive");
 
     const auto assetManifest = NA::ParsePackageManifest(
-        R"({"schemaVersion":1,"priority":0,"requires":{"plugins":[],"assets":["Textures/Author/Required.dds"]},"assignments":[{"target":{"plugin":"Starfield.esm","localFormId":"5983"},"preset":"Sarah.npc","scope":"faceAndBody"}]})",
+        R"({"schemaVersion":1,"requires":{"assets":["Textures/Author/Required.dds"]},"assignments":[{"target":{"plugin":"Starfield.esm","localFormId":"5983"},"preset":"Sarah.npc"}]})",
         root / "author.assets" / "package.json", false);
     const auto dataRoot = root / "Data";
     Check(assetManifest.manifest &&
@@ -182,6 +182,12 @@ int main()
         root / "author.traversal" / "package.json", false);
     Check(traversal.HasFatalError(), "preset parent traversal rejected");
 
+    const auto backslashTraversal = NA::ParsePackageManifest(
+        Manifest(0, "5983", "Presets\\\\..\\\\Sarah.npc"),
+        root / "author.backslash-traversal" / "package.json", false);
+    Check(backslashTraversal.HasFatalError(),
+          "Windows-style preset parent traversal rejected on every host");
+
     const auto absolute = NA::ParsePackageManifest(
         Manifest(0, "5983", "C:\\\\Sarah.npc"),
         root / "author.absolute" / "package.json", false);
@@ -192,62 +198,63 @@ int main()
         root / "author.extension" / "package.json", false);
     Check(wrongExtension.HasFatalError(), "non-npc preset rejected");
 
-    const auto wrongScope = NA::ParsePackageManifest(
-        Manifest(0, "5983", "Sarah.npc", "faceOnly"),
+    const auto removedScope = NA::ParsePackageManifest(
+        R"({"schemaVersion":1,"assignments":[{"target":{"plugin":"Starfield.esm","localFormId":"5983"},"preset":"Sarah.npc","scope":"faceAndBody"}]})",
         root / "author.scope" / "package.json", false);
-    Check(wrongScope.HasFatalError(), "unproven scope rejected");
+    Check(removedScope.HasFatalError() && HasIssue(removedScope.issues, "unknown_property"),
+          "removed scope property is rejected");
 
     const auto noncanonicalTarget = NA::ParsePackageManifest(
-        R"({"schemaVersion":1,"priority":0,"assignments":[{"target":{"editorId":"Companion_SarahMorgan"},"preset":"Sarah.npc","scope":"faceAndBody"}]})",
+        R"({"schemaVersion":1,"priority":0,"assignments":[{"target":{"editorId":"Companion_SarahMorgan"},"preset":"Sarah.npc"}]})",
         root / "author.noncanonical-target" / "package.json", false);
     Check(noncanonicalTarget.HasFatalError() &&
               HasIssue(noncanonicalTarget.issues, "unknown_property"),
           "noncanonical target property is rejected by strict validation");
 
     const auto partialPluginTarget = NA::ParsePackageManifest(
-        R"({"schemaVersion":1,"priority":0,"requires":{"plugins":[],"assets":[]},"assignments":[{"target":{"plugin":"Starfield.esm"},"preset":"Sarah.npc","scope":"faceAndBody"}]})",
+        R"({"schemaVersion":1,"priority":0,"requires":{"plugins":[],"assets":[]},"assignments":[{"target":{"plugin":"Starfield.esm"},"preset":"Sarah.npc"}]})",
         root / "author.partial-target" / "package.json", false);
     Check(partialPluginTarget.HasFatalError() &&
               HasIssue(partialPluginTarget.issues, "missing_property"),
           "partial plugin-local target is rejected");
 
     const auto badTargetPlugin = NA::ParsePackageManifest(
-        R"({"schemaVersion":1,"priority":0,"requires":{"plugins":[],"assets":[]},"assignments":[{"target":{"plugin":"not-a-plugin","localFormId":"00005983"},"preset":"Sarah.npc","scope":"faceAndBody"}]})",
+        R"({"schemaVersion":1,"priority":0,"requires":{"plugins":[],"assets":[]},"assignments":[{"target":{"plugin":"not-a-plugin","localFormId":"00005983"},"preset":"Sarah.npc"}]})",
         root / "author.bad-target-plugin" / "package.json", false);
     Check(badTargetPlugin.HasFatalError() &&
               HasIssue(badTargetPlugin.issues, "invalid_plugin"),
           "invalid target plugin is rejected");
 
     const auto emptyStemTargetPlugin = NA::ParsePackageManifest(
-        R"({"schemaVersion":1,"priority":0,"assignments":[{"target":{"plugin":".esm","localFormId":"5983"},"preset":"Sarah.npc","scope":"faceAndBody"}]})",
+        R"({"schemaVersion":1,"priority":0,"assignments":[{"target":{"plugin":".esm","localFormId":"5983"},"preset":"Sarah.npc"}]})",
         root / "author.empty-stem-target-plugin" / "package.json", false);
     Check(emptyStemTargetPlugin.HasFatalError() &&
               HasIssue(emptyStemTargetPlugin.issues, "invalid_plugin"),
           "target plugin filename requires a nonempty stem");
 
     const auto badLocalFormID = NA::ParsePackageManifest(
-        R"({"schemaVersion":1,"priority":0,"requires":{"plugins":[],"assets":[]},"assignments":[{"target":{"plugin":"Starfield.esm","localFormId":"01000000"},"preset":"Sarah.npc","scope":"faceAndBody"}]})",
+        R"({"schemaVersion":1,"priority":0,"requires":{"plugins":[],"assets":[]},"assignments":[{"target":{"plugin":"Starfield.esm","localFormId":"01000000"},"preset":"Sarah.npc"}]})",
         root / "author.bad-local-form" / "package.json", false);
     Check(badLocalFormID.HasFatalError() &&
               HasIssue(badLocalFormID.issues, "invalid_local_form_id"),
           "out-of-range plugin-local FormID is rejected");
 
     const auto prefixedLocalFormID = NA::ParsePackageManifest(
-        R"({"schemaVersion":1,"priority":0,"assignments":[{"target":{"plugin":"Starfield.esm","localFormId":"0x5983"},"preset":"Sarah.npc","scope":"faceAndBody"}]})",
+        R"({"schemaVersion":1,"priority":0,"assignments":[{"target":{"plugin":"Starfield.esm","localFormId":"0x5983"},"preset":"Sarah.npc"}]})",
         root / "author.prefixed-local-form" / "package.json", false);
     Check(prefixedLocalFormID.HasFatalError() &&
               HasIssue(prefixedLocalFormID.issues, "invalid_local_form_id"),
           "0x-prefixed plugin-local FormID is rejected");
 
     const auto runtimeLocalFormID = NA::ParsePackageManifest(
-        R"({"schemaVersion":1,"priority":0,"assignments":[{"target":{"plugin":"Starfield.esm","localFormId":"01005983"},"preset":"Sarah.npc","scope":"faceAndBody"}]})",
+        R"({"schemaVersion":1,"priority":0,"assignments":[{"target":{"plugin":"Starfield.esm","localFormId":"01005983"},"preset":"Sarah.npc"}]})",
         root / "author.runtime-local-form" / "package.json", false);
     Check(runtimeLocalFormID.HasFatalError() &&
               HasIssue(runtimeLocalFormID.issues, "invalid_local_form_id"),
           "load-order-prefixed runtime FormID is rejected");
 
     const auto spidStyleTarget = NA::ParsePackageManifest(
-        R"({"schemaVersion":1,"priority":0,"assignments":[{"target":"Starfield.esm|00005983","preset":"Sarah.npc","scope":"faceAndBody"}]})",
+        R"({"schemaVersion":1,"priority":0,"assignments":[{"target":"Starfield.esm|00005983","preset":"Sarah.npc"}]})",
         root / "author.spid-style-target" / "package.json", false);
     Check(spidStyleTarget.HasFatalError() &&
               HasIssue(spidStyleTarget.issues, "wrong_type"),
@@ -257,6 +264,20 @@ int main()
         Manifest(NA::kMaxPriority + 1),
         root / "author.priority" / "package.json", false);
     Check(badPriority.HasFatalError(), "out-of-range priority rejected");
+
+    const auto wrongPriorityType = NA::ParsePackageManifest(
+        R"({"schemaVersion":1,"priority":"high"})",
+        root / "author.priority-type" / "package.json", false);
+    Check(wrongPriorityType.HasFatalError() &&
+              HasIssue(wrongPriorityType.issues, "wrong_type"),
+          "present priority must be an integer");
+
+    const auto assetTraversal = NA::ParsePackageManifest(
+        R"({"schemaVersion":1,"requires":{"assets":["Textures\\..\\Hair.dds"]}})",
+        root / "author.asset-traversal" / "package.json", false);
+    Check(assetTraversal.HasFatalError() &&
+              HasIssue(assetTraversal.issues, "invalid_asset_path"),
+          "Windows-style asset parent traversal rejected on every host");
 
     const auto unknownVersion = NA::ParsePackageManifest(
         R"({"schemaVersion":2,"priority":0,"requires":{"plugins":[],"assets":[]},"assignments":[]})",
@@ -310,7 +331,7 @@ int main()
     Check(invalidSize.HasFatalError(), "manifest byte bound enforced");
 
     const std::string duplicateTargetJson =
-        R"({"schemaVersion":1,"priority":0,"requires":{"plugins":[],"assets":[]},"assignments":[{"target":{"plugin":"Starfield.esm","localFormId":"5983"},"preset":"a.npc","scope":"faceAndBody"},{"target":{"plugin":"STARFIELD.ESM","localFormId":"00005983"},"preset":"b.npc","scope":"faceAndBody"}]})";
+        R"({"schemaVersion":1,"priority":0,"requires":{"plugins":[],"assets":[]},"assignments":[{"target":{"plugin":"Starfield.esm","localFormId":"5983"},"preset":"a.npc"},{"target":{"plugin":"STARFIELD.ESM","localFormId":"00005983"},"preset":"b.npc"}]})";
     const auto duplicateTarget = NA::ParsePackageManifest(
         duplicateTargetJson, root / "duplicate-target" / "package.json", false);
     Check(duplicateTarget.HasFatalError(), "duplicate target rejects package");

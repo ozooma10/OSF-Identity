@@ -136,6 +136,21 @@ namespace NpcAppearance
             return true;
         }
 
+        [[nodiscard]] bool ContainsParentTraversal(const std::string_view a_text) noexcept
+        {
+            std::size_t componentStart = 0;
+            for (std::size_t i = 0; i <= a_text.size(); ++i) {
+                if (i != a_text.size() && a_text[i] != '/' && a_text[i] != '\\') {
+                    continue;
+                }
+                if (a_text.substr(componentStart, i - componentStart) == "..") {
+                    return true;
+                }
+                componentStart = i + 1;
+            }
+            return false;
+        }
+
         [[nodiscard]] bool ValidateRelativePath(const std::string& a_text,
                                                 std::filesystem::path& a_out,
                                                 std::string& a_error)
@@ -152,16 +167,14 @@ namespace NpcAppearance
                 a_error = "path must be relative";
                 return false;
             }
+            if (ContainsParentTraversal(a_text)) {
+                a_error = "path contains parent traversal";
+                return false;
+            }
             const std::filesystem::path relative{ a_text };
             if (relative.is_absolute() || relative.has_root_name() || relative.has_root_directory()) {
                 a_error = "path must be relative";
                 return false;
-            }
-            for (const auto& component : relative) {
-                if (component == "..") {
-                    a_error = "path contains parent traversal";
-                    return false;
-                }
             }
             a_out = relative.lexically_normal();
             return true;
@@ -282,15 +295,21 @@ namespace NpcAppearance
             if (!HasOnlyProperties(a_node, { "plugins", "assets" }, a_result, a_path)) {
                 return false;
             }
-            const auto* plugins = Require(
-                a_node, "plugins", JsonValue::Kind::kArray, a_result, a_path);
-            const auto* assets = Require(
-                a_node, "assets", JsonValue::Kind::kArray, a_result, a_path);
-            return plugins && assets &&
-                ParseStringArray(*plugins, "plugins", true, a_requirements.plugins,
-                                 a_requirements.assets, a_result, a_path) &&
-                ParseStringArray(*assets, "assets", false, a_requirements.plugins,
-                                 a_requirements.assets, a_result, a_path);
+            if (const auto* plugins = a_node.Find("plugins");
+                plugins && !ParseStringArray(*plugins, "plugins", true,
+                                             a_requirements.plugins,
+                                             a_requirements.assets,
+                                             a_result, a_path)) {
+                return false;
+            }
+            if (const auto* assets = a_node.Find("assets");
+                assets && !ParseStringArray(*assets, "assets", false,
+                                            a_requirements.plugins,
+                                            a_requirements.assets,
+                                            a_result, a_path)) {
+                return false;
+            }
+            return true;
         }
 
         [[nodiscard]] bool MergeRequirements(
@@ -808,10 +827,15 @@ namespace NpcAppearance
         }
 
         const auto* schema = Require(root, "schemaVersion", JsonValue::Kind::kNumber, result, a_manifestPath);
-        const auto* priority = Require(root, "priority", JsonValue::Kind::kNumber, result, a_manifestPath);
+        const auto* priority = root.Find("priority");
         const auto* requirementsNode = root.Find("requires");
         const auto* assignments = root.Find("assignments");
-        if (!schema || !priority) {
+        if (!schema) {
+            return result;
+        }
+        if (priority && priority->kind != JsonValue::Kind::kNumber) {
+            AddIssue(result, a_manifestPath, priority->offset, "wrong_type",
+                     "property 'priority' has the wrong type");
             return result;
         }
         if (requirementsNode && requirementsNode->kind != JsonValue::Kind::kObject) {
@@ -829,7 +853,8 @@ namespace NpcAppearance
                      "unsupported schemaVersion " + std::to_string(schema->integer));
             return result;
         }
-        if (priority->integer < kMinPriority || priority->integer > kMaxPriority) {
+        if (priority &&
+            (priority->integer < kMinPriority || priority->integer > kMaxPriority)) {
             AddIssue(result, a_manifestPath, priority->offset, "invalid_priority", "priority is outside the accepted range");
             return result;
         }
@@ -842,7 +867,7 @@ namespace NpcAppearance
         PackageManifest manifest;
         manifest.schemaVersion = 1;
         manifest.packageID = a_manifestPath.parent_path().filename().string();
-        manifest.priority = static_cast<std::int32_t>(priority->integer);
+        manifest.priority = priority ? static_cast<std::int32_t>(priority->integer) : 0;
         manifest.manifestPath = a_manifestPath;
         manifest.format = assignments ? PackageFormat::kExplicitAssignments :
                                         PackageFormat::kPluginFolderLocalFormID;
@@ -858,7 +883,7 @@ namespace NpcAppearance
             std::unordered_set<std::string> targets;
             for (const auto& rawAssignment : assignments->array) {
                 if (rawAssignment.kind != JsonValue::Kind::kObject ||
-                    !HasOnlyProperties(rawAssignment, { "target", "preset", "scope", "requires" },
+                    !HasOnlyProperties(rawAssignment, { "target", "preset", "requires" },
                                        result, a_manifestPath)) {
                     if (rawAssignment.kind != JsonValue::Kind::kObject) {
                         AddIssue(result, a_manifestPath, rawAssignment.offset, "wrong_type",
@@ -870,9 +895,7 @@ namespace NpcAppearance
                                              result, a_manifestPath);
                 const auto* preset = Require(rawAssignment, "preset", JsonValue::Kind::kString,
                                              result, a_manifestPath);
-                const auto* scope = Require(rawAssignment, "scope", JsonValue::Kind::kString,
-                                            result, a_manifestPath);
-                if (!target || !preset || !scope ||
+                if (!target || !preset ||
                     !HasOnlyProperties(*target, { "plugin", "localFormId" },
                                        result, a_manifestPath)) {
                     return result;
@@ -899,11 +922,6 @@ namespace NpcAppearance
                     return result;
                 }
                 assignment.target = Target{ plugin->string, parsedLocalFormID };
-                if (scope->string != "faceAndBody") {
-                    AddIssue(result, a_manifestPath, scope->offset, "unsupported_scope",
-                             "scope must be 'faceAndBody' in schema version 1");
-                    return result;
-                }
                 Requirements assignmentRequirements;
                 if (const auto* assignmentRequirementsNode = rawAssignment.Find("requires")) {
                     if (!ParseRequirementsNode(*assignmentRequirementsNode,

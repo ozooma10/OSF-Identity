@@ -2,67 +2,73 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:osf-identity:package:v1",
   "title": "OSF Identity appearance pack manifest",
-  "description": "Optional pack manifest. The containing folder name is always the pack ID. Without assignments, presets are discovered from <OwningPlugin>/<localFormId>.npc. Explicit assignments use the same load-order-independent plugin-local identity.",
+  "description": "Optional package.json at the pack root. The containing folder name is the pack ID. Omit assignments to discover presets from <OwningPlugin>/<localFormId>.npc; add assignments only for custom preset paths.",
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "schemaVersion",
-    "priority"
+    "schemaVersion"
   ],
   "properties": {
     "$schema": {
-      "type": "string"
+      "type": "string",
+      "maxLength": 4096,
+      "description": "Optional editor hint pointing to package.schema.json. OSF Identity does not load this URI at runtime."
     },
     "schemaVersion": {
-      "const": 1
+      "const": 1,
+      "description": "OSF Identity manifest format version."
     },
     "priority": {
       "type": "integer",
       "minimum": -1000000,
-      "maximum": 1000000
+      "maximum": 1000000,
+      "default": 0,
+      "description": "Conflict priority after validation. Higher values win; equal values use the case-insensitive pack folder name."
     },
     "requires": {
-      "$ref": "#/$defs/requirements"
+      "$ref": "#/$defs/requirements",
+      "default": {},
+      "description": "Pack-wide dependencies. A missing entry disables the entire pack. Omit this property when there are none."
     },
     "assignments": {
       "type": "array",
       "minItems": 1,
       "maxItems": 1024,
+      "description": "Explicit target-to-preset mappings. When omitted, OSF Identity scans <OwningPlugin>/<localFormId>.npc files instead.",
       "items": {
         "type": "object",
         "additionalProperties": false,
         "required": [
           "target",
-          "preset",
-          "scope"
+          "preset"
         ],
         "properties": {
           "target": {
             "type": "object",
             "additionalProperties": false,
+            "description": "Load-order-independent identity of the NPC base form.",
             "required": [
               "plugin",
               "localFormId"
             ],
             "properties": {
               "plugin": {
-                "$ref": "#/$defs/plugin"
+                "$ref": "#/$defs/plugin",
+                "description": "Filename of the plugin that owns the NPC base. This plugin is also an implicit requirement."
               },
               "localFormId": {
-                "type": "string",
-                "pattern": "^(?:[0-9A-Fa-f]{1,6}|0[0-9A-Fa-f]{6}|00[0-9A-Fa-f]{6})$"
+                "$ref": "#/$defs/localFormId"
               }
             }
           },
           "preset": {
-            "type": "string",
-            "pattern": "\\.[nN][pP][cC]$"
-          },
-          "scope": {
-            "const": "faceAndBody"
+            "$ref": "#/$defs/presetPath",
+            "description": "Path to a producer-exported .npc file, relative to the pack root."
           },
           "requires": {
-            "$ref": "#/$defs/requirements"
+            "$ref": "#/$defs/requirements",
+            "default": {},
+            "description": "Dependencies for this assignment only. They are additive with pack-wide requirements."
           }
         }
       }
@@ -71,20 +77,58 @@
   "$defs": {
     "plugin": {
       "type": "string",
-      "pattern": "^[^\\\\/:]+\\.[eE][sS][mMpPlL]$"
+      "minLength": 5,
+      "maxLength": 260,
+      "pattern": "^[^\\\\/:]+\\.[eE][sS][mMpPlL](?![\\s\\S])",
+      "description": "An ESM, ESP, or ESL filename without directory separators or a drive prefix."
+    },
+    "localFormId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 8,
+      "pattern": "^(?:[0-9A-Fa-f]{1,6}|0[0-9A-Fa-f]{6}|00[0-9A-Fa-f]{6})(?![\\s\\S])",
+      "description": "One to eight hexadecimal digits, no 0x prefix, with a numeric value no greater than 00FFFFFF. The resolved plugin tier may impose a lower limit."
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "pattern": "^[^\\\\/]",
+      "allOf": [
+        {
+          "not": {
+            "pattern": ":"
+          }
+        },
+        {
+          "not": {
+            "pattern": "(^|[\\\\/])\\.\\.([\\\\/]|$)"
+          }
+        }
+      ],
+      "description": "A relative path without a drive prefix, leading separator, or parent traversal component."
+    },
+    "presetPath": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/relativePath"
+        },
+        {
+          "type": "string",
+          "pattern": "\\.[nN][pP][cC](?![\\s\\S])"
+        }
+      ]
     },
     "requirements": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "plugins",
-        "assets"
-      ],
       "properties": {
         "plugins": {
           "type": "array",
           "maxItems": 256,
           "uniqueItems": true,
+          "default": [],
+          "description": "Plugin filenames that must be loaded. Matching and duplicate detection are case-insensitive at runtime.",
           "items": {
             "$ref": "#/$defs/plugin"
           }
@@ -93,12 +137,39 @@
           "type": "array",
           "maxItems": 256,
           "uniqueItems": true,
+          "default": [],
+          "description": "Loose files that must exist beneath the Starfield Data directory. Matching and duplicate detection are case-insensitive at runtime.",
           "items": {
-            "type": "string",
-            "minLength": 1
+            "$ref": "#/$defs/relativePath"
           }
         }
       }
     }
-  }
+  },
+  "examples": [
+    {
+      "schemaVersion": 1,
+      "priority": 100
+    },
+    {
+      "schemaVersion": 1,
+      "requires": {
+        "plugins": [
+          "ExampleHairMod.esm"
+        ]
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "assignments": [
+        {
+          "target": {
+            "plugin": "Starfield.esm",
+            "localFormId": "00005983"
+          },
+          "preset": "Sarah.npc"
+        }
+      ]
+    }
+  ]
 }

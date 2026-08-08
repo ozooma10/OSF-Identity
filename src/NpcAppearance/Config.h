@@ -48,17 +48,11 @@ namespace NpcAppearance
         std::vector<std::filesystem::path> assets;
     };
 
-    enum class AppearanceScope
-    {
-        kFaceAndBody
-    };
-
     struct Assignment
     {
         Target target;
         std::filesystem::path presetPath;
         Requirements requirements;
-        AppearanceScope scope{ AppearanceScope::kFaceAndBody };
     };
 
     enum class PackageFormat

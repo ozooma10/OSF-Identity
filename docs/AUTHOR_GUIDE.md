@@ -70,22 +70,25 @@ a different priority, pack-wide `requires`, or explicit assignments:
 }
 ```
 
-`requires` is optional. If omitted, the pack has no declared package-wide
-requirements; runtime preset-reference validation still runs before conflict
-selection. Declare it only when the pack has plugin or loose-asset
-preconditions that cannot be inferred reliably from the preset.
+`priority` is optional and defaults to `0`. `requires` is also optional. If
+omitted, the pack has no declared package-wide requirements; runtime
+preset-reference validation still runs before conflict selection. Declare it
+only when the pack has plugin or loose-asset preconditions that cannot be
+inferred reliably from the preset.
 
 The folder name remains the pack ID even when a manifest is present. Renaming
 the folder intentionally changes the ID.
 
 ## Manifest reference
 
-- `priority` - `-1000000` to `1000000`, defaulting to `0`. When several valid
-  packs target the same NPC, the highest priority wins; ties go to ascending
-  case-insensitive pack folder name. Mod-manager order is irrelevant. The
-  `100` used in these examples outranks every manifest-less pack.
-- `requires` - optional plugins and loose Data-relative assets every preset needs. A
-  missing pack-wide requirement disables the whole pack. An explicit
+- `priority` - optional; `-1000000` to `1000000`, defaulting to `0`. When
+  several valid packs target the same NPC, the highest priority wins; ties go
+  to ascending case-insensitive pack folder name. Mod-manager order is
+  irrelevant. The `100` used in these examples outranks every manifest-less
+  pack.
+- `requires` - optional plugins and loose Data-relative assets every preset needs.
+  `plugins` and `assets` are independently optional; omit either list when it is
+  empty. A missing pack-wide requirement disables the whole pack. An explicit
   plugin-local target automatically adds its owning plugin to that assignment.
 - If `assignments` is present, only those mappings are used. If it is absent,
   the plugin-folder convention is scanned.
@@ -93,10 +96,11 @@ the folder intentionally changes the ID.
 Two folder names that resolve to the same case-insensitive pack ID are both
 rejected with `duplicate_package_id`.
 
-`package.schema.json` and `preset-metadata.schema.json` give editor
-validation for the files they describe; both files are optional. The runtime
-parser is authoritative and rejects unknown properties, duplicate targets, path
-traversal, and absolute preset paths.
+`package.schema.json` and `preset-metadata.schema.json` provide editor
+validation, field descriptions, defaults, and examples. A `$schema` property is
+an optional editor hint; `schemaVersion` is the required runtime format version.
+The runtime parser remains authoritative and rejects unknown properties,
+duplicate targets, path traversal, and absolute preset paths.
 
 ## Per-preset dependencies
 
@@ -107,17 +111,16 @@ matching `<localFormId>.npc` file inside the owning-plugin directory:
 {
   "schemaVersion": 1,
   "requires": {
-    "plugins": ["ExampleHairMod.esm"],
-    "assets": []
+    "plugins": ["ExampleHairMod.esm"]
   }
 }
 ```
 
-Sidecar and manifest requirements are additive. `requires` is optional here too;
-if omitted, the sidecar adds no requirements. A malformed sidecar disables only
-its preset; the rest of the pack and lower-priority candidates still compete.
-List every plugin needed to resolve non-vanilla headparts and every loose asset
-that needs an availability check.
+Sidecar and manifest requirements are additive. `requires`, `plugins`, and
+`assets` are optional here too; omitted values add no requirements. A malformed
+sidecar disables only its preset; the rest of the pack and lower-priority
+candidates still compete. List every plugin needed to resolve non-vanilla
+headparts and every loose asset that needs an availability check.
 
 ## Explicit assignments
 
@@ -126,13 +129,11 @@ Packs may map targets to presets directly, with per-assignment `requires`:
 ```json
 {
   "schemaVersion": 1,
-  "priority": 100,
   "assignments": [
     {
       "target": { "plugin": "Starfield.esm", "localFormId": "00005983" },
       "preset": "Sarah.npc",
-      "scope": "faceAndBody",
-      "requires": { "plugins": ["ExampleHairMod.esm"], "assets": [] }
+      "requires": { "plugins": ["ExampleHairMod.esm"] }
     }
   ]
 }
@@ -145,7 +146,7 @@ and `00005983` identify the same target and therefore conflict.
 
 ## Limits and rules
 
-- Unique `HumanRace` NPC bases only; complete `faceAndBody` replacement only.
+- Unique `HumanRace` NPC bases only; complete face-and-body appearance replacement only.
   No leveled/template-shared crowds, race or sex conversion, or per-reference
   variation.
 - Only the two producers above are supported. CharGenMenu's empty

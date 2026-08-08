@@ -2,6 +2,7 @@
 
 - Game-object work runs only from the verified native BSService queue drain.
 - Applied bases may remain mutated in-session; restore every tracked appearance byte-exactly before serialization and veto the save if exact restoration cannot be proven.
+- The mod is unreleased. Prefer the cleanest current schema and runtime contract; do not add backward-compatibility aliases or migrations unless release status changes.
 
 ## Build and verification
 

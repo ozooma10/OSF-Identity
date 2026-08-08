@@ -3,8 +3,8 @@
 #
 # Runs everything from tools/verify.ps1 that does not require the MSVC/xmake
 # game-plugin toolchain: both host test suites (built with $CXX, default g++),
-# the Python fixture-validator tests, the fixture provenance gate, and the
-# whitespace check. The game plugin itself still requires the Windows build.
+# the public JSON Schema contracts, fixture-validator tests, fixture provenance
+# gate, and whitespace check. The game plugin still requires the Windows build.
 set -euo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -32,8 +32,10 @@ echo "[verify-host] running host test suites"
 "$build_dir/npc-appearance-config-tests"
 "$build_dir/npc-appearance-preset-tests"
 
-echo "[verify-host] running fixture validator tests"
-python3 -m unittest tools.tests.npc_appearance_fixture_check_tests
+echo "[verify-host] running JSON and fixture validator tests"
+python3 -m unittest \
+    tools.tests.npc_appearance_fixture_check_tests \
+    tools.tests.npc_appearance_schema_tests
 
 echo "[verify-host] running fixture provenance gate"
 python3 tools/re/npc_appearance_fixture_check.py

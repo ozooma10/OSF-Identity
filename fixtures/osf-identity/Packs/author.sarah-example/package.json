@@ -8,8 +8,7 @@
         "plugin": "Starfield.esm",
         "localFormId": "00005983"
       },
-      "preset": "Sarah.npc",
-      "scope": "faceAndBody"
+      "preset": "Sarah.npc"
     }
   ]
 }

@@ -45,6 +45,7 @@ Example packs live in `fixtures/osf-identity/Packs`.
 
 ```powershell
 git clone --recursive <repository-url>   # pulls commonlibsf submodule
+python -m pip install -r .\requirements-dev.txt
 pwsh -NoProfile -File .\tools\verify.ps1
 pwsh -NoProfile -File .\tools\build-release.ps1   # writes the ZIP to dist/
 ```
