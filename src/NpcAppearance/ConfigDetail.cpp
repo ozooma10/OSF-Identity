@@ -49,8 +49,7 @@ namespace NpcAppearance::Detail
                                                    const std::filesystem::path& a_path)
         {
             if (a_items.size() > kMaxRequirements) {
-                AddIssue(a_result, a_path, 0, "limit_exceeded",
-                         "property 'plugins' exceeds the requirement limit");
+                AddIssue(a_result, a_path, 0, "limit_exceeded", "property 'plugins' exceeds the requirement limit");
                 return false;
             }
             std::unordered_set<std::string> seen;
@@ -74,8 +73,7 @@ namespace NpcAppearance::Detail
                                                   const std::filesystem::path& a_path)
         {
             if (a_items.size() > kMaxRequirements) {
-                AddIssue(a_result, a_path, 0, "limit_exceeded",
-                         "property 'assets' exceeds the requirement limit");
+                AddIssue(a_result, a_path, 0, "limit_exceeded", "property 'assets' exceeds the requirement limit");
                 return false;
             }
             std::unordered_set<std::string> seen;

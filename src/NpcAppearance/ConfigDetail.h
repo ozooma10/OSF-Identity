@@ -23,8 +23,7 @@ namespace NpcAppearance
     inline constexpr std::int32_t kMinPriority = -1'000'000;
     inline constexpr std::int32_t kMaxPriority = 1'000'000;
 
-    // Parser entry points behind DiscoverPackages; exposed here for the
-    // host-side test suites.
+    // Parser entry points behind DiscoverPackages; exposed here for the host test suites.
     [[nodiscard]] ManifestResult ParsePackageManifest(
         std::string_view a_json,
         const std::filesystem::path& a_manifestPath,
@@ -81,8 +80,7 @@ namespace NpcAppearance::Detail
         const std::filesystem::path& a_path,
         const std::filesystem::path& a_packageRoot);
 
-    // Defined in PackageDiscovery.cpp; consumed by ParsePackageManifest when a
-    // manifest declares no explicit assignments.
+    // Defined in PackageDiscovery.cpp; consumed by ParsePackageManifest when a manifest declares no explicit assignments.
     void DiscoverConventionAssignments(PackageManifest& a_manifest,
                                        ManifestResult& a_result,
                                        bool a_requirePresetFiles);

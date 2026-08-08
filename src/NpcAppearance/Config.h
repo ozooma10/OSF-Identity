@@ -6,10 +6,7 @@
 #include <string>
 #include <vector>
 
-// Public surface of the package-configuration pipeline: discover packs on
-// disk, check their requirements, and pick a deterministic winner per
-// resolved base form. Parser entry points and safety limits are internals
-// and live in ConfigDetail.h.
+// Pack config pipeline: discover packs on disk, check their requirements, and pick a deterministic winner per resolved base form. 
 namespace NpcAppearance
 {
     struct Target
@@ -54,8 +51,6 @@ namespace NpcAppearance
         std::filesystem::path manifestPath;
         bool implicitManifest{ false };
 
-        // Package root directory. For an implicit package `manifestPath` names the
-        // manifest the author never wrote, so it is only ever an anchor.
         [[nodiscard]] std::filesystem::path PackageRoot() const
         {
             return manifestPath.parent_path();
