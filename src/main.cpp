@@ -1,59 +1,19 @@
 #include "NpcAppearance/Runtime.h"
 #include "pch.h"
 
-#include <format>
-#include <sstream>
-#include <string>
-#include <vector>
-
 namespace
 {
     void OnDataLoaded() noexcept
     {
-        try {
-            REX::INFO("=== OSF Identity: data loaded ===");
-            NpcAppearance::Initialize();
-
-            REX::INFO("=== OSF Identity: ready ===");
-        } catch (const std::exception& e) {
-            NpcAppearance::FailClosed("data-loaded callback threw");
-            try {
-                REX::CRITICAL(
-                    "OSF Identity data-loaded callback swallowed '{}'",
-                    e.what());
-            } catch (...) {
-            }
-        } catch (...) {
-            NpcAppearance::FailClosed("data-loaded callback threw");
-            try {
-                REX::CRITICAL(
-                    "OSF Identity data-loaded callback swallowed an unknown exception");
-            } catch (...) {
-            }
-        }
+        REX::INFO("=== OSF Identity: data loaded ===");
+        NpcAppearance::Initialize();
+        REX::INFO("=== OSF Identity: ready ===");
     }
 
     void OnSFSEMessage(SFSE::MessagingInterface::Message* a_message) noexcept
     {
-        try {
-            if (a_message && a_message->type == SFSE::MessagingInterface::kPostPostDataLoad) {
-                OnDataLoaded();
-            }
-        } catch (const std::exception& e) {
-            NpcAppearance::FailClosed("SFSE message boundary threw");
-            try {
-                REX::CRITICAL(
-                    "OSF Identity SFSE message boundary swallowed '{}'",
-                    e.what());
-            } catch (...) {
-            }
-        } catch (...) {
-            NpcAppearance::FailClosed("SFSE message boundary threw");
-            try {
-                REX::CRITICAL(
-                    "OSF Identity SFSE message boundary swallowed an unknown exception");
-            } catch (...) {
-            }
+        if (a_message && a_message->type == SFSE::MessagingInterface::kPostPostDataLoad) {
+            OnDataLoaded();
         }
     }
 }

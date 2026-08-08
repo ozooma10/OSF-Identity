@@ -4954,67 +4954,47 @@ namespace NpcAppearance
     void Initialize() noexcept
     {
         try {
-        g_runtimeArmed.store(false, std::memory_order_release);
-        // Observer-only: a missing event source is telemetry loss, not a
-        // safety loss — the overlay runtime works without the sink.
-        auto* saveLoadSource = RE::SaveLoadEvent::GetEventSource();
-        if (saveLoadSource) {
-            saveLoadSource->RegisterSink(&SaveLoadEventSink::GetSingleton());
-            g_saveLoadSinkRegistered.store(true, std::memory_order_release);
-        } else {
-            REX::WARN(
-                "[NpcAppearance] SaveLoadEvent source unavailable; the post-load sweep is lost and styling relies on Set3d windows alone");
-        }
-        const bool deferredRetryAvailable = SFSE::GetTaskInterface() != nullptr;
-        g_runtimeOperational.store(true, std::memory_order_release);
-        if (!deferredRetryAvailable) {
-            KillMutation(
-                "SFSE task interface unavailable for demand-driven load retries");
-        }
-        REX::INFO(
-            "[NpcAppearance] save/load observer state saveLoadSink={} deferredRetryAvailable={} mutationKilled={} runtimeArmed={} callbacks=native-queue-shaped",
-            g_saveLoadSinkRegistered.load(std::memory_order_relaxed), deferredRetryAvailable,
-            g_mutationKilled.load(std::memory_order_relaxed),
-            g_runtimeArmed.load(std::memory_order_relaxed));
-        try {
+            g_runtimeArmed.store(false, std::memory_order_release);
+            // Observer-only: a missing event source is telemetry loss, not a
+            // safety loss — the overlay runtime works without the sink.
+            auto* saveLoadSource = RE::SaveLoadEvent::GetEventSource();
+            if (saveLoadSource) {
+                saveLoadSource->RegisterSink(&SaveLoadEventSink::GetSingleton());
+                g_saveLoadSinkRegistered.store(true, std::memory_order_release);
+            } else {
+                REX::WARN(
+                    "[NpcAppearance] SaveLoadEvent source unavailable; the post-load sweep is lost and styling relies on Set3d windows alone");
+            }
+            const bool deferredRetryAvailable = SFSE::GetTaskInterface() != nullptr;
+            g_runtimeOperational.store(true, std::memory_order_release);
+            if (!deferredRetryAvailable) {
+                KillMutation(
+                    "SFSE task interface unavailable for demand-driven load retries");
+            }
+            REX::INFO(
+                "[NpcAppearance] save/load observer state saveLoadSink={} deferredRetryAvailable={} mutationKilled={} runtimeArmed={} callbacks=native-queue-shaped",
+                g_saveLoadSinkRegistered.load(std::memory_order_relaxed), deferredRetryAvailable,
+                g_mutationKilled.load(std::memory_order_relaxed),
+                g_runtimeArmed.load(std::memory_order_relaxed));
             if (!QueueOrRunNativeTask(
                     [] { OnNpcAppearanceDataLoaded(); },
                     "NpcAppearance.StartupScan",
                     [] {
                         KillMutation("startup scan payload was dropped by the native queue");
-                        try {
-                            REX::CRITICAL(
-                                "[NpcAppearance] startup scan payload was dropped before verified native execution; mutation remains fail closed");
-                        } catch (...) {
-                        }
+                        REX::CRITICAL(
+                            "[NpcAppearance] startup scan payload was dropped before verified native execution; mutation remains fail closed");
                     })) {
                 KillMutation("startup scan could not enter the verified native queue");
             }
         } catch (const std::exception& e) {
-            KillMutation("startup scan scheduling threw");
+            KillMutation("initialization threw");
             REX::CRITICAL(
-                "[NpcAppearance] startup scan scheduling threw '{}'; no mutation",
+                "[NpcAppearance] initialization threw '{}'; mutation stays fail closed",
                 e.what());
         } catch (...) {
-            KillMutation("startup scan scheduling threw");
+            KillMutation("initialization threw");
             REX::CRITICAL(
-                "[NpcAppearance] startup scan scheduling threw; no mutation");
-        }
-        } catch (const std::exception& e) {
-            KillMutation("initialization boundary threw");
-            try {
-                REX::CRITICAL(
-                    "[NpcAppearance] initialization boundary swallowed '{}'",
-                    e.what());
-            } catch (...) {
-            }
-        } catch (...) {
-            KillMutation("initialization boundary threw");
-            try {
-                REX::CRITICAL(
-                    "[NpcAppearance] initialization boundary swallowed an unknown exception");
-            } catch (...) {
-            }
+                "[NpcAppearance] initialization threw an unknown exception; mutation stays fail closed");
         }
     }
 
