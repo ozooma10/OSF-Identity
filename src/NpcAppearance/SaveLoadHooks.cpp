@@ -465,11 +465,9 @@ namespace NpcAppearance::SaveLoadHooks
                         "[SaveLoadHooks] SAVE entry sequence={} tid={} name='{}' provider='{}' entries={}",
                         a_event->sequence, ::GetCurrentThreadId(), name, g_providerName, entries);
                 });
-                InvokeCallback(g_callbacks.onSaveGameEntry, "SAVE entry callback");
                 break;
             }
             case OSF_SAVE_LOAD_HOOK_PHASE_SAVE_RETURN: {
-                InvokeCallback(g_callbacks.onSaveGameReturn, "SAVE return callback");
                 const auto returns = g_saveReturns.fetch_add(1, std::memory_order_relaxed) + 1;
                 SwallowAtThunkBoundary("SAVE return log", [&] {
                     REX::INFO(

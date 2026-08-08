@@ -8,8 +8,6 @@ namespace NpcAppearance::SaveLoadHooks
     // no callback can block or alter serialization.
     struct Callbacks
     {
-        std::function<void()> onSaveGameEntry;
-        std::function<void()> onSaveGameReturn;
         std::function<void()> onLoadGameReturn;
     };
 

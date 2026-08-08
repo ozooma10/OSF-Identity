@@ -7,7 +7,7 @@
 #include <vector>
 
 // C ABI diagnostic bridge: lets the OSF RE sandbox CommandFile channel drive
-// `npcapp` inside this DLL — its own bracket/probe state, not the RE spike's.
+// `npcapp` inside this DLL — its own runtime/probe state, not the RE spike's.
 // The caller supplies the full command line ("npcapp <sub> ..."); output lines
 // are pushed through a_emit. Exceptions never cross the ABI.
 extern "C" __declspec(dllexport) void OSFIdentity_RunDiagnosticCommand(

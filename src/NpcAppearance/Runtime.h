@@ -11,14 +11,12 @@
 // observer-only (API v3) and nothing in this plugin can block serialization.
 //
 //   npcapp status
-//   npcapp bracket
 //   npcapp selftest
 //   npcapp scan [packsRoot]
 //   npcapp inspect <preset.npc>
 //   npcapp resolve <plugin:localFormID>
 //   npcapp refs <plugin:localFormID> <preset.npc>
 //   npcapp donor [count]
-//   npcapp targettrial <plugin:localFormID> <actorRefID> <preset.npc>
 //   npcapp copyref <targetRefID> <sourceRefID> [sourceIsPlayer=0|1]
 //   npcapp overlay [status|on|off|sweep]
 //   npcapp probebaseline <plugin:localFormID>
@@ -27,21 +25,14 @@
 //   npcapp probetransient <plugin:localFormID> <actorRefID> <preset.npc>
 //   npcapp probeset3d [on|off|status]
 //
-// `targettrial` only re-applies the bracket-tracked winning assignment and
-// issues the selected one-shot notify/refresh recipe; arbitrary or untracked
-// mutation is refused. The `probe*` commands are the render-time overlay
-// migration's feasibility instruments: they never register state in the save
-// bracket, and `probetransient`/`probe97401` restore (or loudly refuse to
-// restore) the base within the same drain task.
-//
-// The overlay runtime (probe-proven Mechanism B, default ON; see
+// The overlay runtime (probe-proven Mechanism B; see
 // docs/OVERLAY_PROBE_FINDINGS.md) styles tracked NPCs per 3D build: one
 // verified drain task applies the preset to the base, notifies, refreshes the
 // actor, and restores the base byte-exactly before returning — the
 // serializable TESNPC is never preset-mutated at rest. Overlay failures
-// render vanilla; a failed in-window restore escalates the base into the
-// save bracket's custody and kills mutation. `npcapp overlay off` falls back
-// to the legacy persistent-apply path at the next load.
+// render vanilla; a failed in-window restore kills mutation for the process.
+// The `probe*` commands are dev diagnostics; `probetransient`/`probe97401`
+// restore (or loudly refuse to restore) the base within the same drain task.
 namespace NpcAppearance
 {
     using LineSink = std::function<void(const std::string&)>;
