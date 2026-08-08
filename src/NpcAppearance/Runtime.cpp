@@ -126,6 +126,12 @@ namespace NpcAppearance
             0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x6C,
             0x24, 0x18, 0x48, 0x89, 0x74, 0x24, 0x20, 0x57
         };
+        // TESNPC primary vtable slot 0x17, proven identical on Starfield
+        // 1.16.242 and 1.16.244 from the unpacked executable images.
+        constexpr std::array<std::uint8_t, 16> kNpcAppearanceChangedGate{
+            0x48, 0x89, 0x5C, 0x24, 0x10, 0x57, 0x48, 0x83,
+            0xEC, 0x20, 0x8B, 0xFA, 0x48, 0x8B, 0xD9, 0x0F
+        };
 
         // ==================================================================
         // Production save/load bracket state. Assignment maps are published by
@@ -150,12 +156,26 @@ namespace NpcAppearance
                 SaveLoadHooks::Operational();
         }
 
-        void KillMutation(const std::string_view a_reason)
+        [[nodiscard]] bool RestoreOperational() noexcept
+        {
+            return g_bracketOperational.load(std::memory_order_acquire);
+        }
+
+        [[nodiscard]] bool SaveGatewayOperational() noexcept
+        {
+            return g_bracketOperational.load(std::memory_order_acquire) &&
+                SaveLoadHooks::Operational();
+        }
+
+        void KillMutation(const std::string_view a_reason) noexcept
         {
             bool expected = false;
             if (g_mutationKilled.compare_exchange_strong(
                     expected, true, std::memory_order_acq_rel)) {
-                REX::CRITICAL("[NpcAppearance] mutation killed for this process: {}", a_reason);
+                try {
+                    REX::CRITICAL("[NpcAppearance] mutation killed for this process: {}", a_reason);
+                } catch (...) {
+                }
             }
         }
 
@@ -176,6 +196,19 @@ namespace NpcAppearance
                 a_operation,
                 g_bracketOperational.load(std::memory_order_relaxed),
                 g_mutationKilled.load(std::memory_order_relaxed)));
+            return false;
+        }
+
+        [[nodiscard]] bool RequireRestoreOperational(
+            const LineSink& a_out,
+            const std::string_view a_operation)
+        {
+            if (RestoreOperational()) {
+                return true;
+            }
+            a_out(std::format(
+                "{}: restore disabled because the production bracket was never operational; FAIL CLOSED",
+                a_operation));
             return false;
         }
 
@@ -941,16 +974,17 @@ namespace NpcAppearance
         };
         std::mutex                                      g_deferredC2LoadMutex;
         std::shared_ptr<DeferredC2LoadTask>             g_deferredC2LoadTask;
-        bool                                            g_deferredC2LoadInFlight{ false };
+        std::shared_ptr<DeferredC2LoadTask>             g_deferredC2LoadInFlight;
         struct DeferredC2SaveTask
         {
             std::uint64_t       sequence{ 0 };
+            std::uint64_t       loadGeneration{ 0 };
             std::function<void()> run;
             bool                deferralLogged{ false };
         };
         std::mutex                                      g_deferredC2SaveMutex;
         std::shared_ptr<DeferredC2SaveTask>             g_deferredC2SaveTask;
-        bool                                            g_deferredC2SaveInFlight{ false };
+        std::shared_ptr<DeferredC2SaveTask>             g_deferredC2SaveInFlight;
         std::atomic<bool>                               g_deferredC2RetryScheduled{ false };
         constexpr std::uint32_t                         kDeferredC2RetryMaxWaits = 400;
         constexpr std::chrono::milliseconds             kDeferredC2RetryDelay{ 25 };
@@ -1419,11 +1453,41 @@ namespace NpcAppearance
                                a_expected.data(), a_expected.size()) == 0;
         }
 
-        void NotifyBaseAppearanceChanged(RE::TESNPC* a_npc, const std::uint32_t a_flag)
+        using NotifyNpcAppearanceChanged = void (*)(RE::TESNPC*, std::uint32_t);
+
+        [[nodiscard]] bool ResolveNpcAppearanceChanged(
+            RE::TESNPC* a_npc,
+            NotifyNpcAppearanceChanged& a_notify) noexcept
         {
-            auto* vtable = *reinterpret_cast<std::uintptr_t**>(a_npc);
-            using Notify = void (*)(RE::TESNPC*, std::uint32_t);
-            reinterpret_cast<Notify>(vtable[0x17])(a_npc, a_flag);
+            a_notify = nullptr;
+            std::uintptr_t vtable = 0;
+            std::uintptr_t notifyAddress = 0;
+            const auto expectedVtable =
+                REL::Relocation<std::uintptr_t>{ kNpcPrimaryVtableID }.address();
+            if (!a_npc ||
+                !Util::SafeReadQword(
+                    reinterpret_cast<std::uintptr_t>(a_npc), vtable) ||
+                vtable != expectedVtable ||
+                !Util::SafeReadQword(
+                    vtable + 0x17 * sizeof(std::uintptr_t), notifyAddress) ||
+                !HasExpectedBytes(notifyAddress, kNpcAppearanceChangedGate)) {
+                return false;
+            }
+            a_notify = reinterpret_cast<NotifyNpcAppearanceChanged>(notifyAddress);
+            return true;
+        }
+
+        [[nodiscard]] bool NotifyBaseAppearanceChanged(
+            RE::TESNPC* a_npc,
+            const std::uint32_t a_flag)
+        {
+            NotifyNpcAppearanceChanged notify = nullptr;
+            if (!ResolveNpcAppearanceChanged(a_npc, notify)) {
+                KillMutation("TESNPC appearance notification vtable/slot byte gate failed");
+                return false;
+            }
+            notify(a_npc, a_flag);
+            return true;
         }
 
         struct TargetActorResolution
@@ -1500,8 +1564,10 @@ namespace NpcAppearance
                 return false;
             }
 
-            NotifyBaseAppearanceChanged(a_target, 0x800);
-            NotifyBaseAppearanceChanged(a_target, 0x4000);
+            if (!NotifyBaseAppearanceChanged(a_target, 0x800) ||
+                !NotifyBaseAppearanceChanged(a_target, 0x4000)) {
+                return false;
+            }
             reinterpret_cast<RefreshActorAppearance>(refreshAddress)(
                 a_actor, false, 0x28, false);
             return true;
@@ -3120,7 +3186,7 @@ namespace NpcAppearance
             const OwnedVisualSnapshot& a_snapshot,
             RE::TESNPC* a_originalFaceNPC)
         {
-            if (!RequireMutationOperational(a_out, "ownedrestore") || !a_target) {
+            if (!RequireRestoreOperational(a_out, "ownedrestore") || !a_target) {
                 if (!a_target) {
                     a_out("ownedrestore: target is null; no mutation");
                 }
@@ -3582,7 +3648,8 @@ namespace NpcAppearance
 
         [[nodiscard]] bool QueueOrRunNativeTask(
             std::function<void()> a_task,
-            const std::string_view a_label)
+            const std::string_view a_label,
+            std::function<void()> a_onDrop = {})
         {
             const auto before = Util::NativeMainThreadQueue::GetDiagnostics();
             if (before.insideDrain) {
@@ -3602,7 +3669,7 @@ namespace NpcAppearance
             }
 
             const auto postResult = Util::NativeMainThreadQueue::Post(
-                std::move(a_task), a_label);
+                std::move(a_task), a_label, std::move(a_onDrop));
             if (postResult == Util::NativeMainThreadQueue::PostResult::kQueued) {
                 return true;
             }
@@ -3719,12 +3786,6 @@ namespace NpcAppearance
                              wait <= kDeferredC2RetryMaxWaits;
                              ++wait) {
                             std::this_thread::sleep_for(kDeferredC2RetryDelay);
-                            if (g_mutationKilled.load(std::memory_order_acquire)) {
-                                g_deferredC2RetryScheduled.store(
-                                    false, std::memory_order_release);
-                                return;
-                            }
-
                             const auto diagnostics =
                                 Util::NativeMainThreadQueue::GetDiagnostics();
                             if (!diagnostics.queueEnabled ||
@@ -3800,7 +3861,7 @@ namespace NpcAppearance
                         return;
                     }
                     pending = g_deferredC2LoadTask;
-                    g_deferredC2LoadInFlight = true;
+                    g_deferredC2LoadInFlight = pending;
                 }
 
                 auto execute = [pending] {
@@ -3822,14 +3883,20 @@ namespace NpcAppearance
                         }
                     } catch (const std::exception& e) {
                         KillMutation("deferred load-return native task threw");
-                        REX::CRITICAL(
-                            "[NpcAppearance] deferred C2 LOAD-RETURN generation={} threw '{}' inside the verified drain",
-                            pending->generation, e.what());
+                        try {
+                            REX::CRITICAL(
+                                "[NpcAppearance] deferred C2 LOAD-RETURN generation={} threw '{}' inside the verified drain",
+                                pending->generation, e.what());
+                        } catch (...) {
+                        }
                     } catch (...) {
                         KillMutation("deferred load-return native task threw");
-                        REX::CRITICAL(
-                            "[NpcAppearance] deferred C2 LOAD-RETURN generation={} threw inside the verified drain",
-                            pending->generation);
+                        try {
+                            REX::CRITICAL(
+                                "[NpcAppearance] deferred C2 LOAD-RETURN generation={} threw inside the verified drain",
+                                pending->generation);
+                        } catch (...) {
+                        }
                     }
                     bool retry = false;
                     {
@@ -3837,8 +3904,10 @@ namespace NpcAppearance
                         if (complete && g_deferredC2LoadTask == pending) {
                             g_deferredC2LoadTask.reset();
                         }
-                        retry = !complete && g_deferredC2LoadTask == pending;
-                        g_deferredC2LoadInFlight = false;
+                        retry = g_deferredC2LoadTask != nullptr;
+                        if (g_deferredC2LoadInFlight == pending) {
+                            g_deferredC2LoadInFlight.reset();
+                        }
                     }
                     if (retry) {
                         ScheduleDeferredC2Retry();
@@ -3853,7 +3922,20 @@ namespace NpcAppearance
                 }
 
                 const auto postResult = Util::NativeMainThreadQueue::Post(
-                    std::move(execute), "NpcAppearance.C2.LoadApply");
+                    std::move(execute), "NpcAppearance.C2.LoadApply",
+                    [pending] {
+                        bool retry = false;
+                        {
+                            const std::scoped_lock lock{ g_deferredC2LoadMutex };
+                            if (g_deferredC2LoadInFlight == pending) {
+                                g_deferredC2LoadInFlight.reset();
+                            }
+                            retry = g_deferredC2LoadTask != nullptr;
+                        }
+                        if (retry) {
+                            ScheduleDeferredC2Retry();
+                        }
+                    });
                 if (postResult ==
                     Util::NativeMainThreadQueue::PostResult::kQueued) {
                     if (pending->attempts == 0) {
@@ -3867,7 +3949,9 @@ namespace NpcAppearance
                 bool logDeferral = false;
                 {
                     const std::scoped_lock lock{ g_deferredC2LoadMutex };
-                    g_deferredC2LoadInFlight = false;
+                    if (g_deferredC2LoadInFlight == pending) {
+                        g_deferredC2LoadInFlight.reset();
+                    }
                     if (g_deferredC2LoadTask == pending &&
                         !pending->deferralLogged) {
                         pending->deferralLogged = true;
@@ -3886,7 +3970,9 @@ namespace NpcAppearance
             } catch (const std::exception& e) {
                 {
                     const std::scoped_lock lock{ g_deferredC2LoadMutex };
-                    g_deferredC2LoadInFlight = false;
+                    if (g_deferredC2LoadInFlight == pending) {
+                        g_deferredC2LoadInFlight.reset();
+                    }
                 }
                 KillMutation("deferred load-return scheduling threw");
                 REX::CRITICAL(
@@ -3895,7 +3981,9 @@ namespace NpcAppearance
             } catch (...) {
                 {
                     const std::scoped_lock lock{ g_deferredC2LoadMutex };
-                    g_deferredC2LoadInFlight = false;
+                    if (g_deferredC2LoadInFlight == pending) {
+                        g_deferredC2LoadInFlight.reset();
+                    }
                 }
                 KillMutation("deferred load-return scheduling threw");
                 REX::CRITICAL(
@@ -3913,7 +4001,7 @@ namespace NpcAppearance
                         return;
                     }
                     pending = g_deferredC2SaveTask;
-                    g_deferredC2SaveInFlight = true;
+                    g_deferredC2SaveInFlight = pending;
                 }
 
                 auto execute = [pending] {
@@ -3921,20 +4009,35 @@ namespace NpcAppearance
                         pending->run();
                     } catch (const std::exception& e) {
                         KillMutation("deferred save-return native task threw");
-                        REX::CRITICAL(
-                            "[NpcAppearance] deferred C2 SAVE-RETURN sequence={} threw '{}' inside the verified drain; restored originals remain at rest",
-                            pending->sequence, e.what());
+                        try {
+                            REX::CRITICAL(
+                                "[NpcAppearance] deferred C2 SAVE-RETURN sequence={} threw '{}' inside the verified drain; restored originals remain at rest",
+                                pending->sequence, e.what());
+                        } catch (...) {
+                        }
                     } catch (...) {
                         KillMutation("deferred save-return native task threw");
-                        REX::CRITICAL(
-                            "[NpcAppearance] deferred C2 SAVE-RETURN sequence={} threw inside the verified drain; restored originals remain at rest",
-                            pending->sequence);
+                        try {
+                            REX::CRITICAL(
+                                "[NpcAppearance] deferred C2 SAVE-RETURN sequence={} threw inside the verified drain; restored originals remain at rest",
+                                pending->sequence);
+                        } catch (...) {
+                        }
                     }
-                    const std::scoped_lock lock{ g_deferredC2SaveMutex };
-                    if (g_deferredC2SaveTask == pending) {
-                        g_deferredC2SaveTask.reset();
+                    bool retry = false;
+                    {
+                        const std::scoped_lock lock{ g_deferredC2SaveMutex };
+                        if (g_deferredC2SaveTask == pending) {
+                            g_deferredC2SaveTask.reset();
+                        }
+                        retry = g_deferredC2SaveTask != nullptr;
+                        if (g_deferredC2SaveInFlight == pending) {
+                            g_deferredC2SaveInFlight.reset();
+                        }
                     }
-                    g_deferredC2SaveInFlight = false;
+                    if (retry) {
+                        ScheduleDeferredC2Retry();
+                    }
                 };
 
                 const auto diagnostics =
@@ -3945,7 +4048,20 @@ namespace NpcAppearance
                 }
 
                 const auto postResult = Util::NativeMainThreadQueue::Post(
-                    std::move(execute), "NpcAppearance.C2.SaveReapply");
+                    std::move(execute), "NpcAppearance.C2.SaveReapply",
+                    [pending] {
+                        bool retry = false;
+                        {
+                            const std::scoped_lock lock{ g_deferredC2SaveMutex };
+                            if (g_deferredC2SaveInFlight == pending) {
+                                g_deferredC2SaveInFlight.reset();
+                            }
+                            retry = g_deferredC2SaveTask != nullptr;
+                        }
+                        if (retry) {
+                            ScheduleDeferredC2Retry();
+                        }
+                    });
                 if (postResult ==
                     Util::NativeMainThreadQueue::PostResult::kQueued) {
                     REX::INFO(
@@ -3957,7 +4073,9 @@ namespace NpcAppearance
                 bool logDeferral = false;
                 {
                     const std::scoped_lock lock{ g_deferredC2SaveMutex };
-                    g_deferredC2SaveInFlight = false;
+                    if (g_deferredC2SaveInFlight == pending) {
+                        g_deferredC2SaveInFlight.reset();
+                    }
                     if (g_deferredC2SaveTask == pending &&
                         !pending->deferralLogged) {
                         pending->deferralLogged = true;
@@ -3976,7 +4094,9 @@ namespace NpcAppearance
             } catch (const std::exception& e) {
                 {
                     const std::scoped_lock lock{ g_deferredC2SaveMutex };
-                    g_deferredC2SaveInFlight = false;
+                    if (g_deferredC2SaveInFlight == pending) {
+                        g_deferredC2SaveInFlight.reset();
+                    }
                 }
                 KillMutation("deferred save-return scheduling threw");
                 REX::CRITICAL(
@@ -3985,7 +4105,9 @@ namespace NpcAppearance
             } catch (...) {
                 {
                     const std::scoped_lock lock{ g_deferredC2SaveMutex };
-                    g_deferredC2SaveInFlight = false;
+                    if (g_deferredC2SaveInFlight == pending) {
+                        g_deferredC2SaveInFlight.reset();
+                    }
                 }
                 KillMutation("deferred save-return scheduling threw");
                 REX::CRITICAL(
@@ -4013,10 +4135,10 @@ namespace NpcAppearance
                     return true;
                 }
                 g_saveHookObserved.store(true, std::memory_order_release);
-                if (!MutationOperational()) {
+                if (!SaveGatewayOperational()) {
                     KillMutation("save/load hook provider lost ownership at save entry");
                     REX::CRITICAL(
-                        "[NpcAppearance] C2 SAVE-ENTRY mutation is not operational; save veto requested");
+                        "[NpcAppearance] C2 SAVE-ENTRY save gateway is not operational; save veto requested");
                     return false;
                 }
                 if (!g_saveLoadEventRegistered.load(std::memory_order_acquire)) {
@@ -4036,7 +4158,6 @@ namespace NpcAppearance
                 if (!active || !ready || reentrant || restored != tracked) {
                     g_saveGatewayEntered.store(false, std::memory_order_release);
                     g_preSaveGeneration.fetch_add(1, std::memory_order_acq_rel);
-                    KillMutation("pre-save restoration was not ready at engine save entry");
                     REX::CRITICAL(
                         "[NpcAppearance] C2 SAVE-ENTRY pre-save validation FAILED active={} ready={} reentrant={} tracked={} restored={}; SAVE VETO requested and engine gateway must not run",
                         active, ready, reentrant, tracked, restored);
@@ -4090,19 +4211,39 @@ namespace NpcAppearance
 
                 const auto saveReturn =
                     g_bracketSaveReturns.fetch_add(1, std::memory_order_relaxed) + 1;
+                const auto loadGeneration =
+                    g_bracketLoadGeneration.load(std::memory_order_acquire);
                 auto pending = std::make_shared<DeferredC2SaveTask>();
                 pending->sequence = saveReturn;
-                pending->run = [saveReturn, states = std::move(states)] {
+                pending->loadGeneration = loadGeneration;
+                pending->run = [saveReturn, loadGeneration,
+                                states = std::move(states)] {
+                        const auto finishBracket = [loadGeneration]() noexcept {
+                            if (g_bracketLoadGeneration.load(
+                                    std::memory_order_acquire) != loadGeneration) {
+                                return;
+                            }
+                            try {
+                                const std::scoped_lock lock{ g_appliedBasesMutex };
+                                g_saveEntryRestoredBases.clear();
+                                g_inBracket.store(false, std::memory_order_release);
+                            } catch (...) {
+                                KillMutation("save-return bracket cleanup threw");
+                            }
+                        };
                         try {
+                            if (g_bracketLoadGeneration.load(
+                                    std::memory_order_acquire) != loadGeneration) {
+                                REX::WARN(
+                                    "[NpcAppearance] C2 SAVE-RETURN return={} loadGeneration={} canceled after a newer load; no game-object access",
+                                    saveReturn, loadGeneration);
+                                return;
+                            }
                             const auto diagnostics =
                                 Util::NativeMainThreadQueue::GetDiagnostics();
                             if (!diagnostics.insideDrain) {
                                 KillMutation("save-return reapply reached outside verified native drain");
-                                {
-                                    const std::scoped_lock lock{ g_appliedBasesMutex };
-                                    g_saveEntryRestoredBases.clear();
-                                }
-                                g_inBracket.store(false, std::memory_order_release);
+                                finishBracket();
                                 REX::CRITICAL(
                                     "[NpcAppearance] C2 SAVE-RETURN return={} reached outside verified native drain; no game-object access and restored originals remain at rest tid={} drainOwnerTid={}",
                                     saveReturn, diagnostics.currentThreadID,
@@ -4110,11 +4251,7 @@ namespace NpcAppearance
                                 return;
                             }
                             if (!MutationOperational()) {
-                                {
-                                    const std::scoped_lock lock{ g_appliedBasesMutex };
-                                    g_saveEntryRestoredBases.clear();
-                                }
-                                g_inBracket.store(false, std::memory_order_release);
+                                finishBracket();
                                 REX::CRITICAL(
                                     "[NpcAppearance] C2 SAVE-RETURN return={} mutation disabled; restored originals remain at rest and reapply is skipped tid={} insideDrain={}",
                                     saveReturn, ::GetCurrentThreadId(),
@@ -4126,6 +4263,13 @@ namespace NpcAppearance
                             std::size_t reappliedCount = 0;
                             std::size_t failedCount = 0;
                             for (const auto& state : states) {
+                                if (g_bracketLoadGeneration.load(
+                                        std::memory_order_acquire) != loadGeneration) {
+                                    REX::WARN(
+                                        "[NpcAppearance] C2 SAVE-RETURN return={} canceled before target=0x{:08X} after a newer load",
+                                        saveReturn, state.baseID);
+                                    break;
+                                }
                                 bool reapplied = false;
                                 RE::TESNPC* target = nullptr;
                                 try {
@@ -4150,6 +4294,9 @@ namespace NpcAppearance
                                         !refreshRequired || HasExpectedBytes(
                                             refreshAddress,
                                             kActorAppearanceRefreshGate);
+                                    NotifyNpcAppearanceChanged notify = nullptr;
+                                    const bool notifyGateValid = target &&
+                                        ResolveNpcAppearanceChanged(target, notify);
                                     if (!refreshGateValid) {
                                         KillMutation(
                                             "save-return refresh byte gate failed");
@@ -4159,19 +4306,26 @@ namespace NpcAppearance
                                             actorResolution.highActors,
                                             actorResolution.processListsValid);
                                     }
+                                    if (!notifyGateValid) {
+                                        KillMutation(
+                                            "save-return TESNPC appearance notification byte gate failed");
+                                        REX::CRITICAL(
+                                            "[NpcAppearance] C2 SAVE-RETURN target=0x{:08X} notifyGate=false; exact original remains at rest and reapply is skipped",
+                                            state.baseID);
+                                    }
 
                                     const bool silentlyApplied =
-                                        refreshGateValid && target &&
+                                        refreshGateValid && notifyGateValid && target &&
                                         SilentApplyPresetToBase(
                                             out, target,
                                             state.assignment.presetPath);
                                     bool notified = false;
                                     bool actorRefreshed = !refreshRequired;
                                     if (silentlyApplied) {
-                                        NotifyBaseAppearanceChanged(target, 0x800);
-                                        NotifyBaseAppearanceChanged(target, 0x4000);
-                                        notified = true;
-                                        if (refreshRequired) {
+                                        notified =
+                                            NotifyBaseAppearanceChanged(target, 0x800) &&
+                                            NotifyBaseAppearanceChanged(target, 0x4000);
+                                        if (notified && refreshRequired) {
                                             reinterpret_cast<RefreshActorAppearance>(
                                                 refreshAddress)(
                                                 actorResolution.actor, false,
@@ -4190,7 +4344,8 @@ namespace NpcAppearance
                                         actorResolution.processListsValid,
                                         hasLoaded3D, silentlyApplied, notified,
                                         refreshRequired, actorRefreshed, reapplied);
-                                    if (!reapplied && target && refreshGateValid) {
+                                    if (!reapplied && target &&
+                                        refreshGateValid && notifyGateValid) {
                                         const bool safeOriginal =
                                             RestoreAppliedBaseState(out, target, state);
                                         REX::CRITICAL(
@@ -4246,12 +4401,31 @@ namespace NpcAppearance
                                     }
                                 }
 
+                                bool trackingLost = false;
                                 {
                                     const std::scoped_lock lock{ g_appliedBasesMutex };
                                     const auto found = g_appliedBases.find(state.baseID);
                                     if (found != g_appliedBases.end()) {
                                         found->second.bracketFailed = !reapplied;
+                                    } else {
+                                        trackingLost = true;
                                     }
+                                }
+                                if (trackingLost && reapplied) {
+                                    const LineSink fallbackOut = [baseID = state.baseID](
+                                                                     const std::string& a_text) {
+                                        REX::INFO(
+                                            "[NpcAppearance] C2 reapply tracking fallback base=0x{:08X}: {}",
+                                            baseID, a_text);
+                                    };
+                                    const bool safeOriginal =
+                                        RestoreAppliedBaseState(
+                                            fallbackOut, target, state);
+                                    reapplied = false;
+                                    KillMutation(
+                                        safeOriginal ?
+                                            "save-return applied base lost tracking; exact original restored" :
+                                            "save-return applied base lost tracking and exact-original fallback failed");
                                 }
                                 if (reapplied) {
                                     ++reappliedCount;
@@ -4260,11 +4434,7 @@ namespace NpcAppearance
                                 }
                             }
 
-                            {
-                                const std::scoped_lock lock{ g_appliedBasesMutex };
-                                g_saveEntryRestoredBases.clear();
-                            }
-                            g_inBracket.store(false, std::memory_order_release);
+                            finishBracket();
                             const auto totalMs = std::chrono::duration<double, std::milli>(
                                 std::chrono::steady_clock::now() - totalStarted).count();
                             REX::INFO(
@@ -4272,21 +4442,13 @@ namespace NpcAppearance
                                 saveReturn, states.size(), reappliedCount, failedCount,
                                 ::GetCurrentThreadId(), diagnostics.insideDrain, totalMs);
                         } catch (const std::exception& e) {
-                            {
-                                const std::scoped_lock lock{ g_appliedBasesMutex };
-                                g_saveEntryRestoredBases.clear();
-                            }
-                            g_inBracket.store(false, std::memory_order_release);
+                            finishBracket();
                             KillMutation("save-return native task threw");
                             REX::CRITICAL(
                                 "[NpcAppearance] C2 SAVE-RETURN native task threw '{}'; restored originals remain at rest",
                                 e.what());
                         } catch (...) {
-                            {
-                                const std::scoped_lock lock{ g_appliedBasesMutex };
-                                g_saveEntryRestoredBases.clear();
-                            }
-                            g_inBracket.store(false, std::memory_order_release);
+                            finishBracket();
                             KillMutation("save-return native task threw");
                             REX::CRITICAL(
                                 "[NpcAppearance] C2 SAVE-RETURN native task threw; restored originals remain at rest");
@@ -4295,11 +4457,18 @@ namespace NpcAppearance
                 {
                     const std::scoped_lock lock{ g_deferredC2SaveMutex };
                     if (g_deferredC2SaveTask) {
-                        KillMutation("overlapping deferred save-return tasks");
-                        REX::CRITICAL(
-                            "[NpcAppearance] C2 SAVE-RETURN return={} found an existing deferred reapply sequence={}; restored originals remain at rest",
-                            saveReturn, g_deferredC2SaveTask->sequence);
-                        return;
+                        if (g_deferredC2SaveTask->loadGeneration ==
+                            loadGeneration) {
+                            KillMutation("overlapping deferred save-return tasks");
+                            REX::CRITICAL(
+                                "[NpcAppearance] C2 SAVE-RETURN return={} found an existing deferred reapply sequence={} in the same load generation; restored originals remain at rest",
+                                saveReturn, g_deferredC2SaveTask->sequence);
+                            return;
+                        }
+                        REX::WARN(
+                            "[NpcAppearance] C2 SAVE-RETURN return={} supersedes stale sequence={} from loadGeneration={}",
+                            saveReturn, g_deferredC2SaveTask->sequence,
+                            g_deferredC2SaveTask->loadGeneration);
                     }
                     g_deferredC2SaveTask = std::move(pending);
                 }
@@ -4341,7 +4510,7 @@ namespace NpcAppearance
             }
         }
 
-        void OnC2SaveLoadEvent(const RE::SaveLoadEvent& a_event) noexcept
+        void OnC2SaveLoadEvent(const RE::SaveLoadEvent& a_event)
         {
             if (!g_bracketArmed.load(std::memory_order_acquire) ||
                 !IsC2SaveOperation(a_event.opType)) {
@@ -4404,9 +4573,9 @@ namespace NpcAppearance
                                     ::GetCurrentThreadId());
                                 return;
                             }
-                            if (!MutationOperational()) {
+                            if (!RestoreOperational()) {
                                 REX::CRITICAL(
-                                    "[NpcAppearance] C2 PRE-SAVE op={} generation={} entry={} mutation is not operational; save will be vetoed",
+                                    "[NpcAppearance] C2 PRE-SAVE op={} generation={} entry={} restoration is not operational; save will be vetoed",
                                     op, generation, entry);
                                 return;
                             }
@@ -4416,7 +4585,9 @@ namespace NpcAppearance
                                 g_preSaveGeneration.load(
                                     std::memory_order_acquire) == generation &&
                                 g_inBracket.load(std::memory_order_acquire);
-                            if (restored && current) {
+                            const bool gatewayOperational =
+                                SaveGatewayOperational();
+                            if (restored && current && gatewayOperational) {
                                 g_preSaveReady.store(
                                     true, std::memory_order_release);
                                 REX::INFO(
@@ -4425,16 +4596,31 @@ namespace NpcAppearance
                                     eventTid, ::GetCurrentThreadId());
                                 return;
                             }
-                            KillMutation(
-                                "pre-save native restoration failed or was superseded");
+                            if (!restored) {
+                                KillMutation("pre-save native restoration failed");
+                            } else if (!gatewayOperational) {
+                                KillMutation("save gateway lost ownership during pre-save restoration");
+                            }
                             REX::CRITICAL(
-                                "[NpcAppearance] C2 PRE-SAVE NOT READY op={} generation={} entry={} restored={} current={}; save will be vetoed",
-                                op, generation, entry, restored, current);
+                                "[NpcAppearance] C2 PRE-SAVE NOT READY op={} generation={} entry={} restored={} current={} gatewayOperational={}; save will be vetoed",
+                                op, generation, entry, restored, current,
+                                gatewayOperational);
                         },
-                        "NpcAppearance.C2.PreSaveRestore");
+                        "NpcAppearance.C2.PreSaveRestore",
+                        [generation, entry] {
+                            if (g_preSaveGeneration.load(
+                                    std::memory_order_acquire) == generation) {
+                                g_preSaveReady.store(
+                                    false, std::memory_order_release);
+                                try {
+                                    REX::CRITICAL(
+                                        "[NpcAppearance] C2 PRE-SAVE generation={} entry={} was dropped by the native queue; save will be vetoed without killing future restoration attempts",
+                                        generation, entry);
+                                } catch (...) {
+                                }
+                            }
+                        });
                     if (!queued) {
-                        KillMutation(
-                            "pre-save restoration could not enter verified native queue");
                         REX::CRITICAL(
                             "[NpcAppearance] C2 PRE-SAVE op={} generation={} entry={} could not queue restoration; save will be vetoed",
                             op, generation, entry);
@@ -4499,9 +4685,26 @@ namespace NpcAppearance
 
             RE::BSEventNotifyControl ProcessEvent(
                 const RE::SaveLoadEvent& a_event,
-                RE::BSTEventSource<RE::SaveLoadEvent>*) override
+                RE::BSTEventSource<RE::SaveLoadEvent>*) noexcept override
             {
-                OnC2SaveLoadEvent(a_event);
+                try {
+                    OnC2SaveLoadEvent(a_event);
+                } catch (const std::exception& e) {
+                    KillMutation("SaveLoadEvent sink boundary threw");
+                    try {
+                        REX::CRITICAL(
+                            "[NpcAppearance] C2 SaveLoadEvent sink boundary swallowed '{}'",
+                            e.what());
+                    } catch (...) {
+                    }
+                } catch (...) {
+                    KillMutation("SaveLoadEvent sink boundary threw");
+                    try {
+                        REX::CRITICAL(
+                            "[NpcAppearance] C2 SaveLoadEvent sink boundary swallowed an unknown exception");
+                    } catch (...) {
+                    }
+                }
                 return RE::BSEventNotifyControl::kContinue;
             }
         };
@@ -4515,16 +4718,33 @@ namespace NpcAppearance
                 const auto loadGeneration =
                     g_bracketLoadGeneration.fetch_add(
                         1, std::memory_order_acq_rel) + 1;
+                g_inBracket.store(false, std::memory_order_release);
+                g_preSaveReady.store(false, std::memory_order_release);
+                g_saveGatewayEntered.store(false, std::memory_order_release);
+                g_saveHookObserved.store(false, std::memory_order_release);
+                g_preSaveGeneration.fetch_add(1, std::memory_order_acq_rel);
+
+                std::vector<AppliedBaseState> staleStates;
                 {
                     const std::scoped_lock lock{ g_appliedBasesMutex };
-                    g_appliedBases.clear();
+                    staleStates.reserve(g_appliedBases.size());
+                    for (const auto& [baseID, state] : g_appliedBases) {
+                        static_cast<void>(baseID);
+                        staleStates.push_back(state);
+                    }
                     g_saveEntryRestoredBases.clear();
                 }
-                if (!MutationOperational()) {
-                    KillMutation("save/load hook provider lost ownership at load return");
-                    REX::CRITICAL(
-                        "[NpcAppearance] C2 LOAD-RETURN cleared stale applied-base state but mutation is not operational");
-                    return;
+                std::shared_ptr<DeferredC2SaveTask> canceledSaveTask;
+                {
+                    const std::scoped_lock lock{ g_deferredC2SaveMutex };
+                    canceledSaveTask = std::move(g_deferredC2SaveTask);
+                    g_deferredC2SaveInFlight.reset();
+                }
+                if (canceledSaveTask) {
+                    REX::WARN(
+                        "[NpcAppearance] C2 LOAD-RETURN generation={} canceled deferred SAVE-RETURN sequence={} from loadGeneration={}",
+                        loadGeneration, canceledSaveTask->sequence,
+                        canceledSaveTask->loadGeneration);
                 }
 
                 const auto loadReturn =
@@ -4541,6 +4761,7 @@ namespace NpcAppearance
                 auto pending = std::make_shared<DeferredC2LoadTask>();
                 pending->generation = loadGeneration;
                 pending->run = [loadReturn, loadGeneration,
+                                staleStates = std::move(staleStates),
                                 assignments = std::move(assignments)](
                                    const std::uint32_t attempt) {
                 try {
@@ -4551,14 +4772,6 @@ namespace NpcAppearance
                         loadReturn, loadGeneration);
                     return true;
                 }
-                if (!MutationOperational()) {
-                    KillMutation("mutation lost before queued load-return work");
-                    REX::CRITICAL(
-                        "[NpcAppearance] C2 LOAD-RETURN return={} generation={} mutation is not operational inside native drain; no mutation",
-                        loadReturn, loadGeneration);
-                    return true;
-                }
-
                 const auto diagnostics =
                     Util::NativeMainThreadQueue::GetDiagnostics();
                 auto* ui = RE::UI::GetSingleton();
@@ -4575,6 +4788,68 @@ namespace NpcAppearance
                     return false;
                 }
 
+                bool staleStateClean = true;
+                for (const auto& state : staleStates) {
+                    bool exactOriginal = false;
+                    try {
+                        auto* target =
+                            RE::TESForm::LookupByID<RE::TESNPC>(state.baseID);
+                        const LineSink out = [baseID = state.baseID](
+                                                 const std::string& a_text) {
+                            REX::INFO(
+                                "[NpcAppearance] C2 load reconciliation base=0x{:08X}: {}",
+                                baseID, a_text);
+                        };
+                        exactOriginal = ExactOriginalState(target, state) ||
+                            RestoreAppliedBaseState(out, target, state);
+                    } catch (const std::exception& e) {
+                        REX::CRITICAL(
+                            "[NpcAppearance] C2 LOAD-RETURN generation={} stale target=0x{:08X} reconciliation threw '{}'",
+                            loadGeneration, state.baseID, e.what());
+                    } catch (...) {
+                        REX::CRITICAL(
+                            "[NpcAppearance] C2 LOAD-RETURN generation={} stale target=0x{:08X} reconciliation threw",
+                            loadGeneration, state.baseID);
+                    }
+
+                    {
+                        const std::scoped_lock lock{ g_appliedBasesMutex };
+                        const auto found = g_appliedBases.find(state.baseID);
+                        if (found != g_appliedBases.end()) {
+                            if (exactOriginal) {
+                                g_appliedBases.erase(found);
+                            } else {
+                                found->second.bracketFailed = true;
+                            }
+                        }
+                    }
+                    if (!exactOriginal) {
+                        staleStateClean = false;
+                        REX::CRITICAL(
+                            "[NpcAppearance] C2 LOAD-RETURN generation={} stale target=0x{:08X} is not proven exact-original; state retained and saves remain veto-capable",
+                            loadGeneration, state.baseID);
+                    }
+                }
+                if (!staleStateClean) {
+                    KillMutation("load-return stale base reconciliation failed");
+                    return true;
+                }
+
+                if (!MutationOperational()) {
+                    if (SaveGatewayOperational() &&
+                        g_mutationKilled.load(std::memory_order_acquire)) {
+                        REX::WARN(
+                            "[NpcAppearance] C2 LOAD-RETURN return={} generation={} restored all stale bases but mutation remains killed; no new preset will be applied",
+                            loadReturn, loadGeneration);
+                    } else {
+                        KillMutation("mutation lost before queued load-return work");
+                        REX::CRITICAL(
+                            "[NpcAppearance] C2 LOAD-RETURN return={} generation={} mutation is not operational inside native drain; no new mutation",
+                            loadReturn, loadGeneration);
+                    }
+                    return true;
+                }
+
                 for (const auto& [expectedBaseID, assignment] : assignments) {
                     const LineSink quietOut = [](const std::string&) {};
                     auto* target = ResolveEligibleTarget(
@@ -4587,6 +4862,15 @@ namespace NpcAppearance
                             assignment.target.CanonicalKey(), expectedBaseID,
                             target ? std::format("0x{:08X}", target->GetFormID()) :
                                      std::string{ "<none>" });
+                        return true;
+                    }
+                    NotifyNpcAppearanceChanged notify = nullptr;
+                    if (!ResolveNpcAppearanceChanged(target, notify)) {
+                        KillMutation(
+                            "load-return readiness TESNPC appearance notification byte gate failed");
+                        REX::CRITICAL(
+                            "[NpcAppearance] C2 LOAD-RETURN return={} generation={} readiness FAILED notifyGate=false target=0x{:08X}; no mutation",
+                            loadReturn, loadGeneration, expectedBaseID);
                         return true;
                     }
                     const auto actorResolution = ResolveTargetActor(target);
@@ -4623,9 +4907,34 @@ namespace NpcAppearance
                 std::size_t appliedCount = 0;
                 std::size_t failedCount = 0;
                 for (const auto& [expectedBaseID, assignment] : assignments) {
+                    if (g_bracketLoadGeneration.load(
+                            std::memory_order_acquire) != loadGeneration) {
+                        REX::WARN(
+                            "[NpcAppearance] C2 LOAD-RETURN return={} generation={} superseded before target=0x{:08X}; no further mutation",
+                            loadReturn, loadGeneration, expectedBaseID);
+                        break;
+                    }
                     bool applied = false;
+                    bool stateRecorded = false;
                     AppliedBaseState state;
                     RE::TESNPC* target = nullptr;
+                    const auto finalizeFailedState = [expectedBaseID,
+                                                      &stateRecorded](
+                                                         const bool a_safeOriginal) {
+                        if (!stateRecorded) {
+                            return;
+                        }
+                        const std::scoped_lock lock{ g_appliedBasesMutex };
+                        const auto found = g_appliedBases.find(expectedBaseID);
+                        if (found == g_appliedBases.end()) {
+                            return;
+                        }
+                        if (a_safeOriginal) {
+                            g_appliedBases.erase(found);
+                        } else {
+                            found->second.bracketFailed = true;
+                        }
+                    };
                     try {
                         const LineSink out = [expectedBaseID](
                                                  const std::string& a_text) {
@@ -4664,6 +4973,16 @@ namespace NpcAppearance
                             ++failedCount;
                             continue;
                         }
+                        NotifyNpcAppearanceChanged notify = nullptr;
+                        if (!ResolveNpcAppearanceChanged(target, notify)) {
+                            KillMutation(
+                                "load-return TESNPC appearance notification byte gate failed");
+                            REX::CRITICAL(
+                                "[NpcAppearance] C2 LOAD-RETURN target=0x{:08X} notifyGate=false; no mutation",
+                                expectedBaseID);
+                            ++failedCount;
+                            continue;
+                        }
 
                         state = AppliedBaseState{
                             .baseID = expectedBaseID,
@@ -4673,17 +4992,23 @@ namespace NpcAppearance
                             .originalFaceNPC = target->faceNPC,
                             .originalActorFlags =
                                 target->actorData.actorBaseFlags.underlying(),
-                            .bracketFailed = false,
+                            .bracketFailed = true,
                         };
+                        {
+                            const std::scoped_lock lock{ g_appliedBasesMutex };
+                            g_appliedBases.insert_or_assign(
+                                expectedBaseID, state);
+                            stateRecorded = true;
+                        }
                         const bool silentlyApplied = SilentApplyPresetToBase(
                             out, target, assignment.presetPath);
                         bool notified = false;
                         bool actorRefreshed = !refreshRequired;
                         if (silentlyApplied) {
-                            NotifyBaseAppearanceChanged(target, 0x800);
-                            NotifyBaseAppearanceChanged(target, 0x4000);
-                            notified = true;
-                            if (refreshRequired) {
+                            notified =
+                                NotifyBaseAppearanceChanged(target, 0x800) &&
+                                NotifyBaseAppearanceChanged(target, 0x4000);
+                            if (notified && refreshRequired) {
                                 reinterpret_cast<RefreshActorAppearance>(
                                     refreshAddress)(
                                     actorResolution.actor, false, 0x28, false);
@@ -4695,15 +5020,36 @@ namespace NpcAppearance
                             const bool safeOriginal =
                                 RestoreAppliedBaseState(out, target, state);
                             REX::CRITICAL(
-                                "[NpcAppearance] C2 LOAD-RETURN target=0x{:08X} apply/refresh failed; exact-original fallback={}; state not recorded",
-                                expectedBaseID, safeOriginal);
+                                "[NpcAppearance] C2 LOAD-RETURN target=0x{:08X} apply/refresh failed; exact-original fallback={}; failed state retained={}",
+                                expectedBaseID, safeOriginal,
+                                stateRecorded && !safeOriginal);
+                            finalizeFailedState(safeOriginal);
                             if (!safeOriginal) {
                                 KillMutation("load-return apply and exact-original fallback failed");
                             }
                         } else {
-                            const std::scoped_lock lock{ g_appliedBasesMutex };
-                            g_appliedBases.insert_or_assign(
-                                expectedBaseID, state);
+                            bool trackingLost = false;
+                            {
+                                const std::scoped_lock lock{ g_appliedBasesMutex };
+                                const auto found = g_appliedBases.find(expectedBaseID);
+                                if (found != g_appliedBases.end()) {
+                                    found->second.bracketFailed = false;
+                                } else {
+                                    g_appliedBases.insert_or_assign(
+                                        expectedBaseID, state);
+                                    trackingLost = true;
+                                    applied = false;
+                                }
+                            }
+                            if (trackingLost) {
+                                const bool safeOriginal =
+                                    RestoreAppliedBaseState(out, target, state);
+                                finalizeFailedState(safeOriginal);
+                                KillMutation(
+                                    safeOriginal ?
+                                        "load-return applied base lost tracking; exact original restored" :
+                                        "load-return applied base lost tracking and exact-original fallback failed");
+                            }
                         }
                         REX::INFO(
                             "[NpcAppearance] C2 LOAD-RETURN return={} target=0x{:08X} actor=0x{:08X} actorMatches={} highActors={} processListsValid={} hasLoaded3D={} baseApplied={} notified={} refreshRequired={} actorRefreshed={} recorded={}",
@@ -4715,8 +5061,9 @@ namespace NpcAppearance
                             refreshRequired, actorRefreshed, applied);
                     } catch (const std::exception& e) {
                         REX::CRITICAL(
-                            "[NpcAppearance] C2 LOAD-RETURN target=0x{:08X} threw '{}'; swallowed per target and no state recorded",
+                            "[NpcAppearance] C2 LOAD-RETURN target=0x{:08X} threw '{}'; swallowed per target with pre-write tracking retained until exact-original proof",
                             expectedBaseID, e.what());
+                        bool safeOriginal = false;
                         if (target && state.baseID == expectedBaseID) {
                             try {
                                 const LineSink fallbackOut = [expectedBaseID](
@@ -4725,7 +5072,7 @@ namespace NpcAppearance
                                         "[NpcAppearance] C2 load fallback base=0x{:08X}: {}",
                                         expectedBaseID, a_text);
                                 };
-                                const bool safeOriginal = RestoreAppliedBaseState(
+                                safeOriginal = RestoreAppliedBaseState(
                                     fallbackOut, target, state);
                                 REX::CRITICAL(
                                     "[NpcAppearance] C2 LOAD-RETURN target=0x{:08X} exception fallback exactOriginal={}",
@@ -4737,10 +5084,12 @@ namespace NpcAppearance
                                 KillMutation("load-return exception fallback threw");
                             }
                         }
+                        finalizeFailedState(safeOriginal);
                     } catch (...) {
                         REX::CRITICAL(
-                            "[NpcAppearance] C2 LOAD-RETURN target=0x{:08X} threw; swallowed per target and no state recorded",
+                            "[NpcAppearance] C2 LOAD-RETURN target=0x{:08X} threw; swallowed per target with pre-write tracking retained until exact-original proof",
                             expectedBaseID);
+                        bool safeOriginal = false;
                         if (target && state.baseID == expectedBaseID) {
                             try {
                                 const LineSink fallbackOut = [expectedBaseID](
@@ -4749,7 +5098,7 @@ namespace NpcAppearance
                                         "[NpcAppearance] C2 load fallback base=0x{:08X}: {}",
                                         expectedBaseID, a_text);
                                 };
-                                const bool safeOriginal = RestoreAppliedBaseState(
+                                safeOriginal = RestoreAppliedBaseState(
                                     fallbackOut, target, state);
                                 REX::CRITICAL(
                                     "[NpcAppearance] C2 LOAD-RETURN target=0x{:08X} exception fallback exactOriginal={}",
@@ -4761,6 +5110,7 @@ namespace NpcAppearance
                                 KillMutation("load-return exception fallback threw");
                             }
                         }
+                        finalizeFailedState(safeOriginal);
                     }
                     if (applied) {
                         ++appliedCount;
@@ -4797,9 +5147,19 @@ namespace NpcAppearance
             }
                 return true;
                 };
+                std::optional<std::uint64_t> supersededGeneration;
                 {
                     const std::scoped_lock lock{ g_deferredC2LoadMutex };
+                    if (g_deferredC2LoadTask) {
+                        supersededGeneration =
+                            g_deferredC2LoadTask->generation;
+                    }
                     g_deferredC2LoadTask = std::move(pending);
+                }
+                if (supersededGeneration) {
+                    REX::WARN(
+                        "[NpcAppearance] C2 LOAD-RETURN generation={} superseded pending generation={}; successor will run after the in-flight identity retires",
+                        loadGeneration, *supersededGeneration);
                 }
                 PumpDeferredC2LoadTask();
             } catch (const std::exception& e) {
@@ -4904,14 +5264,14 @@ namespace NpcAppearance
             {
                 const std::scoped_lock lock{ g_deferredC2LoadMutex };
                 loadPending = g_deferredC2LoadTask != nullptr;
-                loadInFlight = g_deferredC2LoadInFlight;
+                loadInFlight = static_cast<bool>(g_deferredC2LoadInFlight);
             }
             bool savePending = false;
             bool saveInFlight = false;
             {
                 const std::scoped_lock lock{ g_deferredC2SaveMutex };
                 savePending = g_deferredC2SaveTask != nullptr;
-                saveInFlight = g_deferredC2SaveInFlight;
+                saveInFlight = static_cast<bool>(g_deferredC2SaveInFlight);
             }
             const auto nativeDiagnostics =
                 Util::NativeMainThreadQueue::GetDiagnostics();
@@ -4941,8 +5301,9 @@ namespace NpcAppearance
 
     }
 
-    void Initialize()
+    void Initialize() noexcept
     {
+        try {
         g_bracketArmed.store(false, std::memory_order_release);
         const SaveLoadHooks::Callbacks callbacks{
             .onSaveGameEntry = &OnSaveGameEntryImpl,
@@ -4974,7 +5335,15 @@ namespace NpcAppearance
         try {
             if (!QueueOrRunNativeTask(
                     [] { OnNpcAppearanceDataLoaded(); },
-                    "NpcAppearance.StartupScan")) {
+                    "NpcAppearance.StartupScan",
+                    [] {
+                        KillMutation("startup scan payload was dropped by the native queue");
+                        try {
+                            REX::CRITICAL(
+                                "[NpcAppearance] startup scan payload was dropped before verified native execution; mutation remains fail closed");
+                        } catch (...) {
+                        }
+                    })) {
                 KillMutation("startup scan could not enter the verified native queue");
             }
         } catch (const std::exception& e) {
@@ -4987,6 +5356,27 @@ namespace NpcAppearance
             REX::CRITICAL(
                 "[NpcAppearance] startup scan scheduling threw; no mutation");
         }
+        } catch (const std::exception& e) {
+            KillMutation("initialization boundary threw");
+            try {
+                REX::CRITICAL(
+                    "[NpcAppearance] initialization boundary swallowed '{}'",
+                    e.what());
+            } catch (...) {
+            }
+        } catch (...) {
+            KillMutation("initialization boundary threw");
+            try {
+                REX::CRITICAL(
+                    "[NpcAppearance] initialization boundary swallowed an unknown exception");
+            } catch (...) {
+            }
+        }
+    }
+
+    void FailClosed(const std::string_view a_reason) noexcept
+    {
+        KillMutation(a_reason);
     }
 
     void RunCommand(const LineSink& a_out, const std::vector<std::string>& a_args)

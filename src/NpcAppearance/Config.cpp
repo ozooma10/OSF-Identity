@@ -41,6 +41,8 @@ namespace NpcAppearance
         // package limits declared in Config.h.
         constexpr Json::ReaderLimits kManifestJsonLimits{
             .maxArrayElements = kMaxAssignments,
+            .maxObjectProperties = 128,
+            .maxTotalNodes = 32768,
             .integersOnly = true,
         };
 
@@ -348,7 +350,7 @@ namespace NpcAppearance
 
         [[nodiscard]] PresetMetadataResult ParsePresetMetadata(
             const std::string_view a_json,
-            const std::filesystem::path& a_path)
+            const std::filesystem::path& a_path) try
         {
             PresetMetadataResult result;
             ManifestResult diagnostics;
@@ -395,6 +397,28 @@ namespace NpcAppearance
                 }
             }
             result.issues = std::move(diagnostics.issues);
+            return result;
+        }
+        catch (const std::exception& e)
+        {
+            PresetMetadataResult result;
+            try {
+                result.issues.push_back({
+                    a_path, 0, "preset_metadata_parser_exception",
+                    "preset metadata parser exception: " + std::string{ e.what() } });
+            } catch (...) {
+            }
+            return result;
+        }
+        catch (...)
+        {
+            PresetMetadataResult result;
+            try {
+                result.issues.push_back({
+                    a_path, 0, "preset_metadata_parser_exception",
+                    "preset metadata parser unknown exception" });
+            } catch (...) {
+            }
             return result;
         }
 
@@ -753,7 +777,7 @@ namespace NpcAppearance
 
     ManifestResult ParsePackageManifest(const std::string_view a_json,
                                         const std::filesystem::path& a_manifestPath,
-                                        const bool a_requirePresetFiles)
+                                        const bool a_requirePresetFiles) try
     {
         ManifestResult result;
         if (a_json.size() > kMaxManifestBytes) {
@@ -915,6 +939,26 @@ namespace NpcAppearance
         }
 
         result.manifest = std::move(manifest);
+        return result;
+    }
+    catch (const std::exception& e)
+    {
+        ManifestResult result;
+        try {
+            AddIssue(result, a_manifestPath, 0, "manifest_parser_exception",
+                     "manifest parser exception: " + std::string{ e.what() });
+        } catch (...) {
+        }
+        return result;
+    }
+    catch (...)
+    {
+        ManifestResult result;
+        try {
+            AddIssue(result, a_manifestPath, 0, "manifest_parser_exception",
+                     "manifest parser unknown exception");
+        } catch (...) {
+        }
         return result;
     }
 

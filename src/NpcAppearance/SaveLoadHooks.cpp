@@ -25,15 +25,12 @@ namespace NpcAppearance::SaveLoadHooks
 {
     namespace
     {
-        constexpr REL::ID kID_SaveGame{ 98376 };
-        constexpr REL::ID kID_LoadGame{ 98380 };
         constexpr std::uint32_t kIdentityListenerID =
             OSF_SAVE_LOAD_HOOK_FOURCC('O', 'S', 'F', 'I');
         constexpr std::size_t kMaxListeners = 32;
         constexpr std::size_t kMaxListenerName = 96;
 
-        // Full prologue byte gates, proven identical on Starfield 1.16.242 and
-        // 1.16.244. Both arrays end on an instruction boundary.
+        // Full prologue byte gates, proven identical on Starfield 1.16.242 and 1.16.244. Both arrays end on an instruction boundary.
         constexpr std::array<std::uint8_t, 32> kSaveGameGate{
             0x4C, 0x89, 0x4C, 0x24, 0x20, 0x4C, 0x89, 0x44, 0x24, 0x18, 0x48, 0x89, 0x54, 0x24, 0x10, 0x48,
             0x89, 0x4C, 0x24, 0x08, 0x55, 0x53, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57
@@ -43,8 +40,7 @@ namespace NpcAppearance::SaveLoadHooks
             0x89, 0x48, 0x08, 0x55, 0x53, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57
         };
 
-        // Minimal instruction-boundary-safe steal lengths: SaveGame's first
-        // instruction is 5 bytes; LoadGame's first two instructions are 7.
+        // Minimal instruction-boundary-safe steal lengths: SaveGame's first instruction is 5 bytes; LoadGame's first two instructions are 7.
         constexpr std::array<std::uint8_t, 5> kSaveGameEntry{
             0x4C, 0x89, 0x4C, 0x24, 0x20
         };
@@ -652,11 +648,11 @@ namespace NpcAppearance::SaveLoadHooks
         {
             const bool saveGate = Util::VerifyExpectedBytes(
                 "[SaveLoadHooks] SaveGame 98376 full gate",
-                kID_SaveGame.address(),
+                RE::ID::BGSSaveLoadGame::SaveGame.address(),
                 kSaveGameGate);
             const bool loadGate = Util::VerifyExpectedBytes(
                 "[SaveLoadHooks] LoadGame 98380 full gate",
-                kID_LoadGame.address(),
+                RE::ID::BGSSaveLoadGame::LoadGame.address(),
                 kLoadGameGate);
             if (!saveGate || !loadGate) {
                 REX::INFO(
@@ -666,14 +662,14 @@ namespace NpcAppearance::SaveLoadHooks
             }
 
             const auto saveGateway = Util::InstallEntryHookWithGateway<5>(
-                REL::Offset(kID_SaveGame.offset()),
+                REL::Offset(RE::ID::BGSSaveLoadGame::SaveGame.offset()),
                 "[SaveLoadHooks] SaveGame 98376 entry",
                 kSaveGameEntry,
                 &SaveGameThunk);
             g_saveGateway = reinterpret_cast<SaveGameFn>(saveGateway);
             if (g_saveGateway) {
                 const auto loadGateway = Util::InstallEntryHookWithGateway<7>(
-                    REL::Offset(kID_LoadGame.offset()),
+                    REL::Offset(RE::ID::BGSSaveLoadGame::LoadGame.offset()),
                     "[SaveLoadHooks] LoadGame 98380 entry",
                     kLoadGameEntry,
                     &LoadGameThunk);
@@ -689,9 +685,9 @@ namespace NpcAppearance::SaveLoadHooks
             auto& broker = LocalBroker::GetSingleton();
             broker.SetReady(
                 flags,
-                kID_SaveGame.address(),
+                RE::ID::BGSSaveLoadGame::SaveGame.address(),
                 reinterpret_cast<std::uintptr_t>(&SaveGameThunk),
-                kID_LoadGame.address(),
+                RE::ID::BGSSaveLoadGame::LoadGame.address(),
                 reinterpret_cast<std::uintptr_t>(&LoadGameThunk));
             if (!broker.IsReady()) {
                 REX::CRITICAL("[SaveLoadHooks] direct hook pair did not install completely");

@@ -3,18 +3,52 @@
 
 namespace
 {
-    void OnDataLoaded()
+    void OnDataLoaded() noexcept
     {
-        REX::INFO("=== OSF Identity: data loaded ===");
-        NpcAppearance::Initialize();
+        try {
+            REX::INFO("=== OSF Identity: data loaded ===");
+            NpcAppearance::Initialize();
 
-        REX::INFO("=== OSF Identity: ready ===");
+            REX::INFO("=== OSF Identity: ready ===");
+        } catch (const std::exception& e) {
+            NpcAppearance::FailClosed("data-loaded callback threw");
+            try {
+                REX::CRITICAL(
+                    "OSF Identity data-loaded callback swallowed '{}'",
+                    e.what());
+            } catch (...) {
+            }
+        } catch (...) {
+            NpcAppearance::FailClosed("data-loaded callback threw");
+            try {
+                REX::CRITICAL(
+                    "OSF Identity data-loaded callback swallowed an unknown exception");
+            } catch (...) {
+            }
+        }
     }
 
-    void OnSFSEMessage(SFSE::MessagingInterface::Message* a_message)
+    void OnSFSEMessage(SFSE::MessagingInterface::Message* a_message) noexcept
     {
-        if (a_message && a_message->type == SFSE::MessagingInterface::kPostPostDataLoad) {
-            OnDataLoaded();
+        try {
+            if (a_message && a_message->type == SFSE::MessagingInterface::kPostPostDataLoad) {
+                OnDataLoaded();
+            }
+        } catch (const std::exception& e) {
+            NpcAppearance::FailClosed("SFSE message boundary threw");
+            try {
+                REX::CRITICAL(
+                    "OSF Identity SFSE message boundary swallowed '{}'",
+                    e.what());
+            } catch (...) {
+            }
+        } catch (...) {
+            NpcAppearance::FailClosed("SFSE message boundary threw");
+            try {
+                REX::CRITICAL(
+                    "OSF Identity SFSE message boundary swallowed an unknown exception");
+            } catch (...) {
+            }
         }
     }
 }

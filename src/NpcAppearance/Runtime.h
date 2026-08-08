@@ -2,6 +2,7 @@
 
 #include <functional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 // Production runtime for OSF Identity's `.npc` appearance distribution.
@@ -28,7 +29,8 @@ namespace NpcAppearance
 {
     using LineSink = std::function<void(const std::string&)>;
 
-    void Initialize();
+    void Initialize() noexcept;
+    void FailClosed(std::string_view a_reason) noexcept;
 
     // Retained as an unbound diagnostic surface for focused development builds.
     void RunCommand(const LineSink& a_out, const std::vector<std::string>& a_args);

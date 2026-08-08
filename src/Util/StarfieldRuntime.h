@@ -84,6 +84,11 @@ namespace Util
         const std::uintptr_t a_address,
         const std::array<std::uint8_t, N>& a_expected)
     {
+        if (!IsReadableRange(a_address, a_expected.size())) {
+            REX::WARN("{} bytes are unreadable at 0x{:X}", a_label, a_address);
+            return false;
+        }
+
         const auto* actual = reinterpret_cast<const std::uint8_t*>(a_address);
         if (std::equal(a_expected.begin(), a_expected.end(), actual)) {
             return true;
@@ -108,6 +113,8 @@ namespace Util
         const std::array<std::uint8_t, N>& a_expectedBytes,
         T a_thunk)
     {
+        static_assert(N >= 5, "an entry gateway must preserve every byte overwritten by JMP5");
+
         REL::Relocation<std::uintptr_t> relocation{ a_offset };
         const auto entryAddress = relocation.address();
         if (!VerifyExpectedBytes(a_label, entryAddress, a_expectedBytes)) {

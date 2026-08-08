@@ -1,4 +1,5 @@
 #include "NpcAppearance/Config.h"
+#include "NpcAppearance/Json.h"
 #include "NpcAppearance/Preset.h"
 
 #include <algorithm>
@@ -360,6 +361,23 @@ int main()
 
     std::string oversized(NA::kMaxPresetBytes + 1, ' ');
     Check(Rejects(oversized), "preset byte bound enforced before parse");
+
+    NA::Json::Value boundedRoot;
+    NA::Json::Reader nodeBoundedReader{
+        "[0,0,0,0]",
+        NA::Json::ReaderLimits{ .maxTotalNodes = 4 }
+    };
+    Check(!nodeBoundedReader.Parse(boundedRoot) &&
+              nodeBoundedReader.Error().contains("value count"),
+          "aggregate JSON node bound rejects nested amplification");
+
+    NA::Json::Reader propertyBoundedReader{
+        R"({"a":0,"b":0,"c":0})",
+        NA::Json::ReaderLimits{ .maxObjectProperties = 2 }
+    };
+    Check(!propertyBoundedReader.Parse(boundedRoot) &&
+              propertyBoundedReader.Error().contains("property safety limit"),
+          "JSON object property bound is enforced");
 
     const auto tempRoot = std::filesystem::absolute("tmp/npc-appearance-preset-tests");
     std::filesystem::remove_all(tempRoot);

@@ -8,6 +8,7 @@
 
 #include <atomic>
 #include <cstring>
+#include <memory>
 #include <string>
 
 #ifdef ERROR
@@ -18,12 +19,6 @@ namespace Util::NativeMainThreadQueue
 {
     namespace
     {
-        // Runtime-proven by TaskQueueProbe on 1.16.242; current .244 RVAs are
-        // supplied by the Address Library. Keep the gate/owner diagnostics
-        // local until the .244 runtime proof below passes.
-        constexpr REL::ID kEnableByteID{ 810305 };
-        constexpr REL::ID kDrainLockID{ 923104 };
-
         std::atomic<std::uint64_t> g_posted{ 0 };
         std::atomic<std::uint64_t> g_executed{ 0 };
         std::atomic<std::uint64_t> g_rejected{ 0 };
@@ -31,7 +26,7 @@ namespace Util::NativeMainThreadQueue
 
         [[nodiscard]] std::uint8_t ReadEnableByte() noexcept
         {
-            const auto address = REL::Relocation<std::uintptr_t>{ kEnableByteID }.address();
+            const auto address = REL::Relocation<std::uintptr_t>{ RE::ID::BSService::TaskQueue::Enabled }.address();
             if (!Util::IsReadableRange(address, sizeof(std::uint8_t))) {
                 return 0;
             }
@@ -42,7 +37,7 @@ namespace Util::NativeMainThreadQueue
 
         [[nodiscard]] std::uint32_t ReadDrainOwnerThreadID() noexcept
         {
-            const auto address = REL::Relocation<std::uintptr_t>{ kDrainLockID }.address();
+            const auto address = REL::Relocation<std::uintptr_t>{ RE::ID::BSService::TaskQueue::DrainOwnerThreadID }.address();
             if (!Util::IsReadableRange(address, sizeof(std::uint32_t))) {
                 return 0;
             }
@@ -80,7 +75,10 @@ namespace Util::NativeMainThreadQueue
         return result;
     }
 
-    PostResult Post(std::function<void()> a_task, const std::string_view a_label)
+    PostResult Post(
+        std::function<void()> a_task,
+        const std::string_view a_label,
+        std::function<void()> a_onDrop)
     {
         if (!a_task) {
             g_rejected.fetch_add(1, std::memory_order_relaxed);
@@ -105,37 +103,80 @@ namespace Util::NativeMainThreadQueue
 
         auto* queue = reinterpret_cast<RE::BSService::TaskQueue*>(before.singleton);
         const std::string label{ a_label };
+        const auto returned = std::make_shared<std::atomic<bool>>(false);
+        const auto droppedInline = std::make_shared<std::atomic<bool>>(false);
         g_posted.fetch_add(1, std::memory_order_relaxed);
         queue->AddTask([
             task = std::move(a_task),
-            label
-        ]() mutable {
-            const auto during = GetDiagnostics();
-            if (!during.insideDrain) {
-                g_rejected.fetch_add(1, std::memory_order_relaxed);
-                REX::CRITICAL(
-                    "[NativeMainThreadQueue] DROP '{}' tid={} drainOwnerTid={} enabled={} singleton=0x{:X}; payload not run",
-                    label, during.currentThreadID, during.drainOwnerThreadID,
-                    during.queueEnabled, during.singleton);
-                return;
-            }
-
-            g_executed.fetch_add(1, std::memory_order_relaxed);
-            if (!g_firstProofLogged.exchange(true, std::memory_order_acq_rel)) {
-                REX::INFO(
-                    "[NativeMainThreadQueue] 1.16.244 RUNTIME PROOF PASS label='{}' tid={} drainOwnerTid={} insideDrain=true queueEnabled=true singleton=0x{:X}",
-                    label, during.currentThreadID, during.drainOwnerThreadID,
-                    during.singleton);
-            }
-
+            label,
+            onDrop = std::move(a_onDrop),
+            returned,
+            droppedInline
+        ]() mutable noexcept {
+            bool taskStarted = false;
+            bool dropSignaled = false;
+            const auto signalDrop = [&]() noexcept {
+                if (dropSignaled) {
+                    return;
+                }
+                dropSignaled = true;
+                if (!returned->load(std::memory_order_acquire)) {
+                    droppedInline->store(true, std::memory_order_release);
+                }
+                if (onDrop) {
+                    try {
+                        onDrop();
+                    } catch (...) {
+                    }
+                }
+            };
             try {
+                const auto during = GetDiagnostics();
+                if (!during.insideDrain) {
+                    g_rejected.fetch_add(1, std::memory_order_relaxed);
+                    signalDrop();
+                    try {
+                        REX::CRITICAL(
+                            "[NativeMainThreadQueue] DROP '{}' tid={} drainOwnerTid={} enabled={} singleton=0x{:X}; payload not run",
+                            label, during.currentThreadID, during.drainOwnerThreadID,
+                            during.queueEnabled, during.singleton);
+                    } catch (...) {
+                    }
+                    return;
+                }
+
+                g_executed.fetch_add(1, std::memory_order_relaxed);
+                if (!g_firstProofLogged.exchange(true, std::memory_order_acq_rel)) {
+                    REX::INFO(
+                        "[NativeMainThreadQueue] 1.16.244 RUNTIME PROOF PASS label='{}' tid={} drainOwnerTid={} insideDrain=true queueEnabled=true singleton=0x{:X}",
+                        label, during.currentThreadID, during.drainOwnerThreadID,
+                        during.singleton);
+                }
+
+                taskStarted = true;
                 task();
             } catch (const std::exception& e) {
-                REX::ERROR("[NativeMainThreadQueue] '{}' threw '{}'; payload stopped", label, e.what());
+                if (!taskStarted) {
+                    signalDrop();
+                }
+                try {
+                    REX::ERROR("[NativeMainThreadQueue] '{}' threw '{}'; payload stopped", label, e.what());
+                } catch (...) {
+                }
             } catch (...) {
-                REX::ERROR("[NativeMainThreadQueue] '{}' threw an unknown exception; payload stopped", label);
+                if (!taskStarted) {
+                    signalDrop();
+                }
+                try {
+                    REX::ERROR("[NativeMainThreadQueue] '{}' threw an unknown exception; payload stopped", label);
+                } catch (...) {
+                }
             }
         });
+        returned->store(true, std::memory_order_release);
+        if (droppedInline->load(std::memory_order_acquire)) {
+            return PostResult::kDroppedInline;
+        }
         return PostResult::kQueued;
     }
 
@@ -150,6 +191,8 @@ namespace Util::NativeMainThreadQueue
             return "singleton-unavailable";
         case PostResult::kAlreadyInsideDrain:
             return "already-inside-drain";
+        case PostResult::kDroppedInline:
+            return "dropped-inline";
         case PostResult::kEmptyTask:
             return "empty-task";
         default:

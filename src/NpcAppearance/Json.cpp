@@ -81,6 +81,7 @@ namespace NpcAppearance::Json
 
     bool Reader::Parse(Value& a_out)
     {
+        _totalNodes = 0;
         SkipWhitespace();
         if (!ParseValue(a_out, 0)) {
             return false;
@@ -91,6 +92,10 @@ namespace NpcAppearance::Json
 
     bool Reader::ParseValue(Value& a_out, const std::size_t a_depth)
     {
+        if (_totalNodes >= _limits.maxTotalNodes) {
+            return Fail("JSON value count exceeds safety limit");
+        }
+        ++_totalNodes;
         if (a_depth > _limits.maxDepth) {
             return Fail("JSON nesting exceeds safety limit");
         }

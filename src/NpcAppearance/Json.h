@@ -47,8 +47,8 @@ namespace NpcAppearance::Json
         std::size_t maxDepth{ 32 };
         std::size_t maxStringBytes{ 4096 };
         std::size_t maxArrayElements{ 4096 };
-        // No property cap by default; the preset parser opts into one.
-        std::size_t maxObjectProperties{ SIZE_MAX };
+        std::size_t maxObjectProperties{ 128 };
+        std::size_t maxTotalNodes{ 65536 };
         // Reject fractions and exponents entirely and require the value to fit
         // std::int64_t, matching the manifest schema's integer-only fields.
         bool integersOnly{ false };
@@ -84,6 +84,7 @@ namespace NpcAppearance::Json
         std::string_view _text;
         ReaderLimits _limits;
         std::size_t _pos{ 0 };
+        std::size_t _totalNodes{ 0 };
         std::size_t _errorOffset{ 0 };
         std::string _error;
     };

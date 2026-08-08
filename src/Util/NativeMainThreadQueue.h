@@ -24,13 +24,17 @@ namespace Util::NativeMainThreadQueue
         kQueueDisabled,
         kSingletonUnavailable,
         kAlreadyInsideDrain,
+        kDroppedInline,
         kEmptyTask
     };
 
     // Posts through Starfield's BSService command stream. Payloads are guarded
     // again at execution and are dropped unless the callback runs while the
     // current thread owns the native queue's drain lock.
-    [[nodiscard]] PostResult Post(std::function<void()> a_task, std::string_view a_label);
+    [[nodiscard]] PostResult Post(
+        std::function<void()> a_task,
+        std::string_view a_label,
+        std::function<void()> a_onDrop = {});
 
     [[nodiscard]] Diagnostics GetDiagnostics() noexcept;
     [[nodiscard]] const char* ToString(PostResult a_result) noexcept;

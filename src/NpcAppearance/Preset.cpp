@@ -23,6 +23,7 @@ namespace NpcAppearance
         constexpr std::size_t kMaxJsonProperties = 128;
         constexpr std::size_t kMaxJsonArrayElements = 4096;
         constexpr std::size_t kMaxJsonStringBytes = 4096;
+        constexpr std::size_t kMaxJsonTotalNodes = 300000;
         constexpr std::size_t kMaxSemanticStringBytes = 256;
         constexpr std::size_t kBodyMorphRegionCount = 5;
         constexpr std::size_t kMaxHeadParts = 128;
@@ -43,6 +44,7 @@ namespace NpcAppearance
             .maxStringBytes = kMaxJsonStringBytes,
             .maxArrayElements = kMaxJsonArrayElements,
             .maxObjectProperties = kMaxJsonProperties,
+            .maxTotalNodes = kMaxJsonTotalNodes,
             .validateUTF8 = true,
         };
 
@@ -429,7 +431,7 @@ namespace NpcAppearance
         }
     }
 
-    PresetResult ParseCkPreset(const std::string_view a_json, const std::filesystem::path& a_path)
+    PresetResult ParseCkPreset(const std::string_view a_json, const std::filesystem::path& a_path) try
     {
         PresetResult result;
         if (a_json.empty() || a_json.size() > kMaxPresetBytes) {
@@ -532,6 +534,26 @@ namespace NpcAppearance
         }
 
         result.preset = std::move(preset);
+        return result;
+    }
+    catch (const std::exception& e)
+    {
+        PresetResult result;
+        try {
+            AddIssue(result, a_path, 0, "parser_exception",
+                     "preset parser exception: " + std::string{ e.what() });
+        } catch (...) {
+        }
+        return result;
+    }
+    catch (...)
+    {
+        PresetResult result;
+        try {
+            AddIssue(result, a_path, 0, "parser_exception",
+                     "preset parser unknown exception");
+        } catch (...) {
+        }
         return result;
     }
 
