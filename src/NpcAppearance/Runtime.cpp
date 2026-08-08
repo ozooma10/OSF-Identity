@@ -3,7 +3,6 @@
 #include "NpcAppearance/Config.h"
 #include "NpcAppearance/Preset.h"
 #include "NpcAppearance/Resolver.h"
-#include "NpcAppearance/SaveLoadHooks.h"
 #include "pch.h"
 
 #include "Util/NativeMainThreadQueue.h"
@@ -141,15 +140,15 @@ namespace NpcAppearance
         std::atomic<bool>             g_runtimeOperational{ false };
         std::atomic<bool>             g_runtimeArmed{ false };
         std::atomic<bool>             g_mutationKilled{ false };
+        std::atomic<bool>             g_saveLoadSinkRegistered{ false };
         std::mutex                    g_eventMutex;
         std::unordered_set<RE::TESFormID> g_targetBaseIDs;
         std::unordered_map<RE::TESFormID, SelectedAssignment> g_sceneAssignments;
 
-        // Since API v3 the save/load hooks are observer-only telemetry: they
-        // are not load-bearing for mutation safety, so none of these gates
-        // consult SaveLoadHooks::Operational(). Correctness comes from the
-        // per-call byte gates, the verified drain, and the overlay window's
-        // restore proof.
+        // The SaveLoadEvent sink is observer-only telemetry: it is not
+        // load-bearing for mutation safety, so none of these gates consult
+        // it. Correctness comes from the per-call byte gates, the verified
+        // drain, and the overlay window's restore proof.
         [[nodiscard]] bool MutationOperational() noexcept
         {
             return g_runtimeOperational.load(std::memory_order_acquire) &&
@@ -1664,10 +1663,10 @@ namespace NpcAppearance
         void RunStatus(const LineSink& a_out)
         {
             const auto root = DefaultPluginDirectory();
-            a_out("OSF Identity diagnostics: overlay runtime + observer save/load hooks + retained pipeline commands");
-            a_out(std::format("runtimeOperational={} observerHooksOperational={} mutationKilled={}",
+            a_out("OSF Identity diagnostics: overlay runtime + SaveLoadEvent sink + retained pipeline commands");
+            a_out(std::format("runtimeOperational={} saveLoadSinkRegistered={} mutationKilled={}",
                               g_runtimeOperational.load(std::memory_order_relaxed),
-                              SaveLoadHooks::Operational(),
+                              g_saveLoadSinkRegistered.load(std::memory_order_relaxed),
                               g_mutationKilled.load(std::memory_order_relaxed)));
             a_out(std::format(
                 "runtimeArmed={} loadReturns={} loadGeneration={}",
@@ -4859,6 +4858,32 @@ namespace NpcAppearance
             }
         }
 
+        // Passive load-finished signal: BGSSaveLoadManager fires this for
+        // every pump-driven save/load op. Known gaps (documented at the
+        // event's RE notes): silent saves, new game, Unity/NG+ — there the
+        // per-actor Set3d windows are the only styling path.
+        class SaveLoadEventSink final :
+            public RE::BSTEventSink<RE::SaveLoadEvent>
+        {
+        public:
+            static SaveLoadEventSink& GetSingleton() noexcept
+            {
+                static SaveLoadEventSink singleton;
+                return singleton;
+            }
+
+            RE::BSEventNotifyControl ProcessEvent(
+                const RE::SaveLoadEvent& a_event,
+                RE::BSTEventSource<RE::SaveLoadEvent>*) noexcept override
+            {
+                if (a_event.status ==
+                    RE::SaveLoadEvent::Status::kLoadSucceeded) {
+                    OnLoadGameReturnImpl();
+                }
+                return RE::BSEventNotifyControl::kContinue;
+            }
+        };
+
         // ==================================================================
         // Startup
         // Fail-closed arming sequence: mutation operational -> packs
@@ -4930,16 +4955,15 @@ namespace NpcAppearance
     {
         try {
         g_runtimeArmed.store(false, std::memory_order_release);
-        const SaveLoadHooks::Callbacks callbacks{
-            .onLoadGameReturn = &OnLoadGameReturnImpl,
-        };
-        // Observer-only since API v3: hook installation failure is telemetry
-        // loss, not a safety loss — the overlay runtime works without any
-        // hook installed.
-        const bool hooksInstalled = SaveLoadHooks::Install(callbacks);
-        if (!hooksInstalled) {
+        // Observer-only: a missing event source is telemetry loss, not a
+        // safety loss — the overlay runtime works without the sink.
+        auto* saveLoadSource = RE::SaveLoadEvent::GetEventSource();
+        if (saveLoadSource) {
+            saveLoadSource->RegisterSink(&SaveLoadEventSink::GetSingleton());
+            g_saveLoadSinkRegistered.store(true, std::memory_order_release);
+        } else {
             REX::WARN(
-                "[NpcAppearance] SaveGame/LoadGame observer hooks unavailable; the post-load sweep is lost and styling relies on Set3d windows alone");
+                "[NpcAppearance] SaveLoadEvent source unavailable; the post-load sweep is lost and styling relies on Set3d windows alone");
         }
         const bool deferredRetryAvailable = SFSE::GetTaskInterface() != nullptr;
         g_runtimeOperational.store(true, std::memory_order_release);
@@ -4948,8 +4972,8 @@ namespace NpcAppearance
                 "SFSE task interface unavailable for demand-driven load retries");
         }
         REX::INFO(
-            "[NpcAppearance] save/load hook state observerHooks={} deferredRetryAvailable={} mutationKilled={} runtimeArmed={} callbacks=native-queue-shaped",
-            hooksInstalled, deferredRetryAvailable,
+            "[NpcAppearance] save/load observer state saveLoadSink={} deferredRetryAvailable={} mutationKilled={} runtimeArmed={} callbacks=native-queue-shaped",
+            g_saveLoadSinkRegistered.load(std::memory_order_relaxed), deferredRetryAvailable,
             g_mutationKilled.load(std::memory_order_relaxed),
             g_runtimeArmed.load(std::memory_order_relaxed));
         try {

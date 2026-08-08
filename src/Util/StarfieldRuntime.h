@@ -3,19 +3,10 @@
 #include <algorithm>
 #include <Windows.h>
 
-#include <array>
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
-#include <format>
-#include <string>
 
-#include "REL/ASM.h"
-#include "REL/Offset.h"
-#include "REL/Relocation.h"
-#include "REL/Trampoline.h"
 #include "REX/FModule.h"
-#include "REX/LOG.h"
 
 namespace Util
 {
@@ -74,61 +65,5 @@ namespace Util
         } __except (EXCEPTION_EXECUTE_HANDLER) {
             return false;
         }
-    }
-
-    // --- Hooking ------------------------------------------------------------
-
-    template <std::size_t N>
-    [[nodiscard]] inline bool VerifyExpectedBytes(
-        const char* a_label,
-        const std::uintptr_t a_address,
-        const std::array<std::uint8_t, N>& a_expected)
-    {
-        if (!IsReadableRange(a_address, a_expected.size())) {
-            REX::WARN("{} bytes are unreadable at 0x{:X}", a_label, a_address);
-            return false;
-        }
-
-        const auto* actual = reinterpret_cast<const std::uint8_t*>(a_address);
-        if (std::equal(a_expected.begin(), a_expected.end(), actual)) {
-            return true;
-        }
-
-        std::string actualBytes;
-        for (std::size_t i = 0; i < N; ++i) {
-            if (i != 0) {
-                actualBytes += ' ';
-            }
-            actualBytes += std::format("{:02X}", actual[i]);
-        }
-
-        REX::WARN("{} bytes drifted at 0x{:X}: {}", a_label, a_address, actualBytes);
-        return false;
-    }
-
-    template <std::size_t N, class T>
-    [[nodiscard]] inline std::uintptr_t InstallEntryHookWithGateway(
-        const REL::Offset a_offset,
-        const char* a_label,
-        const std::array<std::uint8_t, N>& a_expectedBytes,
-        T a_thunk)
-    {
-        static_assert(N >= 5, "an entry gateway must preserve every byte overwritten by JMP5");
-
-        REL::Relocation<std::uintptr_t> relocation{ a_offset };
-        const auto entryAddress = relocation.address();
-        if (!VerifyExpectedBytes(a_label, entryAddress, a_expectedBytes)) {
-            return 0;
-        }
-
-        auto& trampoline = REL::GetTrampoline();
-        auto* gateway = static_cast<std::byte*>(trampoline.allocate(N + sizeof(REL::ASM::JMP14)));
-        std::memcpy(gateway, reinterpret_cast<const void*>(entryAddress), N);
-
-        const REL::ASM::JMP14 jumpBack{ entryAddress + N };
-        std::memcpy(gateway + N, &jumpBack, sizeof(jumpBack));
-
-        relocation.write_jmp<5>(a_thunk);
-        return reinterpret_cast<std::uintptr_t>(gateway);
     }
 }

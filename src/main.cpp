@@ -60,10 +60,7 @@ namespace
 
 SFSE_PLUGIN_LOAD(const SFSE::LoadInterface* a_sfse)
 {
-    SFSE::Init(a_sfse, {
-        .trampoline = true,
-        .trampolineSize = 1 << 12,
-    });
+    SFSE::Init(a_sfse);
 
     const auto* messaging = SFSE::GetMessagingInterface();
     if (!messaging || !messaging->RegisterListener(OnSFSEMessage)) {
