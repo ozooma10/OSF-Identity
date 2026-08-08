@@ -10,11 +10,11 @@
 
 namespace NpcAppearance
 {
-    inline constexpr std::size_t kMaxManifestBytes = 1024 * 1024;
+    inline constexpr std::size_t kMaxManifestBytes = 1024 * 1024; // 1 MiB
     inline constexpr std::size_t kMaxAssignments = 1024;
     inline constexpr std::size_t kMaxPackages = 1024;
     inline constexpr std::size_t kMaxRequirements = 256;
-    inline constexpr std::uintmax_t kMaxPresetBytes = 32 * 1024 * 1024;
+    inline constexpr std::uintmax_t kMaxPresetBytes = 32 * 1024 * 1024; // 32 MiB
     inline constexpr std::int32_t kMinPriority = -1'000'000;
     inline constexpr std::int32_t kMaxPriority = 1'000'000;
 

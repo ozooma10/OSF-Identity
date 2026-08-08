@@ -1,18 +1,14 @@
 // ============================================================================
-// OSFSaveLoadHookAPI.h - copyable C ABI for cooperative Starfield save/load
-// entry hooks.
+// OSFSaveLoadHookAPI.h - C ABI for cooperative Starfield save/load entry hooks.
 //
-// Drop this header into a native SFSE plugin and link nothing from any OSF mod.
-// Enumerate loaded modules for OSF_RequestSaveLoadHookAPI. If a compatible,
-// ready provider exists, register a listener. If none exists, a plugin may
-// install its own fully validated hooks and publish this same API.
+// Enumerate loaded modules for OSF_RequestSaveLoadHookAPI.
+// If a compatible, ready provider exists, register a listener.
+// If none exists, a plugin may install its own fully validated hooks and publish this same API.
 //
-// Providers invoke SAVE_ENTRY before the engine SaveGame gateway. Every
-// listener must return nonzero to allow serialization; zero vetoes the gateway.
-// Providers invoke SAVE_RETURN after the gateway returns or after a veto is
-// finalized, and invoke LOAD_RETURN after the load gateway returns.
-// Listener callbacks are bounded to the dispatch call, may run off the game
-// thread, and must not throw across this ABI. Providers catch defensively.
+// Providers invoke SAVE_ENTRY before the engine SaveGame gateway.
+// Every listener must return nonzero to allow serialization; zero vetoes the gateway.
+// Providers invoke SAVE_RETURN after the gateway returns or after a veto is finalized, and invoke LOAD_RETURN after the load gateway returns.
+// Listener callbacks are bounded to the dispatch call, may run off the game thread, and must not throw across this ABI. Providers catch defensively.
 // ============================================================================
 
 #pragma once
