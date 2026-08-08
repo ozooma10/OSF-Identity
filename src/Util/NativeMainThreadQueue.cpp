@@ -11,6 +11,7 @@
 #include <memory>
 #include <string>
 
+// <wingdi.h> defines ERROR as a bare macro, which would mangle REX::ERROR below.
 #ifdef ERROR
 #    undef ERROR
 #endif
@@ -19,8 +20,6 @@ namespace Util::NativeMainThreadQueue
 {
     namespace
     {
-        std::atomic<bool> g_firstProofLogged{ false };
-
         [[nodiscard]] std::uint8_t ReadEnableByte() noexcept
         {
             const auto address = REL::Relocation<std::uintptr_t>{ RE::ID::BSService::TaskQueue::Enabled }.address();
@@ -57,9 +56,9 @@ namespace Util::NativeMainThreadQueue
         }
     }
 
-    Diagnostics GetDiagnostics() noexcept
+    State SnapshotState() noexcept
     {
-        Diagnostics result;
+        State result;
         result.queueEnabled = ReadEnableByte() == 1;
         result.singleton = reinterpret_cast<std::uintptr_t>(ReadSingleton());
         result.currentThreadID = ::GetCurrentThreadId();
@@ -69,16 +68,13 @@ namespace Util::NativeMainThreadQueue
         return result;
     }
 
-    PostResult Post(
-        std::function<void()> a_task,
-        const std::string_view a_label,
-        std::function<void()> a_onDrop)
+    PostResult Post(std::function<void()> a_task, const std::string_view a_label, std::function<void()> a_onDrop)
     {
         if (!a_task) {
             return PostResult::kEmptyTask;
         }
 
-        const auto before = GetDiagnostics();
+        const auto before = SnapshotState();
         if (!before.queueEnabled) {
             return PostResult::kQueueDisabled;
         }
@@ -86,8 +82,7 @@ namespace Util::NativeMainThreadQueue
             return PostResult::kSingletonUnavailable;
         }
         if (before.insideDrain) {
-            // AddTask executes inline from the drain owner. Reject that path so
-            // every accepted post retains the same verified dispatch contract.
+            // AddTask executes inline from the drain owner. Reject that path so every accepted post retains the same verified dispatch contract.
             return PostResult::kAlreadyInsideDrain;
         }
 
@@ -120,24 +115,14 @@ namespace Util::NativeMainThreadQueue
                 }
             };
             try {
-                const auto during = GetDiagnostics();
+                const auto during = SnapshotState();
                 if (!during.insideDrain) {
                     signalDrop();
-                    try {
-                        REX::CRITICAL(
-                            "[NativeMainThreadQueue] DROP '{}' tid={} drainOwnerTid={} enabled={} singleton=0x{:X}; payload not run",
-                            label, during.currentThreadID, during.drainOwnerThreadID,
-                            during.queueEnabled, during.singleton);
-                    } catch (...) {
-                    }
-                    return;
-                }
-
-                if (!g_firstProofLogged.exchange(true, std::memory_order_acq_rel)) {
-                    REX::INFO(
-                        "[NativeMainThreadQueue] 1.16.244 RUNTIME PROOF PASS label='{}' tid={} drainOwnerTid={} insideDrain=true queueEnabled=true singleton=0x{:X}",
+                    REX::CRITICAL(
+                        "[NativeMainThreadQueue] DROP '{}' tid={} drainOwnerTid={} enabled={} singleton=0x{:X}; payload not run",
                         label, during.currentThreadID, during.drainOwnerThreadID,
-                        during.singleton);
+                        during.queueEnabled, during.singleton);
+                    return;
                 }
 
                 taskStarted = true;

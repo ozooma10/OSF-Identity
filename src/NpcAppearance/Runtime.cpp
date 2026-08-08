@@ -40,7 +40,6 @@ namespace NpcAppearance
         std::atomic<bool>             g_runtimeOperational{ false };
         std::atomic<bool>             g_runtimeArmed{ false };
         std::atomic<bool>             g_mutationKilled{ false };
-        std::atomic<bool>             g_saveLoadSinkRegistered{ false };
         std::mutex                    g_eventMutex;
         std::unordered_map<RE::TESFormID, SelectedAssignment> g_sceneAssignments;
 
@@ -270,7 +269,7 @@ namespace NpcAppearance
             const std::string_view a_label,
             std::function<void()> a_onDrop = {})
         {
-            const auto before = Util::NativeMainThreadQueue::GetDiagnostics();
+            const auto before = Util::NativeMainThreadQueue::SnapshotState();
             if (before.insideDrain) {
                 try {
                     a_task();
@@ -606,10 +605,10 @@ namespace NpcAppearance
                              wait <= kLoadSweepRetryMaxWaits;
                              ++wait) {
                             std::this_thread::sleep_for(kLoadSweepRetryDelay);
-                            const auto diagnostics =
-                                Util::NativeMainThreadQueue::GetDiagnostics();
-                            if (!diagnostics.queueEnabled ||
-                                diagnostics.singleton == 0) {
+                            const auto state =
+                                Util::NativeMainThreadQueue::SnapshotState();
+                            if (!state.queueEnabled ||
+                                state.singleton == 0) {
                                 continue;
                             }
 
@@ -733,9 +732,9 @@ namespace NpcAppearance
                     }
                 };
 
-                const auto diagnostics =
-                    Util::NativeMainThreadQueue::GetDiagnostics();
-                if (diagnostics.insideDrain) {
+                const auto state =
+                    Util::NativeMainThreadQueue::SnapshotState();
+                if (state.insideDrain) {
                     execute();
                     return;
                 }
@@ -782,8 +781,8 @@ namespace NpcAppearance
                         "[NpcAppearance] LOAD-RETURN generation={} deferred until native queue is available result={} tid={} queueEnabled={} singleton=0x{:X}",
                         pending->generation,
                         Util::NativeMainThreadQueue::ToString(postResult),
-                        diagnostics.currentThreadID, diagnostics.queueEnabled,
-                        diagnostics.singleton);
+                        state.currentThreadID, state.queueEnabled,
+                        state.singleton);
                 }
                 ScheduleDeferredLoadSweepRetry();
             } catch (const std::exception& e) {
@@ -815,7 +814,7 @@ namespace NpcAppearance
         // overlay sweep; ReferenceSet3d windows cover everything after that.
         void OnLoadGameReturnImpl() noexcept
         {
-            if (!g_runtimeArmed.load(std::memory_order_acquire)) {
+            if (!g_runtimeArmed.load()) {
                 return;
             }
             try {
@@ -934,8 +933,7 @@ namespace NpcAppearance
             if (!MutationOperational()) {
                 REX::CRITICAL(
                     "[NpcAppearance] startup mutation disabled; runtimeOperational={} mutationKilled={}",
-                    g_runtimeOperational.load(std::memory_order_relaxed),
-                    g_mutationKilled.load(std::memory_order_relaxed));
+                    g_runtimeOperational.load(), g_mutationKilled.load());
                 return;
             }
 
@@ -967,24 +965,23 @@ namespace NpcAppearance
             // The Set3d trigger registers unconditionally; the handler
             // no-ops once mutation is killed. Without the source, only the
             // post-load sweep can style actors.
-            if (!g_overlaySinkRegistered.load(std::memory_order_acquire)) {
+            if (!g_overlaySinkRegistered.load()) {
                 auto* set3dSource = RE::RuntimeComponentDBFactory::
                     ReferenceSet3d::GetEventSource();
                 if (set3dSource) {
                     set3dSource->RegisterSink(
                         &OverlaySet3dSink::GetSingleton());
-                    g_overlaySinkRegistered.store(
-                        true, std::memory_order_release);
+                    g_overlaySinkRegistered.store(true);
                 } else {
                     REX::WARN(
                         "[NpcAppearance] ReferenceSet3d event source unavailable; only the post-load sweep can style actors this session");
                 }
             }
-            g_runtimeArmed.store(true, std::memory_order_release);
+            g_runtimeArmed.store(true);
             REX::INFO(
                 "[NpcAppearance] overlay runtime ARMED assignments={} set3dSinkRegistered={}; per-3D-build transient windows + post-load sweep",
                 assignments,
-                g_overlaySinkRegistered.load(std::memory_order_relaxed));
+                g_overlaySinkRegistered.load());
         }
 
     }
@@ -997,20 +994,18 @@ namespace NpcAppearance
         // drain, and the overlay window's restore proof.
         bool MutationOperational() noexcept
         {
-            return g_runtimeOperational.load(std::memory_order_acquire) &&
-                !g_mutationKilled.load(std::memory_order_acquire);
+            return g_runtimeOperational.load() && !g_mutationKilled.load();
         }
 
         bool RestoreOperational() noexcept
         {
-            return g_runtimeOperational.load(std::memory_order_acquire);
+            return g_runtimeOperational.load();
         }
 
         void KillMutation(const std::string_view a_reason) noexcept
         {
             bool expected = false;
-            if (g_mutationKilled.compare_exchange_strong(
-                    expected, true, std::memory_order_acq_rel)) {
+            if (g_mutationKilled.compare_exchange_strong(expected, true)) {
                 try {
                     REX::CRITICAL("[NpcAppearance] mutation killed for this process: {}", a_reason);
                 } catch (...) {
@@ -1028,8 +1023,7 @@ namespace NpcAppearance
             a_out(std::format(
                 "{}: mutation disabled runtimeOperational={} mutationKilled={}; FAIL CLOSED",
                 a_operation,
-                g_runtimeOperational.load(std::memory_order_relaxed),
-                g_mutationKilled.load(std::memory_order_relaxed)));
+                g_runtimeOperational.load(), g_mutationKilled.load()));
             return false;
         }
 
@@ -1050,28 +1044,28 @@ namespace NpcAppearance
     void Initialize() noexcept
     {
         try {
-            g_runtimeArmed.store(false, std::memory_order_release);
+            g_runtimeArmed.store(false);
             // Observer-only: a missing event source is telemetry loss, not a
             // safety loss — the overlay runtime works without the sink.
+            bool saveLoadSinkRegistered = false;
             auto* saveLoadSource = RE::SaveLoadEvent::GetEventSource();
             if (saveLoadSource) {
                 saveLoadSource->RegisterSink(&SaveLoadEventSink::GetSingleton());
-                g_saveLoadSinkRegistered.store(true, std::memory_order_release);
+                saveLoadSinkRegistered = true;
             } else {
                 REX::WARN(
                     "[NpcAppearance] SaveLoadEvent source unavailable; the post-load sweep is lost and styling relies on Set3d windows alone");
             }
             const bool deferredRetryAvailable = SFSE::GetTaskInterface() != nullptr;
-            g_runtimeOperational.store(true, std::memory_order_release);
+            g_runtimeOperational.store(true);
             if (!deferredRetryAvailable) {
                 Detail::KillMutation(
                     "SFSE task interface unavailable for demand-driven load retries");
             }
             REX::INFO(
                 "[NpcAppearance] save/load observer state saveLoadSink={} deferredRetryAvailable={} mutationKilled={} runtimeArmed={} callbacks=native-queue-shaped",
-                g_saveLoadSinkRegistered.load(std::memory_order_relaxed), deferredRetryAvailable,
-                g_mutationKilled.load(std::memory_order_relaxed),
-                g_runtimeArmed.load(std::memory_order_relaxed));
+                saveLoadSinkRegistered, deferredRetryAvailable,
+                g_mutationKilled.load(), g_runtimeArmed.load());
             if (!QueueOrRunNativeTask(
                     [] { OnNpcAppearanceDataLoaded(); },
                     "NpcAppearance.StartupScan",

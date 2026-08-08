@@ -6,7 +6,8 @@
 
 namespace Util::NativeMainThreadQueue
 {
-    struct Diagnostics
+    // Point-in-time snapshot of the native queue's state, used to gate dispatch.
+    struct State
     {
         bool           queueEnabled{ false };
         std::uintptr_t singleton{ 0 };
@@ -31,6 +32,6 @@ namespace Util::NativeMainThreadQueue
         std::string_view a_label,
         std::function<void()> a_onDrop = {});
 
-    [[nodiscard]] Diagnostics GetDiagnostics() noexcept;
+    [[nodiscard]] State SnapshotState() noexcept;
     [[nodiscard]] const char* ToString(PostResult a_result) noexcept;
 }
