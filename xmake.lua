@@ -29,6 +29,9 @@ target("OSF Identity")
         "src/NpcAppearance/Selection.cpp",
         "src/NpcAppearance/Preset.cpp",
         "src/NpcAppearance/Resolver.cpp",
+        "src/NpcAppearance/Snapshot.cpp",
+        "src/NpcAppearance/Donor.cpp",
+        "src/NpcAppearance/TargetScan.cpp",
         "src/NpcAppearance/Runtime.cpp",
         "src/Util/NativeMainThreadQueue.cpp"
     )
