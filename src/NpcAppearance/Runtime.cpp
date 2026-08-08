@@ -694,6 +694,8 @@ namespace NpcAppearance
             std::uint32_t                          regionID{ 0 };
             bool                                   hasValues{ false };
             std::vector<std::pair<std::string, float>> values;
+
+            [[nodiscard]] bool operator==(const OwnedBoneRegionSnapshot&) const = default;
         };
 
         struct OwnedAvmSnapshot
@@ -704,6 +706,8 @@ namespace NpcAppearance
             std::string       texturePath;
             RE::Color         color;
             std::uint32_t     intensity{ 0 };
+
+            [[nodiscard]] bool operator==(const OwnedAvmSnapshot&) const = default;
         };
 
         struct OwnedVisualSnapshot
@@ -3682,6 +3686,639 @@ namespace NpcAppearance
             return false;
         }
 
+        // ==================================================================
+        // Overlay feasibility probes (npcapp overlay|probe*)
+        // Dev-only instrumentation for the render-time overlay migration:
+        // measure whether engine worker 97401 writes the target base, whether
+        // its effect serializes, whether a single-drain transient window
+        // renders, and whether ReferenceSet3d is a usable trigger. Probes
+        // never register in g_appliedBases; the save bracket stays armed as
+        // the backstop while they run.
+        // ==================================================================
+        std::atomic<bool> g_overlayModeEnabled{ false };
+
+        struct ProbeBaseline
+        {
+            OwnedVisualSnapshot visual;
+            NonVisualSnapshot   nonVisual;
+            RE::TESNPC*         faceNPC{ nullptr };
+            std::uint32_t       actorFlags{ 0 };
+        };
+
+        std::mutex                                        g_probeBaselineMutex;
+        std::unordered_map<RE::TESFormID, ProbeBaseline>  g_probeBaselines;
+
+        // Runs the probe body inside the verified drain: inline when already
+        // draining, otherwise posted with output redirected to the SFSE log
+        // because the interactive sink does not outlive the command.
+        [[nodiscard]] bool RunProbeOnDrain(
+            const LineSink& a_out,
+            const std::string_view a_label,
+            std::function<void(const LineSink&)> a_body)
+        {
+            const auto diagnostics =
+                Util::NativeMainThreadQueue::GetDiagnostics();
+            if (diagnostics.insideDrain) {
+                a_body(a_out);
+                return true;
+            }
+            const LineSink logSink =
+                [label = std::string{ a_label }](const std::string& a_text) {
+                    REX::INFO("[NpcAppearance] {}: {}", label, a_text);
+                };
+            const bool queued = QueueOrRunNativeTask(
+                [body = std::move(a_body), logSink]() { body(logSink); },
+                a_label,
+                [label = std::string{ a_label }]() {
+                    REX::WARN(
+                        "[NpcAppearance] {} dropped by the native queue; probe did not run",
+                        label);
+                });
+            a_out(std::format(
+                "{}: {} the verified native drain; output continues in the SFSE log",
+                a_label, queued ? "posted to" : "FAILED to post to"));
+            return queued;
+        }
+
+        // Group-wise live-vs-baseline report. Vector comparisons here are
+        // order-sensitive and therefore stricter than SameExactVisualValues
+        // (which matches boneRegions/shapeBlends by membership); the verdict
+        // always comes from SameExactVisualValues, this only localizes diffs.
+        void ReportOwnedVisualDifference(
+            const LineSink& a_out,
+            RE::TESNPC* a_npc,
+            const OwnedVisualSnapshot& a_expected)
+        {
+            const auto live = CaptureOwnedVisualSnapshot(a_npc);
+            a_out(std::format(
+                "visual diff vs baseline: morph={} skinTone={} pronoun={} headParts={} bodyRegions={} boneValues={} boneRegions={} avms={} shapeBlends={}",
+                live.thin == a_expected.thin &&
+                    live.muscular == a_expected.muscular &&
+                    live.fat == a_expected.fat,
+                live.skinToneIndex == a_expected.skinToneIndex,
+                live.pronoun == a_expected.pronoun,
+                live.headPartFormIDs == a_expected.headPartFormIDs,
+                live.hasBodyMorphRegions == a_expected.hasBodyMorphRegions &&
+                    live.bodyMorphRegions == a_expected.bodyMorphRegions,
+                live.hasBoneValues == a_expected.hasBoneValues &&
+                    live.boneValues == a_expected.boneValues,
+                live.hasBoneRegions == a_expected.hasBoneRegions &&
+                    live.boneRegions == a_expected.boneRegions,
+                live.avms == a_expected.avms,
+                live.hasShapeBlends == a_expected.hasShapeBlends &&
+                    live.shapeBlends == a_expected.shapeBlends));
+            a_out(std::format(
+                "visual diff strings: teeth={} jewelry={} eye={} hair={} facial={} eyebrow={} live/baseline morph=({:.6g},{:.6g},{:.6g})/({:.6g},{:.6g},{:.6g}) skin={}/{}",
+                live.teeth == a_expected.teeth,
+                live.jewelryColor == a_expected.jewelryColor,
+                live.eyeColor == a_expected.eyeColor,
+                live.hairColor == a_expected.hairColor,
+                live.facialColor == a_expected.facialColor,
+                live.eyebrowColor == a_expected.eyebrowColor,
+                live.thin, live.muscular, live.fat,
+                a_expected.thin, a_expected.muscular, a_expected.fat,
+                live.skinToneIndex, a_expected.skinToneIndex));
+        }
+
+        void RunOverlayMode(
+            const LineSink& a_out, const std::vector<std::string>& a_args)
+        {
+            const std::string_view mode =
+                a_args.size() >= 3 ? std::string_view{ a_args[2] } : "status";
+            if (mode == "on" || mode == "off") {
+                g_overlayModeEnabled.store(
+                    mode == "on", std::memory_order_release);
+            } else if (mode != "status") {
+                a_out("usage: npcapp overlay [status|on|off]");
+                return;
+            }
+            a_out(std::format(
+                "overlay: mode={} (overlay runtime is not implemented yet; the switch only arms Phase 2 work)",
+                g_overlayModeEnabled.load(std::memory_order_relaxed)
+                    ? "on" : "off"));
+        }
+
+        void RunProbeBaseline(
+            const LineSink& a_out, const std::vector<std::string>& a_args)
+        {
+            if (a_args.size() < 3) {
+                a_out("usage: npcapp probebaseline <plugin:localFormID>");
+                return;
+            }
+            const auto targetIdentity = ParseTargetToken(a_args[2]);
+            if (!targetIdentity) {
+                a_out("probebaseline: invalid target token");
+                return;
+            }
+            (void)RunProbeOnDrain(
+                a_out, "probebaseline",
+                [identity = *targetIdentity](const LineSink& a_sink) {
+                    auto* target = ResolveEligibleTarget(a_sink, identity);
+                    if (!target) {
+                        return;
+                    }
+                    ProbeBaseline baseline;
+                    baseline.visual = CaptureOwnedVisualSnapshot(target);
+                    baseline.nonVisual = Snapshot(target);
+                    baseline.faceNPC = target->faceNPC;
+                    baseline.actorFlags =
+                        target->actorData.actorBaseFlags.underlying();
+                    const auto baseID = target->GetFormID();
+                    a_sink(std::format(
+                        "probebaseline: base=0x{:08X} captured headParts={} bodyRegions={} boneValues={} boneRegions={} avms={} shapeBlends={} morphWeight=({:.6g},{:.6g},{:.6g}) skinTone={} faceNPC=0x{:08X} flags=0x{:08X}",
+                        baseID,
+                        baseline.visual.headPartFormIDs.size(),
+                        baseline.visual.bodyMorphRegions.size(),
+                        baseline.visual.boneValues.size(),
+                        baseline.visual.boneRegions.size(),
+                        baseline.visual.avms.size(),
+                        baseline.visual.shapeBlends.size(),
+                        baseline.visual.thin, baseline.visual.muscular,
+                        baseline.visual.fat, baseline.visual.skinToneIndex,
+                        baseline.faceNPC ? baseline.faceNPC->GetFormID() : 0,
+                        baseline.actorFlags));
+                    const std::scoped_lock lock{ g_probeBaselineMutex };
+                    g_probeBaselines.insert_or_assign(
+                        baseID, std::move(baseline));
+                });
+        }
+
+        void RunProbeCompare(
+            const LineSink& a_out, const std::vector<std::string>& a_args)
+        {
+            if (a_args.size() < 3) {
+                a_out("usage: npcapp probecompare <plugin:localFormID>");
+                return;
+            }
+            const auto targetIdentity = ParseTargetToken(a_args[2]);
+            if (!targetIdentity) {
+                a_out("probecompare: invalid target token");
+                return;
+            }
+            (void)RunProbeOnDrain(
+                a_out, "probecompare",
+                [identity = *targetIdentity](const LineSink& a_sink) {
+                    auto* target = ResolveEligibleTarget(a_sink, identity);
+                    if (!target) {
+                        return;
+                    }
+                    std::optional<ProbeBaseline> baseline;
+                    {
+                        const std::scoped_lock lock{ g_probeBaselineMutex };
+                        const auto found =
+                            g_probeBaselines.find(target->GetFormID());
+                        if (found != g_probeBaselines.end()) {
+                            baseline = found->second;
+                        }
+                    }
+                    if (!baseline) {
+                        a_sink(std::format(
+                            "probecompare: base=0x{:08X} has no stored baseline; run probebaseline first",
+                            target->GetFormID()));
+                        return;
+                    }
+                    const bool visualExact =
+                        SameExactVisualValues(target, baseline->visual);
+                    const auto liveNonVisual = Snapshot(target);
+                    const bool nonVisualExact =
+                        baseline->nonVisual == liveNonVisual;
+                    const bool nonVisualExactIgnoringDirty =
+                        SameNonVisualIgnoringRefreshDirtyFlag(
+                            baseline->nonVisual, liveNonVisual);
+                    const bool faceNPCSame =
+                        target->faceNPC == baseline->faceNPC;
+                    const auto liveFlags =
+                        target->actorData.actorBaseFlags.underlying();
+                    a_sink(std::format(
+                        "probecompare: base=0x{:08X} visualExact={} nonVisualExact={} nonVisualExactIgnoringDirtyFlag={} faceNPCSame={} flagsSame={} flags=0x{:08X}/0x{:08X}",
+                        target->GetFormID(), visualExact, nonVisualExact,
+                        nonVisualExactIgnoringDirty, faceNPCSame,
+                        liveFlags == baseline->actorFlags,
+                        liveFlags, baseline->actorFlags));
+                    if (!visualExact) {
+                        ReportOwnedVisualDifference(
+                            a_sink, target, baseline->visual);
+                    }
+                });
+        }
+
+        void RunProbe97401(
+            const LineSink& a_out, const std::vector<std::string>& a_args)
+        {
+            if (!RequireMutationOperational(a_out, "probe97401")) {
+                return;
+            }
+            if (a_args.size() < 4) {
+                a_out("usage: npcapp probe97401 <targetRefID> <sourceRefID> [restore=0|1]");
+                return;
+            }
+            const auto targetID = ParseFormID(a_args[2]);
+            const auto sourceID = ParseFormID(a_args[3]);
+            if (!targetID || !sourceID) {
+                a_out("probe97401: invalid hexadecimal form ID");
+                return;
+            }
+            bool restore = true;
+            if (a_args.size() >= 5) {
+                if (a_args[4] != "0" && a_args[4] != "1") {
+                    a_out("probe97401: restore must be 0 or 1");
+                    return;
+                }
+                restore = a_args[4] == "1";
+            }
+            (void)RunProbeOnDrain(
+                a_out, "probe97401",
+                [targetID = *targetID, sourceID = *sourceID,
+                 restore](const LineSink& a_sink) {
+                    auto* target =
+                        RE::TESForm::LookupByID<RE::Actor>(targetID);
+                    auto* source =
+                        RE::TESForm::LookupByID<RE::Actor>(sourceID);
+                    if (!target || !source) {
+                        a_sink(std::format(
+                            "probe97401: actor lookup failed target={} source={}",
+                            static_cast<void*>(target),
+                            static_cast<void*>(source)));
+                        return;
+                    }
+                    auto* targetBase = target->GetNPC();
+                    auto* sourceBase = source->GetNPC();
+                    if (!targetBase || !sourceBase || !targetBase->IsUnique()) {
+                        a_sink(std::format(
+                            "probe97401: ineligible target/source base target={} source={} targetUnique={}",
+                            static_cast<void*>(targetBase),
+                            static_cast<void*>(sourceBase),
+                            targetBase && targetBase->IsUnique()));
+                        return;
+                    }
+                    if (targetBase->pronoun.underlying() !=
+                        sourceBase->pronoun.underlying()) {
+                        a_sink(std::format(
+                            "probe97401: rejected before mutation because the worker would copy pronoun (target={} source={})",
+                            targetBase->pronoun.underlying(),
+                            sourceBase->pronoun.underlying()));
+                        return;
+                    }
+
+                    using Worker = void (*)(RE::Actor*, RE::TESNPC*, bool);
+                    REL::Relocation<Worker> worker{
+                        kActorCopyAppearanceWorkerID
+                    };
+                    if (!HasExpectedGate(worker.address())) {
+                        a_sink(std::format(
+                            "probe97401: ID 97401 contract mismatch at img+0x{:X}; FAIL CLOSED",
+                            Util::ToRva(worker.address())));
+                        return;
+                    }
+
+                    const bool sourceIsPlayer = sourceID == 0x14;
+                    AppliedBaseState insurance;
+                    insurance.baseID = targetBase->GetFormID();
+                    insurance.originalVisual =
+                        CaptureOwnedVisualSnapshot(targetBase);
+                    insurance.originalNonVisual = Snapshot(targetBase);
+                    insurance.originalFaceNPC = targetBase->faceNPC;
+                    insurance.originalActorFlags =
+                        targetBase->actorData.actorBaseFlags.underlying();
+                    const auto sourceVisualBefore =
+                        CaptureOwnedVisualSnapshot(sourceBase);
+
+                    const auto started = std::chrono::steady_clock::now();
+                    worker(target, sourceBase, sourceIsPlayer);
+                    const auto elapsedMs =
+                        std::chrono::duration<double, std::milli>(
+                            std::chrono::steady_clock::now() - started)
+                            .count();
+
+                    const bool baseVisualMutated = !SameExactVisualValues(
+                        targetBase, insurance.originalVisual);
+                    const auto nonVisualAfter = Snapshot(targetBase);
+                    const bool baseNonVisualMutated =
+                        !(insurance.originalNonVisual == nonVisualAfter);
+                    const bool baseNonVisualMutatedIgnoringDirty =
+                        !SameNonVisualIgnoringRefreshDirtyFlag(
+                            insurance.originalNonVisual, nonVisualAfter);
+                    const bool faceNPCChanged =
+                        targetBase->faceNPC != insurance.originalFaceNPC;
+                    const bool flagsChanged =
+                        targetBase->actorData.actorBaseFlags.underlying() !=
+                        insurance.originalActorFlags;
+                    const bool sourceVisualUntouched = SameExactVisualValues(
+                        sourceBase, sourceVisualBefore);
+                    a_sink(std::format(
+                        "probe97401: RESULT targetRef=0x{:08X} base=0x{:08X} sourceIsPlayer={} baseVisualMutated={} baseNonVisualMutated={} baseNonVisualMutatedIgnoringDirtyFlag={} faceNPCChanged={} flagsChanged={} sourceVisualUntouched={} ms={:.3f}",
+                        targetID, insurance.baseID, sourceIsPlayer,
+                        baseVisualMutated, baseNonVisualMutated,
+                        baseNonVisualMutatedIgnoringDirty, faceNPCChanged,
+                        flagsChanged, sourceVisualUntouched, elapsedMs));
+                    if (baseVisualMutated) {
+                        ReportOwnedVisualDifference(
+                            a_sink, targetBase, insurance.originalVisual);
+                    }
+
+                    const bool baseDirty =
+                        baseVisualMutated || faceNPCChanged || flagsChanged;
+                    if (!baseDirty) {
+                        a_sink("probe97401: target base untouched; nothing to restore");
+                        return;
+                    }
+                    if (!restore) {
+                        a_sink("probe97401: base left mutated BY DESIGN for the save-persistence procedure; save, reload, run probecompare, and do not continue normal play on this session");
+                        return;
+                    }
+                    const bool restoredExact = RestoreAppliedBaseState(
+                        a_sink, targetBase, insurance);
+                    a_sink(std::format(
+                        "probe97401: restored exact={}", restoredExact));
+                    if (!restoredExact) {
+                        KillMutation(
+                            "probe97401 exact restoration failed; base left non-original");
+                        a_sink("probe97401: CRITICAL restore failed; do not save this session, reload immediately");
+                    }
+                });
+        }
+
+        void ScheduleProbeTransientRecheck(const AppliedBaseState& a_insurance)
+        {
+            std::thread{ [insurance = a_insurance]() mutable {
+                std::this_thread::sleep_for(std::chrono::seconds{ 2 });
+                const auto baseID = insurance.baseID;
+                (void)QueueOrRunNativeTask(
+                    [insurance = std::move(insurance)]() {
+                        auto* target = RE::TESForm::LookupByID<RE::TESNPC>(
+                            insurance.baseID);
+                        const bool stillExact =
+                            ExactOriginalState(target, insurance);
+                        REX::INFO(
+                            "[NpcAppearance] probetransient: RECHECK base=0x{:08X} baseStillExact={}; visually confirm the actor's rendered appearance",
+                            insurance.baseID, stillExact);
+                    },
+                    "NpcAppearance.ProbeTransientRecheck",
+                    [baseID]() {
+                        REX::WARN(
+                            "[NpcAppearance] probetransient: RECHECK base=0x{:08X} dropped by the native queue",
+                            baseID);
+                    });
+            } }.detach();
+        }
+
+        void RunProbeTransient(
+            const LineSink& a_out, const std::vector<std::string>& a_args)
+        {
+            if (!RequireMutationOperational(a_out, "probetransient")) {
+                return;
+            }
+            if (a_args.size() < 5) {
+                a_out("usage: npcapp probetransient <plugin:localFormID> <actorRefID> <preset.npc>");
+                return;
+            }
+            const auto targetIdentity = ParseTargetToken(a_args[2]);
+            const auto actorRefID = ParseFormID(a_args[3]);
+            if (!targetIdentity || !actorRefID) {
+                a_out("probetransient: invalid target token or actorRefID");
+                return;
+            }
+            const std::filesystem::path presetPath{ JoinArguments(a_args, 4) };
+
+            // Unlike targettrial this accepts an arbitrary preset: the
+            // mutation never persists past this drain task, so the
+            // bracket-ownership policy does not apply.
+            (void)RunProbeOnDrain(
+                a_out, "probetransient",
+                [identity = *targetIdentity, actorRefID = *actorRefID,
+                 presetPath](const LineSink& a_sink) {
+                    auto* target = ResolveEligibleTarget(a_sink, identity);
+                    auto* actor =
+                        RE::TESForm::LookupByID<RE::Actor>(actorRefID);
+                    if (!target || !actor || actor->GetNPC() != target) {
+                        a_sink(std::format(
+                            "probetransient: actor ref 0x{:08X} is absent or bound to a different base; no mutation",
+                            actorRefID));
+                        return;
+                    }
+                    if (!HasLoaded3D(actor)) {
+                        a_sink(std::format(
+                            "probetransient: actor ref 0x{:08X} has no loaded 3D; the transient-window question needs a rendered actor; no mutation",
+                            actorRefID));
+                        return;
+                    }
+
+                    AppliedBaseState insurance;
+                    insurance.baseID = target->GetFormID();
+                    insurance.originalVisual =
+                        CaptureOwnedVisualSnapshot(target);
+                    insurance.originalNonVisual = Snapshot(target);
+                    insurance.originalFaceNPC = target->faceNPC;
+                    insurance.originalActorFlags =
+                        target->actorData.actorBaseFlags.underlying();
+
+                    const auto started = std::chrono::steady_clock::now();
+                    const bool applied = SilentApplyPresetToBase(
+                        a_sink, target, presetPath);
+                    bool notifiedKicked = false;
+                    if (applied) {
+                        notifiedKicked =
+                            NotifyAndKick(target, actor, actorRefID);
+                    }
+                    const bool restoredExact = RestoreAppliedBaseState(
+                        a_sink, target, insurance);
+                    const auto elapsedMs =
+                        std::chrono::duration<double, std::milli>(
+                            std::chrono::steady_clock::now() - started)
+                            .count();
+                    a_sink(std::format(
+                        "probetransient: window CLOSED base=0x{:08X} actor=0x{:08X} applied={} notifiedKicked={} restoredExact={} ms={:.3f}; visually confirm whether the actor renders the preset or vanilla",
+                        insurance.baseID, actorRefID, applied,
+                        notifiedKicked, restoredExact, elapsedMs));
+                    if (!restoredExact) {
+                        KillMutation(
+                            "probetransient exact restoration failed; base left non-original");
+                        a_sink("probetransient: CRITICAL restore failed; do not save this session, reload immediately");
+                        return;
+                    }
+                    ScheduleProbeTransientRecheck(insurance);
+                });
+        }
+
+        struct ProbeSet3dState
+        {
+            std::atomic<bool>          enabled{ false };
+            std::atomic<bool>          registered{ false };
+            std::atomic<std::uint64_t> set3dEvents{ 0 };
+            std::atomic<std::uint64_t> detachEvents{ 0 };
+            std::atomic<std::uint64_t> actorSet3dEvents{ 0 };
+            std::atomic<std::uint64_t> trackedSet3dEvents{ 0 };
+            std::atomic<std::uint64_t> trackedDetachEvents{ 0 };
+            std::atomic<std::uint64_t> untrackedLogged{ 0 };
+            std::atomic<std::uint64_t> latencyProbes{ 0 };
+        };
+        ProbeSet3dState g_probeSet3d;
+
+        constexpr std::uint64_t kProbeSet3dUntrackedLogCap = 25;
+        constexpr std::uint64_t kProbeSet3dLatencyProbeCap = 50;
+
+        // Log-only observer; may run on any engine thread, so it never
+        // writes game objects and keeps reads to SEH-guarded probes.
+        void OnProbeReferenceEvent(
+            RE::TESObjectREFR* a_ref, const bool a_set3d) noexcept
+        {
+            try {
+                if (!g_probeSet3d.enabled.load(std::memory_order_acquire)) {
+                    return;
+                }
+                (a_set3d ? g_probeSet3d.set3dEvents
+                         : g_probeSet3d.detachEvents)
+                    .fetch_add(1, std::memory_order_relaxed);
+                auto* actor = a_ref ? a_ref->As<RE::Actor>() : nullptr;
+                if (!actor) {
+                    return;
+                }
+                if (a_set3d) {
+                    g_probeSet3d.actorSet3dEvents.fetch_add(
+                        1, std::memory_order_relaxed);
+                }
+                auto* base = actor->GetNPC();
+                const RE::TESFormID baseID = base ? base->GetFormID() : 0;
+                bool tracked = false;
+                {
+                    const std::scoped_lock lock{ g_eventMutex };
+                    tracked = baseID != 0 && g_targetBaseIDs.contains(baseID);
+                }
+                if (tracked) {
+                    (a_set3d ? g_probeSet3d.trackedSet3dEvents
+                             : g_probeSet3d.trackedDetachEvents)
+                        .fetch_add(1, std::memory_order_relaxed);
+                }
+                if (!a_set3d) {
+                    if (tracked) {
+                        REX::INFO(
+                            "[NpcAppearance] probeset3d: DETACH ref=0x{:08X} base=0x{:08X} tid={}",
+                            actor->GetFormID(), baseID,
+                            ::GetCurrentThreadId());
+                    }
+                    return;
+                }
+                const bool logUntracked =
+                    !tracked &&
+                    g_probeSet3d.untrackedLogged.fetch_add(
+                        1, std::memory_order_relaxed) <
+                        kProbeSet3dUntrackedLogCap;
+                if (tracked || logUntracked) {
+                    const auto diagnostics =
+                        Util::NativeMainThreadQueue::GetDiagnostics();
+                    REX::INFO(
+                        "[NpcAppearance] probeset3d: SET3D ref=0x{:08X} base=0x{:08X} tracked={} tid={} insideDrain={} queueEnabled={} hasLoaded3D={}",
+                        actor->GetFormID(), baseID, tracked,
+                        diagnostics.currentThreadID, diagnostics.insideDrain,
+                        diagnostics.queueEnabled, HasLoaded3D(actor));
+                }
+                if (tracked &&
+                    g_probeSet3d.latencyProbes.fetch_add(
+                        1, std::memory_order_relaxed) <
+                        kProbeSet3dLatencyProbeCap) {
+                    const auto posted = std::chrono::steady_clock::now();
+                    const auto refID = actor->GetFormID();
+                    (void)QueueOrRunNativeTask(
+                        [refID, posted]() {
+                            const auto latencyMs =
+                                std::chrono::duration<double, std::milli>(
+                                    std::chrono::steady_clock::now() - posted)
+                                    .count();
+                            REX::INFO(
+                                "[NpcAppearance] probeset3d: drain latency ref=0x{:08X} ms={:.3f}",
+                                refID, latencyMs);
+                        },
+                        "NpcAppearance.ProbeSet3dLatency");
+                }
+            } catch (...) {
+            }
+        }
+
+        class ProbeReferenceEventSink final :
+            public RE::BSTEventSink<
+                RE::RuntimeComponentDBFactory::ReferenceSet3d>,
+            public RE::BSTEventSink<
+                RE::RuntimeComponentDBFactory::ReferenceDetach>
+        {
+        public:
+            static ProbeReferenceEventSink& GetSingleton() noexcept
+            {
+                static ProbeReferenceEventSink singleton;
+                return singleton;
+            }
+
+            RE::BSEventNotifyControl ProcessEvent(
+                const RE::RuntimeComponentDBFactory::ReferenceSet3d& a_event,
+                RE::BSTEventSource<
+                    RE::RuntimeComponentDBFactory::ReferenceSet3d>*) noexcept
+                override
+            {
+                OnProbeReferenceEvent(a_event.ref.get(), true);
+                return RE::BSEventNotifyControl::kContinue;
+            }
+
+            RE::BSEventNotifyControl ProcessEvent(
+                const RE::RuntimeComponentDBFactory::ReferenceDetach& a_event,
+                RE::BSTEventSource<
+                    RE::RuntimeComponentDBFactory::ReferenceDetach>*) noexcept
+                override
+            {
+                OnProbeReferenceEvent(a_event.ref.get(), false);
+                return RE::BSEventNotifyControl::kContinue;
+            }
+        };
+
+        void RunProbeSet3d(
+            const LineSink& a_out, const std::vector<std::string>& a_args)
+        {
+            const std::string_view mode =
+                a_args.size() >= 3 ? std::string_view{ a_args[2] } : "status";
+            if (mode == "on") {
+                if (!g_probeSet3d.registered.load(std::memory_order_acquire)) {
+                    auto* set3dSource = RE::RuntimeComponentDBFactory::
+                        ReferenceSet3d::GetEventSource();
+                    auto* detachSource = RE::RuntimeComponentDBFactory::
+                        ReferenceDetach::GetEventSource();
+                    if (!set3dSource || !detachSource) {
+                        a_out(std::format(
+                            "probeset3d: event source unavailable set3d={} detach={}; sink not registered",
+                            static_cast<void*>(set3dSource),
+                            static_cast<void*>(detachSource)));
+                        return;
+                    }
+                    set3dSource->RegisterSink(
+                        &ProbeReferenceEventSink::GetSingleton());
+                    detachSource->RegisterSink(
+                        &ProbeReferenceEventSink::GetSingleton());
+                    g_probeSet3d.registered.store(
+                        true, std::memory_order_release);
+                }
+                g_probeSet3d.enabled.store(true, std::memory_order_release);
+                a_out("probeset3d: ON; now load a save, fast-travel, and let late spawns build 3D, then read the SFSE log");
+                return;
+            }
+            if (mode == "off") {
+                g_probeSet3d.enabled.store(false, std::memory_order_release);
+                a_out("probeset3d: OFF (sink stays registered; logging disabled)");
+                return;
+            }
+            if (mode != "status") {
+                a_out("usage: npcapp probeset3d [on|off|status]");
+                return;
+            }
+            a_out(std::format(
+                "probeset3d: enabled={} registered={} set3dEvents={} detachEvents={} actorSet3d={} trackedSet3d={} trackedDetach={} untrackedLogged={} latencyProbes={}",
+                g_probeSet3d.enabled.load(std::memory_order_relaxed),
+                g_probeSet3d.registered.load(std::memory_order_relaxed),
+                g_probeSet3d.set3dEvents.load(std::memory_order_relaxed),
+                g_probeSet3d.detachEvents.load(std::memory_order_relaxed),
+                g_probeSet3d.actorSet3dEvents.load(std::memory_order_relaxed),
+                g_probeSet3d.trackedSet3dEvents.load(std::memory_order_relaxed),
+                g_probeSet3d.trackedDetachEvents.load(std::memory_order_relaxed),
+                g_probeSet3d.untrackedLogged.load(std::memory_order_relaxed),
+                g_probeSet3d.latencyProbes.load(std::memory_order_relaxed)));
+        }
+
         [[nodiscard]] bool RestoreBasesForSave(
             const std::uint64_t a_entry,
             const std::vector<AppliedBaseState>& a_states)
@@ -5412,8 +6049,20 @@ namespace NpcAppearance
             RunBracketStatus(a_out);
         } else if (a_args[1] == "copyref") {
             RunCopyRef(a_out, a_args);
+        } else if (a_args[1] == "overlay") {
+            RunOverlayMode(a_out, a_args);
+        } else if (a_args[1] == "probebaseline") {
+            RunProbeBaseline(a_out, a_args);
+        } else if (a_args[1] == "probecompare") {
+            RunProbeCompare(a_out, a_args);
+        } else if (a_args[1] == "probe97401") {
+            RunProbe97401(a_out, a_args);
+        } else if (a_args[1] == "probetransient") {
+            RunProbeTransient(a_out, a_args);
+        } else if (a_args[1] == "probeset3d") {
+            RunProbeSet3d(a_out, a_args);
         } else {
-            a_out("npcapp: status|bracket|selftest|scan [packsRoot]|inspect <npc>|resolve <plugin:localFormID>|refs <plugin:localFormID> <npc>|avm <plugin:localFormID> <npc>|donor [count]|donorseed <plugin:localFormID> <npc>|donormorph <plugin:localFormID> <npc>|donorvisual <plugin:localFormID> <npc>|donorcopy <plugin:localFormID> <npc>|targettrial <plugin:localFormID> <actorRefID> <npc>|copyref <targetRefID> <sourceRefID> [0|1]");
+            a_out("npcapp: status|bracket|selftest|scan [packsRoot]|inspect <npc>|resolve <plugin:localFormID>|refs <plugin:localFormID> <npc>|avm <plugin:localFormID> <npc>|donor [count]|donorseed <plugin:localFormID> <npc>|donormorph <plugin:localFormID> <npc>|donorvisual <plugin:localFormID> <npc>|donorcopy <plugin:localFormID> <npc>|targettrial <plugin:localFormID> <actorRefID> <npc>|copyref <targetRefID> <sourceRefID> [0|1]|overlay [status|on|off]|probebaseline <plugin:localFormID>|probecompare <plugin:localFormID>|probe97401 <targetRefID> <sourceRefID> [restore=0|1]|probetransient <plugin:localFormID> <actorRefID> <npc>|probeset3d [on|off|status]");
         }
     }
 }

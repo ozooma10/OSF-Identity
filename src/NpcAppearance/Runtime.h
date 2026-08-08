@@ -21,10 +21,19 @@
 //   npcapp donor [count]
 //   npcapp targettrial <plugin:localFormID> <actorRefID> <preset.npc>
 //   npcapp copyref <targetRefID> <sourceRefID> [sourceIsPlayer=0|1]
+//   npcapp overlay [status|on|off]
+//   npcapp probebaseline <plugin:localFormID>
+//   npcapp probecompare <plugin:localFormID>
+//   npcapp probe97401 <targetRefID> <sourceRefID> [restore=0|1]
+//   npcapp probetransient <plugin:localFormID> <actorRefID> <preset.npc>
+//   npcapp probeset3d [on|off|status]
 //
 // `targettrial` only re-applies the bracket-tracked winning assignment and
 // issues the selected one-shot notify/refresh recipe; arbitrary or untracked
-// mutation is refused.
+// mutation is refused. The `overlay`/`probe*` commands are the render-time
+// overlay migration's feasibility instruments: they never register state in
+// the save bracket, and `probetransient`/`probe97401` restore (or loudly
+// refuse to restore) the base within the same drain task.
 namespace NpcAppearance
 {
     using LineSink = std::function<void(const std::string&)>;
