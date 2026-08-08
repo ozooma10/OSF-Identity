@@ -3678,11 +3678,21 @@ namespace NpcAppearance
             if (postResult == Util::NativeMainThreadQueue::PostResult::kQueued) {
                 return true;
             }
-            REX::CRITICAL(
-                "[NpcAppearance] native task '{}' post failed result={} tid={} drainOwnerTid={} queueEnabled={}",
-                a_label, Util::NativeMainThreadQueue::ToString(postResult),
-                before.currentThreadID, before.drainOwnerThreadID,
-                before.queueEnabled);
+            if (postResult ==
+                Util::NativeMainThreadQueue::PostResult::kQueueDisabled) {
+                // The engine disables the queue around LoadGame; a refusal
+                // here is an expected state every caller already handles
+                // (deferral, veto, or retry at the next trigger).
+                REX::WARN(
+                    "[NpcAppearance] native task '{}' refused result=queue-disabled tid={}; caller falls back",
+                    a_label, before.currentThreadID);
+            } else {
+                REX::CRITICAL(
+                    "[NpcAppearance] native task '{}' post failed result={} tid={} drainOwnerTid={} queueEnabled={}",
+                    a_label, Util::NativeMainThreadQueue::ToString(postResult),
+                    before.currentThreadID, before.drainOwnerThreadID,
+                    before.queueEnabled);
+            }
             return false;
         }
 
@@ -3695,7 +3705,10 @@ namespace NpcAppearance
         // never register in g_appliedBases; the save bracket stays armed as
         // the backstop while they run.
         // ==================================================================
-        std::atomic<bool> g_overlayModeEnabled{ false };
+        // Default ON since the 2026-08-07 soak (all trigger paths green);
+        // `npcapp overlay off` falls back to the legacy persistent-apply
+        // path at the next load while the save bracket still exists.
+        std::atomic<bool> g_overlayModeEnabled{ true };
 
         struct ProbeBaseline
         {

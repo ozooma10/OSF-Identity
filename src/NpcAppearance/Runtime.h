@@ -35,13 +35,14 @@
 // bracket, and `probetransient`/`probe97401` restore (or loudly refuse to
 // restore) the base within the same drain task.
 //
-// `overlay on` switches tracked NPCs to the probe-proven Mechanism B runtime
-// (docs/OVERLAY_PROBE_FINDINGS.md): per 3D build of a tracked actor, one
+// The overlay runtime (probe-proven Mechanism B, default ON; see
+// docs/OVERLAY_PROBE_FINDINGS.md) styles tracked NPCs per 3D build: one
 // verified drain task applies the preset to the base, notifies, refreshes the
 // actor, and restores the base byte-exactly before returning — the
 // serializable TESNPC is never preset-mutated at rest. Overlay failures
 // render vanilla; a failed in-window restore escalates the base into the
-// save bracket's custody and kills mutation.
+// save bracket's custody and kills mutation. `npcapp overlay off` falls back
+// to the legacy persistent-apply path at the next load.
 namespace NpcAppearance
 {
     using LineSink = std::function<void(const std::string&)>;
