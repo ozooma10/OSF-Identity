@@ -149,22 +149,20 @@ namespace NpcAppearance
         void RunTargetTrial(
             const LineSink& a_out, const std::vector<std::string>& a_args);
 
+        // Since API v3 the save/load hooks are observer-only telemetry: they
+        // are not load-bearing for mutation safety, so none of these gates
+        // consult SaveLoadHooks::Operational(). Correctness comes from the
+        // per-call byte gates, the verified drain, and the overlay window's
+        // restore proof.
         [[nodiscard]] bool MutationOperational() noexcept
         {
             return g_bracketOperational.load(std::memory_order_acquire) &&
-                !g_mutationKilled.load(std::memory_order_acquire) &&
-                SaveLoadHooks::Operational();
+                !g_mutationKilled.load(std::memory_order_acquire);
         }
 
         [[nodiscard]] bool RestoreOperational() noexcept
         {
             return g_bracketOperational.load(std::memory_order_acquire);
-        }
-
-        [[nodiscard]] bool SaveGatewayOperational() noexcept
-        {
-            return g_bracketOperational.load(std::memory_order_acquire) &&
-                SaveLoadHooks::Operational();
         }
 
         void KillMutation(const std::string_view a_reason) noexcept
@@ -185,11 +183,6 @@ namespace NpcAppearance
         {
             if (MutationOperational()) {
                 return true;
-            }
-            if (g_bracketOperational.load(std::memory_order_acquire) &&
-                !g_mutationKilled.load(std::memory_order_acquire) &&
-                !SaveLoadHooks::Operational()) {
-                KillMutation("save/load hook provider lost ownership");
             }
             a_out(std::format(
                 "{}: mutation disabled bracketOperational={} mutationKilled={}; FAIL CLOSED",
@@ -1555,9 +1548,6 @@ namespace NpcAppearance
         {
             if (!MutationOperational() || !a_target || !a_actor ||
                 a_actor->GetNPC() != a_target || a_actor->GetFormID() != a_actorRefID) {
-                if (!MutationOperational()) {
-                    KillMutation("save/load hook provider lost ownership before notify/kick");
-                }
                 return false;
             }
 
@@ -1707,10 +1697,10 @@ namespace NpcAppearance
                         return a_entry.second.bracketFailed;
                     }));
             }
-            a_out("OSF Identity diagnostics: production save/load bracket + retained pipeline commands");
-            a_out(std::format("saveLoadBracketOperational={} saveVetoSupported={} mutationKilled={}",
+            a_out("OSF Identity diagnostics: overlay runtime + observer save/load hooks + retained pipeline commands");
+            a_out(std::format("saveLoadBracketOperational={} observerHooksOperational={} mutationKilled={}",
                               g_bracketOperational.load(std::memory_order_relaxed),
-                              SaveLoadHooks::SupportsSaveVeto(),
+                              SaveLoadHooks::Operational(),
                               g_mutationKilled.load(std::memory_order_relaxed)));
             a_out(std::format(
                 "saveLoadBracketArmed={} autoArm=true appliedBases={} failedBases={} inBracket={} preSaveReady={} saveGatewayEntered={} saveHookObserved={} saveLoadEventRegistered={} saveEntries={} saveReturns={} loadReturns={} loadGeneration={}",
@@ -3682,7 +3672,7 @@ namespace NpcAppearance
                 Util::NativeMainThreadQueue::PostResult::kQueueDisabled) {
                 // The engine disables the queue around LoadGame; a refusal
                 // here is an expected state every caller already handles
-                // (deferral, veto, or retry at the next trigger).
+                // (deferral or retry at the next trigger).
                 REX::WARN(
                     "[NpcAppearance] native task '{}' refused result=queue-disabled tid={}; caller falls back",
                     a_label, before.currentThreadID);
@@ -3801,8 +3791,8 @@ namespace NpcAppearance
         // never preset-mutated at rest. Triggered by ReferenceSet3d (fires
         // outside the drain; handler posts) plus a post-load sweep. While the
         // save bracket still exists, a failed in-window restore escalates the
-        // base into g_appliedBases so the bracket regains custody and the
-        // veto path protects the next save.
+        // base into g_appliedBases so the bracket's pre-save restoration
+        // regains custody of it before the next save.
         // ==================================================================
         constexpr std::chrono::milliseconds kOverlayReapplyCooldown{ 1000 };
 
@@ -4751,7 +4741,7 @@ namespace NpcAppearance
                     restoredExact, !restoredExact, elapsedMs);
                 if (!restoredExact) {
                     REX::CRITICAL(
-                        "[NpcAppearance] C2 PRE-SAVE target=0x{:08X} exact restoration FAILED; engine save must be vetoed",
+                        "[NpcAppearance] C2 PRE-SAVE target=0x{:08X} exact restoration FAILED; this save may carry unrestored state",
                         state.baseID);
                 }
             }
@@ -5118,10 +5108,16 @@ namespace NpcAppearance
             }
         }
 
-        [[nodiscard]] bool OnSaveGameEntryImpl() noexcept
+        // Observer since API v3: the engine gateway always runs. With the
+        // overlay runtime the tracked set is normally empty here; when the
+        // bracket holds state (legacy path or an escalated overlay failure),
+        // this validates that the pre-save restore was proven and reports —
+        // loudly — when it was not, because that save then carries
+        // unrestored state.
+        void OnSaveGameEntryImpl() noexcept
         {
             if (!g_bracketArmed.load(std::memory_order_acquire)) {
-                return true;
+                return;
             }
             try {
                 std::size_t tracked = 0;
@@ -5133,23 +5129,17 @@ namespace NpcAppearance
                 }
                 if (tracked == 0) {
                     REX::INFO(
-                        "[NpcAppearance] C2 SAVE-ENTRY no tracked mutation; engine save allowed without a bracket tid={}",
+                        "[NpcAppearance] C2 SAVE-ENTRY no tracked mutation; nothing bracket-owned can serialize tid={}",
                         ::GetCurrentThreadId());
-                    return true;
+                    return;
                 }
                 g_saveHookObserved.store(true, std::memory_order_release);
-                if (!SaveGatewayOperational()) {
-                    KillMutation("save/load hook provider lost ownership at save entry");
-                    REX::CRITICAL(
-                        "[NpcAppearance] C2 SAVE-ENTRY save gateway is not operational; save veto requested");
-                    return false;
-                }
                 if (!g_saveLoadEventRegistered.load(std::memory_order_acquire)) {
                     KillMutation("save entry arrived without SaveLoadEvent pre-save registration");
                     REX::CRITICAL(
-                        "[NpcAppearance] C2 SAVE-ENTRY tracked={} but the pre-save event sink is not registered; save veto requested",
+                        "[NpcAppearance] C2 SAVE-ENTRY tracked={} but the pre-save event sink is not registered; this save may carry unrestored state",
                         tracked);
-                    return false;
+                    return;
                 }
 
                 const bool active =
@@ -5161,27 +5151,27 @@ namespace NpcAppearance
                 if (!active || !ready || reentrant || restored != tracked) {
                     g_saveGatewayEntered.store(false, std::memory_order_release);
                     g_preSaveGeneration.fetch_add(1, std::memory_order_acq_rel);
+                    KillMutation("pre-save restoration unproven at save entry");
                     REX::CRITICAL(
-                        "[NpcAppearance] C2 SAVE-ENTRY pre-save validation FAILED active={} ready={} reentrant={} tracked={} restored={}; SAVE VETO requested and engine gateway must not run",
+                        "[NpcAppearance] C2 SAVE-ENTRY pre-save validation FAILED active={} ready={} reentrant={} tracked={} restored={}; save proceeds and may carry unrestored state",
                         active, ready, reentrant, tracked, restored);
-                    return false;
+                    return;
                 }
 
                 REX::INFO(
-                    "[NpcAppearance] C2 SAVE-ENTRY accepted pre-restored bracket entry={} tracked={} restored={} tid={}; engine gateway may run",
+                    "[NpcAppearance] C2 SAVE-ENTRY pre-restored bracket entry={} tracked={} restored={} tid={}",
                     g_bracketSaveEntries.load(std::memory_order_relaxed),
                     tracked, restored, ::GetCurrentThreadId());
-                return true;
             } catch (const std::exception& e) {
+                KillMutation("save-entry callback threw");
                 REX::CRITICAL(
-                    "[NpcAppearance] C2 SAVE-ENTRY callback threw '{}'; save veto requested",
+                    "[NpcAppearance] C2 SAVE-ENTRY callback threw '{}'",
                     e.what());
             } catch (...) {
+                KillMutation("save-entry callback threw");
                 REX::CRITICAL(
-                    "[NpcAppearance] C2 SAVE-ENTRY callback threw; save veto requested");
+                    "[NpcAppearance] C2 SAVE-ENTRY callback threw");
             }
-            KillMutation("save-entry callback threw");
-            return false;
         }
 
         void OnSaveGameReturnImpl() noexcept
@@ -5552,7 +5542,7 @@ namespace NpcAppearance
                     if (g_inBracket.exchange(true, std::memory_order_acq_rel)) {
                         KillMutation("overlapping SaveLoadEvent pre-save brackets");
                         REX::CRITICAL(
-                            "[NpcAppearance] C2 PRE-SAVE event op={} generation={} overlapped an active bracket; save will be vetoed",
+                            "[NpcAppearance] C2 PRE-SAVE event op={} generation={} overlapped an active bracket; restoration state is unreliable for this save",
                             op, generation);
                         return;
                     }
@@ -5578,7 +5568,7 @@ namespace NpcAppearance
                             }
                             if (!RestoreOperational()) {
                                 REX::CRITICAL(
-                                    "[NpcAppearance] C2 PRE-SAVE op={} generation={} entry={} restoration is not operational; save will be vetoed",
+                                    "[NpcAppearance] C2 PRE-SAVE op={} generation={} entry={} restoration is not operational; bracket-owned state was not restored before this save",
                                     op, generation, entry);
                                 return;
                             }
@@ -5588,9 +5578,7 @@ namespace NpcAppearance
                                 g_preSaveGeneration.load(
                                     std::memory_order_acquire) == generation &&
                                 g_inBracket.load(std::memory_order_acquire);
-                            const bool gatewayOperational =
-                                SaveGatewayOperational();
-                            if (restored && current && gatewayOperational) {
+                            if (restored && current) {
                                 g_preSaveReady.store(
                                     true, std::memory_order_release);
                                 REX::INFO(
@@ -5601,13 +5589,10 @@ namespace NpcAppearance
                             }
                             if (!restored) {
                                 KillMutation("pre-save native restoration failed");
-                            } else if (!gatewayOperational) {
-                                KillMutation("save gateway lost ownership during pre-save restoration");
                             }
                             REX::CRITICAL(
-                                "[NpcAppearance] C2 PRE-SAVE NOT READY op={} generation={} entry={} restored={} current={} gatewayOperational={}; save will be vetoed",
-                                op, generation, entry, restored, current,
-                                gatewayOperational);
+                                "[NpcAppearance] C2 PRE-SAVE NOT READY op={} generation={} entry={} restored={} current={}; the save proceeds and may carry unrestored state",
+                                op, generation, entry, restored, current);
                         },
                         "NpcAppearance.C2.PreSaveRestore",
                         [generation, entry] {
@@ -5617,7 +5602,7 @@ namespace NpcAppearance
                                     false, std::memory_order_release);
                                 try {
                                     REX::CRITICAL(
-                                        "[NpcAppearance] C2 PRE-SAVE generation={} entry={} was dropped by the native queue; save will be vetoed without killing future restoration attempts",
+                                        "[NpcAppearance] C2 PRE-SAVE generation={} entry={} was dropped by the native queue; bracket-owned state was not restored before this save",
                                         generation, entry);
                                 } catch (...) {
                                 }
@@ -5625,7 +5610,7 @@ namespace NpcAppearance
                         });
                     if (!queued) {
                         REX::CRITICAL(
-                            "[NpcAppearance] C2 PRE-SAVE op={} generation={} entry={} could not queue restoration; save will be vetoed",
+                            "[NpcAppearance] C2 PRE-SAVE op={} generation={} entry={} could not queue restoration; bracket-owned state was not restored before this save",
                             op, generation, entry);
                     }
                     return;
@@ -5839,7 +5824,7 @@ namespace NpcAppearance
                     if (!exactOriginal) {
                         staleStateClean = false;
                         REX::CRITICAL(
-                            "[NpcAppearance] C2 LOAD-RETURN generation={} stale target=0x{:08X} is not proven exact-original; state retained and saves remain veto-capable",
+                            "[NpcAppearance] C2 LOAD-RETURN generation={} stale target=0x{:08X} is not proven exact-original; state retained for pre-save restoration attempts",
                             loadGeneration, state.baseID);
                     }
                 }
@@ -5849,8 +5834,7 @@ namespace NpcAppearance
                 }
 
                 if (!MutationOperational()) {
-                    if (SaveGatewayOperational() &&
-                        g_mutationKilled.load(std::memory_order_acquire)) {
+                    if (g_mutationKilled.load(std::memory_order_acquire)) {
                         REX::WARN(
                             "[NpcAppearance] C2 LOAD-RETURN return={} generation={} restored all stale bases but mutation remains killed; no new preset will be applied",
                             loadReturn, loadGeneration);
@@ -6193,20 +6177,15 @@ namespace NpcAppearance
 
         // ==================================================================
         // Startup
-        // Fail-closed arming sequence: operational save/load hooks -> packs
+        // Fail-closed arming sequence: mutation operational -> packs
         // directory -> validated winners -> pre-save event sink -> bracket.
         // ==================================================================
         void OnNpcAppearanceDataLoaded()
         {
 
             if (!MutationOperational()) {
-                if (g_bracketOperational.load(std::memory_order_acquire) &&
-                    !g_mutationKilled.load(std::memory_order_acquire) &&
-                    !SaveLoadHooks::Operational()) {
-                    KillMutation("save/load hook provider lost ownership before startup arming");
-                }
                 REX::CRITICAL(
-                    "[NpcAppearance] startup mutation disabled because save/load hooks are not operational or the process kill switch is set; bracketOperational={} mutationKilled={}",
+                    "[NpcAppearance] startup mutation disabled; bracketOperational={} mutationKilled={}",
                     g_bracketOperational.load(std::memory_order_relaxed),
                     g_mutationKilled.load(std::memory_order_relaxed));
                 return;
@@ -6241,7 +6220,7 @@ namespace NpcAppearance
             if (!saveLoadSource) {
                 KillMutation("SaveLoadEvent source unavailable during bracket arming");
                 REX::CRITICAL(
-                    "[NpcAppearance] save/load bracket could not register the pre-save event sink; mutation disabled and saves with tracked state will be vetoed");
+                    "[NpcAppearance] save/load bracket could not register the pre-save event sink; mutation disabled because bracket-owned state could not be restored before saves");
                 return;
             }
             if (!g_saveLoadEventRegistered.load(std::memory_order_acquire)) {
@@ -6310,9 +6289,9 @@ namespace NpcAppearance
             const auto nativeDiagnostics =
                 Util::NativeMainThreadQueue::GetDiagnostics();
             a_out(std::format(
-                "bracket: operational={} veto={} armed={} mutationKilled={} inBracket={} assignments={} appliedBases={} failedBases={} restoredAtSaveEntry={} preSaveReady={} gatewayEntered={} hookObserved={} entries={} saveReturns={} loadReturns={} loadGeneration={}",
+                "bracket: operational={} observerHooks={} armed={} mutationKilled={} inBracket={} assignments={} appliedBases={} failedBases={} restoredAtSaveEntry={} preSaveReady={} gatewayEntered={} hookObserved={} entries={} saveReturns={} loadReturns={} loadGeneration={}",
                 g_bracketOperational.load(std::memory_order_relaxed),
-                SaveLoadHooks::SupportsSaveVeto(),
+                SaveLoadHooks::Operational(),
                 g_bracketArmed.load(std::memory_order_relaxed),
                 g_mutationKilled.load(std::memory_order_relaxed),
                 g_inBracket.load(std::memory_order_relaxed),
@@ -6344,28 +6323,25 @@ namespace NpcAppearance
             .onSaveGameReturn = &OnSaveGameReturnImpl,
             .onLoadGameReturn = &OnLoadGameReturnImpl,
         };
+        // Observer-only since API v3: hook installation failure is telemetry
+        // loss, not a safety loss — the overlay runtime and the SaveLoadEvent
+        // pre-save restore work without any hook installed.
         const bool hooksInstalled = SaveLoadHooks::Install(callbacks);
-        g_bracketOperational.store(hooksInstalled, std::memory_order_release);
         if (!hooksInstalled) {
-            KillMutation("SaveGame/LoadGame hook installation failed");
+            REX::WARN(
+                "[NpcAppearance] SaveGame/LoadGame observer hooks unavailable; load-return bookkeeping degrades to SaveLoadEvent + Set3d triggers");
         }
-        const bool saveVetoSupported = SaveLoadHooks::SupportsSaveVeto();
         const bool deferredRetryAvailable = SFSE::GetTaskInterface() != nullptr;
-        if (hooksInstalled && !saveVetoSupported) {
-            KillMutation(
-                "production bracket requires save veto support so failed restoration cannot serialize");
-        }
+        g_bracketOperational.store(true, std::memory_order_release);
         if (!deferredRetryAvailable) {
             KillMutation(
                 "SFSE task interface unavailable for demand-driven bracket retries");
         }
         REX::INFO(
-            "[NpcAppearance] save/load hook state operational={} saveVetoSupported={} deferredRetryAvailable={} mutationKilled={} bracketArmed={} autoArmPending={} callbacks=native-queue-shaped",
-            g_bracketOperational.load(std::memory_order_relaxed),
-            saveVetoSupported, deferredRetryAvailable,
+            "[NpcAppearance] save/load hook state observerHooks={} deferredRetryAvailable={} mutationKilled={} bracketArmed={} callbacks=native-queue-shaped",
+            hooksInstalled, deferredRetryAvailable,
             g_mutationKilled.load(std::memory_order_relaxed),
-            g_bracketArmed.load(std::memory_order_relaxed),
-            MutationOperational() && saveVetoSupported);
+            g_bracketArmed.load(std::memory_order_relaxed));
         try {
             if (!QueueOrRunNativeTask(
                     [] { OnNpcAppearanceDataLoaded(); },

@@ -5,9 +5,11 @@
 // If a compatible, ready provider exists, register a listener.
 // If none exists, a plugin may install its own fully validated hooks and publish this same API.
 //
-// Providers invoke SAVE_ENTRY before the engine SaveGame gateway.
-// Every listener must return nonzero to allow serialization; zero vetoes the gateway.
-// Providers invoke SAVE_RETURN after the gateway returns or after a veto is finalized, and invoke LOAD_RETURN after the load gateway returns.
+// Listeners are OBSERVERS. The engine gateways always run: providers invoke
+// SAVE_ENTRY before the engine SaveGame gateway, SAVE_RETURN after it
+// returns, LOAD_ENTRY before the load gateway, and LOAD_RETURN after it
+// returns. No listener can block or alter serialization; the OnEvent return
+// value is reserved and ignored in every phase (return 0).
 // Listener callbacks are bounded to the dispatch call, may run off the game thread, and must not throw across this ABI. Providers catch defensively.
 // ============================================================================
 
@@ -28,7 +30,7 @@
 #endif
 
 #define OSF_SAVE_LOAD_HOOK_MAKE_VERSION(major, minor) ((((uint32_t)(major)) << 16u) | ((uint32_t)(minor) & 0xFFFFu))
-#define OSF_SAVE_LOAD_HOOK_API_VERSION OSF_SAVE_LOAD_HOOK_MAKE_VERSION(2u, 0u)
+#define OSF_SAVE_LOAD_HOOK_API_VERSION OSF_SAVE_LOAD_HOOK_MAKE_VERSION(3u, 0u)
 #define OSF_SAVE_LOAD_HOOK_API_MAJOR(version) ((uint32_t)(version) >> 16u)
 #define OSF_SAVE_LOAD_HOOK_API_MINOR(version) ((uint32_t)(version) & 0xFFFFu)
 #define OSF_SAVE_LOAD_HOOK_FOURCC(a, b, c, d) \
@@ -40,7 +42,7 @@ extern "C" {
 #endif
 
 typedef struct OSFSaveLoadHookEventV1 OSFSaveLoadHookEventV1;
-typedef struct OSFSaveLoadHookListenerV2 OSFSaveLoadHookListenerV2;
+typedef struct OSFSaveLoadHookListenerV3 OSFSaveLoadHookListenerV3;
 typedef struct OSFSaveLoadHookStatusV1 OSFSaveLoadHookStatusV1;
 typedef struct OSFSaveLoadHookAPI OSFSaveLoadHookAPI;
 
@@ -54,8 +56,7 @@ enum OSFSaveLoadHookPhaseV1
 
 enum OSFSaveLoadHookEventFlagsV1
 {
-    OSF_SAVE_LOAD_HOOK_EVENT_RESULT_VALID = 1u << 0u,
-    OSF_SAVE_LOAD_HOOK_EVENT_SAVE_VETOED = 1u << 1u
+    OSF_SAVE_LOAD_HOOK_EVENT_RESULT_VALID = 1u << 0u
 };
 
 enum OSFSaveLoadHookStatusFlagsV1
@@ -63,14 +64,12 @@ enum OSFSaveLoadHookStatusFlagsV1
     OSF_SAVE_LOAD_HOOK_STATUS_SAVE_GATE = 1u << 0u,
     OSF_SAVE_LOAD_HOOK_STATUS_SAVE_HOOK = 1u << 1u,
     OSF_SAVE_LOAD_HOOK_STATUS_LOAD_GATE = 1u << 2u,
-    OSF_SAVE_LOAD_HOOK_STATUS_LOAD_HOOK = 1u << 3u,
-    OSF_SAVE_LOAD_HOOK_STATUS_SAVE_VETO = 1u << 4u
+    OSF_SAVE_LOAD_HOOK_STATUS_LOAD_HOOK = 1u << 3u
 };
 
 #define OSF_SAVE_LOAD_HOOK_STATUS_REQUIRED \
     (OSF_SAVE_LOAD_HOOK_STATUS_SAVE_GATE | OSF_SAVE_LOAD_HOOK_STATUS_SAVE_HOOK | \
-     OSF_SAVE_LOAD_HOOK_STATUS_LOAD_GATE | OSF_SAVE_LOAD_HOOK_STATUS_LOAD_HOOK | \
-     OSF_SAVE_LOAD_HOOK_STATUS_SAVE_VETO)
+     OSF_SAVE_LOAD_HOOK_STATUS_LOAD_GATE | OSF_SAVE_LOAD_HOOK_STATUS_LOAD_HOOK)
 
 struct OSFSaveLoadHookEventV1
 {
@@ -83,14 +82,14 @@ struct OSFSaveLoadHookEventV1
     const char* name;  // Valid only for the duration of the callback.
 };
 
-struct OSFSaveLoadHookListenerV2
+struct OSFSaveLoadHookListenerV3
 {
     uint32_t size;
     uint32_t listenerID;       // Stable, globally unique FourCC-style identifier.
     const char* listenerName;  // UTF-8 display name; copied during registration.
     void* context;             // Consumer-owned; must outlive registration.
-    // SAVE_ENTRY: nonzero allows serialization; zero vetoes it. The return
-    // value is ignored for all other phases.
+    // Observer callback. The return value is reserved and ignored in every
+    // phase; return 0.
     uint8_t (OSF_SAVE_LOAD_HOOK_CALL *OnEvent)(
         void* context, const OSFSaveLoadHookEventV1* event);
 };
@@ -109,7 +108,7 @@ struct OSFSaveLoadHookAPI
 
     uint8_t (OSF_SAVE_LOAD_HOOK_CALL *IsReady)(const OSFSaveLoadHookAPI* api);
     uint8_t (OSF_SAVE_LOAD_HOOK_CALL *RegisterListener)(
-        const OSFSaveLoadHookAPI* api, const OSFSaveLoadHookListenerV2* listener);
+        const OSFSaveLoadHookAPI* api, const OSFSaveLoadHookListenerV3* listener);
     uint8_t (OSF_SAVE_LOAD_HOOK_CALL *UnregisterListener)(
         const OSFSaveLoadHookAPI* api, uint32_t listenerID, void* context);
     uint8_t (OSF_SAVE_LOAD_HOOK_CALL *GetStatus)(

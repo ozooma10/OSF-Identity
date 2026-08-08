@@ -27,16 +27,20 @@ next valid pack can win.
 
 The next valid pack takes over, or the NPC reverts to the original appearance. Packs are scanned once after game data load, so always restart Starfield after adding, changing, or removing one.
 
-During play, the winning preset remains applied to the NPC base in memory. Immediately
-before Starfield serializes any save, OSF Identity restores and verifies the exact original
-appearance. The save is allowed only after that check succeeds, and the preset is reapplied
-after the save returns.
+During play, the NPC's underlying game data keeps its original appearance at all times.
+The preset is applied only for the instant the NPC's 3D model is built: OSF Identity
+applies it, refreshes the model, and restores the verified original data within the same
+engine task. Saving never waits on OSF Identity and is never blocked by it — there is
+simply nothing modified for a save to pick up.
 
 The appearance notifications can make Starfield include an `NPC_` changed-form in the
 save, but that record contains the verified original values—not the preset. This is what
 makes saves uninstall-safe. To remove the framework entirely, exit Starfield, disable OSF
 Identity and its packs, then load the save; the NPC uses its original appearance without a
 cleanup step.
+
+If anything goes wrong while styling an NPC, that NPC simply renders with its vanilla
+appearance for the session.
 
 ## Troubleshooting
 
@@ -66,6 +70,8 @@ Documents\My Games\Starfield\SFSE\Logs\osf-identity.log
   one nondeterministically
 - `preset rejected` - malformed file or unsupported producer
 - `runtime contract mismatch` - game or Address Library version unsupported
-- `SAVE-ENTRY vetoed` or `mutation killed` - exact pre-save restoration could not be
-  proven, so OSF Identity refused the save rather than serialize an uncertain appearance;
-  exit without relying on that attempted save and inspect the full log
+- `mutation killed` - a safety check failed, so OSF Identity stopped changing NPC
+  appearance for the rest of the session; affected NPCs render with their vanilla
+  appearance and saves are unaffected. Inspect the full log
+- `rendering vanilla and disabling this base` - styling that one NPC failed its
+  validation; only that NPC falls back to vanilla for the session

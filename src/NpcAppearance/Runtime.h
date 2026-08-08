@@ -6,10 +6,9 @@
 #include <vector>
 
 // Production runtime for OSF Identity's `.npc` appearance distribution.
-// Validated winners are applied after load and remain in memory during play.
 // Every game-object read/write runs from the verified native BSService queue
-// drain; tracked bases are restored byte-exactly before serialization and the
-// save is vetoed whenever exact restoration cannot be proven.
+// drain. Saves always reach the engine gateway: the save/load hooks are
+// observer-only (API v3) and nothing in this plugin can block serialization.
 //
 //   npcapp status
 //   npcapp bracket

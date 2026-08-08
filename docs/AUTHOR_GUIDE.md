@@ -46,12 +46,13 @@ The winning preset is applied after every successful load. If the matching actor
 has loaded 3D, OSF Identity issues one immediate appearance refresh; actors encountered
 later build from the already-applied base without a lifecycle sink.
 
-Applied bases remain modified in memory during play. Before any quicksave, autosave,
-manual save, or exitsave is serialized, OSF Identity reconstructs and verifies the exact
-original appearance inside the native save bracket. The save may contain an `NPC_`
+The NPC base keeps its original appearance data at rest. The winning preset is applied
+transiently each time the actor's 3D is built: apply, notify, refresh, and byte-exact
+restore all happen inside one verified native task, so no save — quicksave, autosave,
+manual, or exitsave — can observe preset data. The save may contain an `NPC_`
 changed-form because appearance notifications registered it, but the serialized values are
-the original values. A failed exact restoration vetoes the save. After a successful save
-returns, the winning preset is reapplied.
+the original values. Styling failures leave that NPC rendering its vanilla appearance;
+saves are never blocked or altered.
 
 Pack removal requires a full Starfield restart, not a mid-session file change. With the
 pack absent, the next valid candidate wins; with no winner or with the framework disabled,
