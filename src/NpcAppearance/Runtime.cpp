@@ -3780,6 +3780,314 @@ namespace NpcAppearance
                 live.skinToneIndex, a_expected.skinToneIndex));
         }
 
+        // ==================================================================
+        // Overlay runtime (Mechanism B, probe-proven 2026-08-07; see
+        // docs/OVERLAY_PROBE_FINDINGS.md). Per 3D build of a tracked actor:
+        // apply preset to base -> notify -> refresh -> restore byte-exactly,
+        // all within one verified drain task, so the serializable TESNPC is
+        // never preset-mutated at rest. Triggered by ReferenceSet3d (fires
+        // outside the drain; handler posts) plus a post-load sweep. While the
+        // save bracket still exists, a failed in-window restore escalates the
+        // base into g_appliedBases so the bracket regains custody and the
+        // veto path protects the next save.
+        // ==================================================================
+        constexpr std::chrono::milliseconds kOverlayReapplyCooldown{ 1000 };
+
+        struct OverlayRuntimeState
+        {
+            std::unordered_set<RE::TESFormID> disabledBases;
+            std::unordered_set<RE::TESFormID> inFlightRefs;
+            std::unordered_map<RE::TESFormID,
+                               std::chrono::steady_clock::time_point>
+                          lastAppliedByRef;
+            std::uint64_t set3dMatches{ 0 };
+            std::uint64_t postedApplies{ 0 };
+            std::uint64_t droppedPosts{ 0 };
+            std::uint64_t applies{ 0 };
+            std::uint64_t failures{ 0 };
+            std::uint64_t escalations{ 0 };
+            std::uint64_t sweeps{ 0 };
+            std::uint64_t skippedCooldown{ 0 };
+            std::uint64_t skippedNo3D{ 0 };
+        };
+        std::mutex          g_overlayRuntimeMutex;
+        OverlayRuntimeState g_overlayRuntime;
+        std::atomic<bool>   g_overlaySinkRegistered{ false };
+
+        // One transient window. Returns true when the actor rendered the
+        // preset AND the base was proven byte-exact original before this
+        // drain task returns. Must run inside the verified drain.
+        [[nodiscard]] bool ApplyTransientOverlay(
+            RE::TESNPC* a_target,
+            RE::Actor* a_actor,
+            const RE::TESFormID a_actorRefID,
+            const SelectedAssignment& a_assignment)
+        {
+            const auto baseID = a_target->GetFormID();
+            const LineSink out = [baseID](const std::string& a_text) {
+                REX::INFO(
+                    "[NpcAppearance] overlay base=0x{:08X}: {}",
+                    baseID, a_text);
+            };
+            AppliedBaseState insurance{
+                .baseID = baseID,
+                .assignment = a_assignment,
+                .originalVisual = CaptureOwnedVisualSnapshot(a_target),
+                .originalNonVisual = Snapshot(a_target),
+                .originalFaceNPC = a_target->faceNPC,
+                .originalActorFlags =
+                    a_target->actorData.actorBaseFlags.underlying(),
+                .bracketFailed = false,
+            };
+            const auto started = std::chrono::steady_clock::now();
+            const bool applied = SilentApplyPresetToBase(
+                out, a_target, a_assignment.presetPath);
+            bool notifiedKicked = false;
+            if (applied) {
+                notifiedKicked = NotifyAndKick(a_target, a_actor, a_actorRefID);
+            }
+            const bool restoredExact =
+                RestoreAppliedBaseState(out, a_target, insurance);
+            const auto elapsedMs = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - started).count();
+
+            if (!restoredExact) {
+                insurance.bracketFailed = true;
+                {
+                    const std::scoped_lock lock{ g_appliedBasesMutex };
+                    g_appliedBases.insert_or_assign(baseID, insurance);
+                }
+                {
+                    const std::scoped_lock lock{ g_overlayRuntimeMutex };
+                    ++g_overlayRuntime.escalations;
+                    ++g_overlayRuntime.failures;
+                }
+                KillMutation(
+                    "overlay window restore failed; base escalated to bracket custody");
+                REX::CRITICAL(
+                    "[NpcAppearance] overlay base=0x{:08X} actor=0x{:08X} restore FAILED after applied={} notifiedKicked={}; escalated to save bracket custody",
+                    baseID, a_actorRefID, applied, notifiedKicked);
+                return false;
+            }
+            if (!applied || !notifiedKicked) {
+                {
+                    const std::scoped_lock lock{ g_overlayRuntimeMutex };
+                    g_overlayRuntime.disabledBases.insert(baseID);
+                    ++g_overlayRuntime.failures;
+                }
+                REX::WARN(
+                    "[NpcAppearance] overlay base=0x{:08X} actor=0x{:08X} applied={} notifiedKicked={}; rendering vanilla and disabling this base for the session",
+                    baseID, a_actorRefID, applied, notifiedKicked);
+                return false;
+            }
+            {
+                const std::scoped_lock lock{ g_overlayRuntimeMutex };
+                ++g_overlayRuntime.applies;
+                g_overlayRuntime.lastAppliedByRef[a_actorRefID] =
+                    std::chrono::steady_clock::now();
+            }
+            REX::INFO(
+                "[NpcAppearance] overlay base=0x{:08X} actor=0x{:08X} window CLOSED applied=true notifiedKicked=true restoredExact=true ms={:.3f}",
+                baseID, a_actorRefID, elapsedMs);
+            return true;
+        }
+
+        // Posted (or inline-in-drain) worker for one Set3d-triggered apply.
+        void RunOverlayApplyTask(
+            const RE::TESFormID a_refID,
+            const RE::TESFormID a_baseID,
+            const SelectedAssignment& a_assignment)
+        {
+            struct InFlightGuard
+            {
+                RE::TESFormID refID;
+                ~InFlightGuard()
+                {
+                    const std::scoped_lock lock{ g_overlayRuntimeMutex };
+                    g_overlayRuntime.inFlightRefs.erase(refID);
+                }
+            } guard{ a_refID };
+
+            if (!g_overlayModeEnabled.load(std::memory_order_acquire) ||
+                !MutationOperational()) {
+                return;
+            }
+            {
+                const std::scoped_lock lock{ g_overlayRuntimeMutex };
+                if (g_overlayRuntime.disabledBases.contains(a_baseID)) {
+                    return;
+                }
+            }
+            auto* actor = RE::TESForm::LookupByID<RE::Actor>(a_refID);
+            auto* target = RE::TESForm::LookupByID<RE::TESNPC>(a_baseID);
+            if (!actor || !target || actor->GetNPC() != target) {
+                REX::WARN(
+                    "[NpcAppearance] overlay apply skipped ref=0x{:08X} base=0x{:08X}; actor or base identity changed since post",
+                    a_refID, a_baseID);
+                return;
+            }
+            if (!HasLoaded3D(actor)) {
+                const std::scoped_lock lock{ g_overlayRuntimeMutex };
+                ++g_overlayRuntime.skippedNo3D;
+                return;
+            }
+            static_cast<void>(
+                ApplyTransientOverlay(target, actor, a_refID, a_assignment));
+        }
+
+        // Set3d handler. Runs on arbitrary engine threads: reads only, then
+        // posts. The inFlight guard also breaks the feedback loop from the
+        // window's own refresh (refresh -> detach -> Set3d for the same ref);
+        // the cooldown absorbs late deliveries after the task retires.
+        void OnOverlaySet3d(RE::TESObjectREFR* a_ref) noexcept
+        {
+            try {
+                if (!g_overlayModeEnabled.load(std::memory_order_acquire) ||
+                    !MutationOperational()) {
+                    return;
+                }
+                auto* actor = a_ref ? a_ref->As<RE::Actor>() : nullptr;
+                auto* base = actor ? actor->GetNPC() : nullptr;
+                if (!base) {
+                    return;
+                }
+                const auto baseID = base->GetFormID();
+                SelectedAssignment assignment;
+                {
+                    const std::scoped_lock lock{ g_eventMutex };
+                    const auto found = g_sceneAssignments.find(baseID);
+                    if (found == g_sceneAssignments.end()) {
+                        return;
+                    }
+                    assignment = found->second;
+                }
+                const auto refID = actor->GetFormID();
+                {
+                    const std::scoped_lock lock{ g_overlayRuntimeMutex };
+                    ++g_overlayRuntime.set3dMatches;
+                    if (g_overlayRuntime.disabledBases.contains(baseID)) {
+                        return;
+                    }
+                    const auto now = std::chrono::steady_clock::now();
+                    const auto last =
+                        g_overlayRuntime.lastAppliedByRef.find(refID);
+                    if (last != g_overlayRuntime.lastAppliedByRef.end() &&
+                        now - last->second < kOverlayReapplyCooldown) {
+                        ++g_overlayRuntime.skippedCooldown;
+                        return;
+                    }
+                    if (!g_overlayRuntime.inFlightRefs.insert(refID).second) {
+                        return;
+                    }
+                    ++g_overlayRuntime.postedApplies;
+                }
+                const bool queued = QueueOrRunNativeTask(
+                    [refID, baseID, assignment = std::move(assignment)]() {
+                        RunOverlayApplyTask(refID, baseID, assignment);
+                    },
+                    "NpcAppearance.OverlayApply",
+                    [refID]() {
+                        {
+                            const std::scoped_lock lock{ g_overlayRuntimeMutex };
+                            g_overlayRuntime.inFlightRefs.erase(refID);
+                            ++g_overlayRuntime.droppedPosts;
+                        }
+                        REX::WARN(
+                            "[NpcAppearance] overlay apply for ref=0x{:08X} dropped by the native queue; will retry at the next 3D build",
+                            refID);
+                    });
+                if (!queued) {
+                    const std::scoped_lock lock{ g_overlayRuntimeMutex };
+                    g_overlayRuntime.inFlightRefs.erase(refID);
+                }
+            } catch (...) {
+            }
+        }
+
+        class OverlaySet3dSink final :
+            public RE::BSTEventSink<
+                RE::RuntimeComponentDBFactory::ReferenceSet3d>
+        {
+        public:
+            static OverlaySet3dSink& GetSingleton() noexcept
+            {
+                static OverlaySet3dSink singleton;
+                return singleton;
+            }
+
+            RE::BSEventNotifyControl ProcessEvent(
+                const RE::RuntimeComponentDBFactory::ReferenceSet3d& a_event,
+                RE::BSTEventSource<
+                    RE::RuntimeComponentDBFactory::ReferenceSet3d>*) noexcept
+                override
+            {
+                OnOverlaySet3d(a_event.ref.get());
+                return RE::BSEventNotifyControl::kContinue;
+            }
+        };
+
+        // Applies the overlay to every tracked actor that already has loaded
+        // 3D. Backstop for actors whose Set3d fired while the native queue
+        // was disabled (around LoadGame) or before arming. Must run inside
+        // the verified drain.
+        void RunOverlaySweep(const std::string_view a_reason)
+        {
+            if (!g_overlayModeEnabled.load(std::memory_order_acquire) ||
+                !MutationOperational()) {
+                return;
+            }
+            std::vector<std::pair<RE::TESFormID, SelectedAssignment>> winners;
+            {
+                const std::scoped_lock lock{ g_eventMutex };
+                winners.reserve(g_sceneAssignments.size());
+                for (const auto& entry : g_sceneAssignments) {
+                    winners.push_back(entry);
+                }
+            }
+            std::size_t appliedCount = 0;
+            std::size_t skippedCount = 0;
+            for (const auto& [baseID, assignment] : winners) {
+                {
+                    const std::scoped_lock lock{ g_overlayRuntimeMutex };
+                    if (g_overlayRuntime.disabledBases.contains(baseID)) {
+                        ++skippedCount;
+                        continue;
+                    }
+                }
+                auto* target = RE::TESForm::LookupByID<RE::TESNPC>(baseID);
+                const auto resolution = ResolveTargetActor(target);
+                if (!resolution.actor || !HasLoaded3D(resolution.actor)) {
+                    ++skippedCount;
+                    continue;
+                }
+                const auto refID = resolution.actorRefID;
+                {
+                    const std::scoped_lock lock{ g_overlayRuntimeMutex };
+                    const auto now = std::chrono::steady_clock::now();
+                    const auto last =
+                        g_overlayRuntime.lastAppliedByRef.find(refID);
+                    if ((last != g_overlayRuntime.lastAppliedByRef.end() &&
+                         now - last->second < kOverlayReapplyCooldown) ||
+                        !g_overlayRuntime.inFlightRefs.insert(refID).second) {
+                        ++skippedCount;
+                        continue;
+                    }
+                }
+                RunOverlayApplyTask(refID, baseID, assignment);
+                ++appliedCount;
+                if (!MutationOperational()) {
+                    break;
+                }
+            }
+            {
+                const std::scoped_lock lock{ g_overlayRuntimeMutex };
+                ++g_overlayRuntime.sweeps;
+            }
+            REX::INFO(
+                "[NpcAppearance] overlay sweep reason={} winners={} applied={} skipped={}",
+                a_reason, winners.size(), appliedCount, skippedCount);
+        }
+
         void RunOverlayMode(
             const LineSink& a_out, const std::vector<std::string>& a_args)
         {
@@ -3788,14 +4096,58 @@ namespace NpcAppearance
             if (mode == "on" || mode == "off") {
                 g_overlayModeEnabled.store(
                     mode == "on", std::memory_order_release);
-            } else if (mode != "status") {
-                a_out("usage: npcapp overlay [status|on|off]");
+                if (mode == "on") {
+                    static_cast<void>(QueueOrRunNativeTask(
+                        []() { RunOverlaySweep("overlay-on"); },
+                        "NpcAppearance.OverlaySweep"));
+                    a_out("overlay: ON; sweep posted for already-loaded actors, new 3D builds apply via ReferenceSet3d. Legacy persistent apply is skipped at the next load");
+                } else {
+                    a_out("overlay: OFF; no new windows will open. Reload to return tracked NPCs to the legacy persistent-apply path");
+                }
                 return;
             }
+            if (mode == "sweep") {
+                const bool queued = QueueOrRunNativeTask(
+                    []() { RunOverlaySweep("manual"); },
+                    "NpcAppearance.OverlaySweep");
+                a_out(std::format(
+                    "overlay: sweep {}",
+                    queued ? "posted to the verified native drain"
+                           : "FAILED to post"));
+                return;
+            }
+            if (mode != "status") {
+                a_out("usage: npcapp overlay [status|on|off|sweep]");
+                return;
+            }
+            OverlayRuntimeState snapshot;
+            std::size_t disabledCount = 0;
+            std::size_t inFlightCount = 0;
+            {
+                const std::scoped_lock lock{ g_overlayRuntimeMutex };
+                snapshot.set3dMatches = g_overlayRuntime.set3dMatches;
+                snapshot.postedApplies = g_overlayRuntime.postedApplies;
+                snapshot.droppedPosts = g_overlayRuntime.droppedPosts;
+                snapshot.applies = g_overlayRuntime.applies;
+                snapshot.failures = g_overlayRuntime.failures;
+                snapshot.escalations = g_overlayRuntime.escalations;
+                snapshot.sweeps = g_overlayRuntime.sweeps;
+                snapshot.skippedCooldown = g_overlayRuntime.skippedCooldown;
+                snapshot.skippedNo3D = g_overlayRuntime.skippedNo3D;
+                disabledCount = g_overlayRuntime.disabledBases.size();
+                inFlightCount = g_overlayRuntime.inFlightRefs.size();
+            }
             a_out(std::format(
-                "overlay: mode={} (overlay runtime is not implemented yet; the switch only arms Phase 2 work)",
+                "overlay: mode={} sinkRegistered={} mutationOperational={} set3dMatches={} postedApplies={} droppedPosts={} applies={} failures={} escalations={} sweeps={} skippedCooldown={} skippedNo3D={} disabledBases={} inFlight={}",
                 g_overlayModeEnabled.load(std::memory_order_relaxed)
-                    ? "on" : "off"));
+                    ? "on" : "off",
+                g_overlaySinkRegistered.load(std::memory_order_relaxed),
+                MutationOperational(),
+                snapshot.set3dMatches, snapshot.postedApplies,
+                snapshot.droppedPosts, snapshot.applies, snapshot.failures,
+                snapshot.escalations, snapshot.sweeps,
+                snapshot.skippedCooldown, snapshot.skippedNo3D,
+                disabledCount, inFlightCount));
         }
 
         void RunProbeBaseline(
@@ -5387,18 +5739,28 @@ namespace NpcAppearance
 
                 const auto loadReturn =
                     g_bracketLoadReturns.fetch_add(1, std::memory_order_relaxed) + 1;
+                // Overlay mode: the base is never left preset-mutated, so the
+                // legacy persistent apply is skipped entirely. Stale-state
+                // reconciliation still runs, and the deferred task finishes
+                // with an overlay sweep once the blocking menus close.
+                const bool overlayMode =
+                    g_overlayModeEnabled.load(std::memory_order_acquire);
                 std::vector<std::pair<RE::TESFormID, SelectedAssignment>> assignments;
-                {
+                if (!overlayMode) {
                     const std::scoped_lock lock{ g_eventMutex };
                     assignments.reserve(g_sceneAssignments.size());
                     for (const auto& assignment : g_sceneAssignments) {
                         assignments.push_back(assignment);
                     }
+                } else {
+                    REX::INFO(
+                        "[NpcAppearance] C2 LOAD-RETURN generation={} overlay mode active; legacy persistent apply skipped in favor of Set3d windows + post-load sweep",
+                        loadGeneration);
                 }
 
                 auto pending = std::make_shared<DeferredC2LoadTask>();
                 pending->generation = loadGeneration;
-                pending->run = [loadReturn, loadGeneration,
+                pending->run = [loadReturn, loadGeneration, overlayMode,
                                 staleStates = std::move(staleStates),
                                 assignments = std::move(assignments)](
                                    const std::uint32_t attempt) {
@@ -5760,6 +6122,10 @@ namespace NpcAppearance
                     }
                 }
 
+                if (overlayMode) {
+                    RunOverlaySweep("load-return");
+                }
+
                 const auto totalMs = std::chrono::duration<double, std::milli>(
                     std::chrono::steady_clock::now() - totalStarted).count();
                 std::size_t tracked = 0;
@@ -5768,9 +6134,9 @@ namespace NpcAppearance
                     tracked = g_appliedBases.size();
                 }
                 REX::INFO(
-                    "[NpcAppearance] C2 LOAD-RETURN done return={} generation={} winners={} applied={} failed={} tracked={} tid={} insideDrain={} ms={:.3f}",
+                    "[NpcAppearance] C2 LOAD-RETURN done return={} generation={} winners={} applied={} failed={} tracked={} overlayMode={} tid={} insideDrain={} ms={:.3f}",
                     loadReturn, loadGeneration, assignments.size(), appliedCount,
-                    failedCount, tracked, ::GetCurrentThreadId(),
+                    failedCount, tracked, overlayMode, ::GetCurrentThreadId(),
                     diagnostics.insideDrain, totalMs);
                 return true;
             } catch (const std::exception& e) {
@@ -5870,6 +6236,23 @@ namespace NpcAppearance
                     &C2SaveLoadEventSink::GetSingleton());
                 g_saveLoadEventRegistered.store(
                     true, std::memory_order_release);
+            }
+            // The overlay trigger registers unconditionally; its handler
+            // no-ops until `npcapp overlay on` flips the mode atomic, which
+            // keeps the toggle safe from any thread. Absence is non-fatal:
+            // overlay stays unusable while the legacy bracket path is intact.
+            if (!g_overlaySinkRegistered.load(std::memory_order_acquire)) {
+                auto* set3dSource = RE::RuntimeComponentDBFactory::
+                    ReferenceSet3d::GetEventSource();
+                if (set3dSource) {
+                    set3dSource->RegisterSink(
+                        &OverlaySet3dSink::GetSingleton());
+                    g_overlaySinkRegistered.store(
+                        true, std::memory_order_release);
+                } else {
+                    REX::WARN(
+                        "[NpcAppearance] ReferenceSet3d event source unavailable; overlay mode will have no trigger this session");
+                }
             }
             g_bracketArmed.store(true, std::memory_order_release);
             REX::INFO(
@@ -6062,7 +6445,7 @@ namespace NpcAppearance
         } else if (a_args[1] == "probeset3d") {
             RunProbeSet3d(a_out, a_args);
         } else {
-            a_out("npcapp: status|bracket|selftest|scan [packsRoot]|inspect <npc>|resolve <plugin:localFormID>|refs <plugin:localFormID> <npc>|avm <plugin:localFormID> <npc>|donor [count]|donorseed <plugin:localFormID> <npc>|donormorph <plugin:localFormID> <npc>|donorvisual <plugin:localFormID> <npc>|donorcopy <plugin:localFormID> <npc>|targettrial <plugin:localFormID> <actorRefID> <npc>|copyref <targetRefID> <sourceRefID> [0|1]|overlay [status|on|off]|probebaseline <plugin:localFormID>|probecompare <plugin:localFormID>|probe97401 <targetRefID> <sourceRefID> [restore=0|1]|probetransient <plugin:localFormID> <actorRefID> <npc>|probeset3d [on|off|status]");
+            a_out("npcapp: status|bracket|selftest|scan [packsRoot]|inspect <npc>|resolve <plugin:localFormID>|refs <plugin:localFormID> <npc>|avm <plugin:localFormID> <npc>|donor [count]|donorseed <plugin:localFormID> <npc>|donormorph <plugin:localFormID> <npc>|donorvisual <plugin:localFormID> <npc>|donorcopy <plugin:localFormID> <npc>|targettrial <plugin:localFormID> <actorRefID> <npc>|copyref <targetRefID> <sourceRefID> [0|1]|overlay [status|on|off|sweep]|probebaseline <plugin:localFormID>|probecompare <plugin:localFormID>|probe97401 <targetRefID> <sourceRefID> [restore=0|1]|probetransient <plugin:localFormID> <actorRefID> <npc>|probeset3d [on|off|status]");
         }
     }
 }

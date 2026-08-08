@@ -21,7 +21,7 @@
 //   npcapp donor [count]
 //   npcapp targettrial <plugin:localFormID> <actorRefID> <preset.npc>
 //   npcapp copyref <targetRefID> <sourceRefID> [sourceIsPlayer=0|1]
-//   npcapp overlay [status|on|off]
+//   npcapp overlay [status|on|off|sweep]
 //   npcapp probebaseline <plugin:localFormID>
 //   npcapp probecompare <plugin:localFormID>
 //   npcapp probe97401 <targetRefID> <sourceRefID> [restore=0|1]
@@ -30,10 +30,18 @@
 //
 // `targettrial` only re-applies the bracket-tracked winning assignment and
 // issues the selected one-shot notify/refresh recipe; arbitrary or untracked
-// mutation is refused. The `overlay`/`probe*` commands are the render-time
-// overlay migration's feasibility instruments: they never register state in
-// the save bracket, and `probetransient`/`probe97401` restore (or loudly
-// refuse to restore) the base within the same drain task.
+// mutation is refused. The `probe*` commands are the render-time overlay
+// migration's feasibility instruments: they never register state in the save
+// bracket, and `probetransient`/`probe97401` restore (or loudly refuse to
+// restore) the base within the same drain task.
+//
+// `overlay on` switches tracked NPCs to the probe-proven Mechanism B runtime
+// (docs/OVERLAY_PROBE_FINDINGS.md): per 3D build of a tracked actor, one
+// verified drain task applies the preset to the base, notifies, refreshes the
+// actor, and restores the base byte-exactly before returning — the
+// serializable TESNPC is never preset-mutated at rest. Overlay failures
+// render vanilla; a failed in-window restore escalates the base into the
+// save bracket's custody and kills mutation.
 namespace NpcAppearance
 {
     using LineSink = std::function<void(const std::string&)>;
