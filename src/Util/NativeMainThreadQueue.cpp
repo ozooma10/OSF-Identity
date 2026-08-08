@@ -19,10 +19,7 @@ namespace Util::NativeMainThreadQueue
 {
     namespace
     {
-        std::atomic<std::uint64_t> g_posted{ 0 };
-        std::atomic<std::uint64_t> g_executed{ 0 };
-        std::atomic<std::uint64_t> g_rejected{ 0 };
-        std::atomic<bool>          g_firstProofLogged{ false };
+        std::atomic<bool> g_firstProofLogged{ false };
 
         [[nodiscard]] std::uint8_t ReadEnableByte() noexcept
         {
@@ -69,9 +66,6 @@ namespace Util::NativeMainThreadQueue
         result.drainOwnerThreadID = ReadDrainOwnerThreadID();
         result.insideDrain = result.drainOwnerThreadID != 0 &&
             result.currentThreadID == result.drainOwnerThreadID;
-        result.posted = g_posted.load(std::memory_order_relaxed);
-        result.executed = g_executed.load(std::memory_order_relaxed);
-        result.rejected = g_rejected.load(std::memory_order_relaxed);
         return result;
     }
 
@@ -81,23 +75,19 @@ namespace Util::NativeMainThreadQueue
         std::function<void()> a_onDrop)
     {
         if (!a_task) {
-            g_rejected.fetch_add(1, std::memory_order_relaxed);
             return PostResult::kEmptyTask;
         }
 
         const auto before = GetDiagnostics();
         if (!before.queueEnabled) {
-            g_rejected.fetch_add(1, std::memory_order_relaxed);
             return PostResult::kQueueDisabled;
         }
         if (before.singleton == 0) {
-            g_rejected.fetch_add(1, std::memory_order_relaxed);
             return PostResult::kSingletonUnavailable;
         }
         if (before.insideDrain) {
             // AddTask executes inline from the drain owner. Reject that path so
             // every accepted post retains the same verified dispatch contract.
-            g_rejected.fetch_add(1, std::memory_order_relaxed);
             return PostResult::kAlreadyInsideDrain;
         }
 
@@ -105,7 +95,6 @@ namespace Util::NativeMainThreadQueue
         const std::string label{ a_label };
         const auto returned = std::make_shared<std::atomic<bool>>(false);
         const auto droppedInline = std::make_shared<std::atomic<bool>>(false);
-        g_posted.fetch_add(1, std::memory_order_relaxed);
         queue->AddTask([
             task = std::move(a_task),
             label,
@@ -133,7 +122,6 @@ namespace Util::NativeMainThreadQueue
             try {
                 const auto during = GetDiagnostics();
                 if (!during.insideDrain) {
-                    g_rejected.fetch_add(1, std::memory_order_relaxed);
                     signalDrop();
                     try {
                         REX::CRITICAL(
@@ -145,7 +133,6 @@ namespace Util::NativeMainThreadQueue
                     return;
                 }
 
-                g_executed.fetch_add(1, std::memory_order_relaxed);
                 if (!g_firstProofLogged.exchange(true, std::memory_order_acq_rel)) {
                     REX::INFO(
                         "[NativeMainThreadQueue] 1.16.244 RUNTIME PROOF PASS label='{}' tid={} drainOwnerTid={} insideDrain=true queueEnabled=true singleton=0x{:X}",

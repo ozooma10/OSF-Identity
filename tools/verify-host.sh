@@ -14,7 +14,16 @@ cxx="${CXX:-g++}"
 build_dir="${1:-build/host}"
 mkdir -p "$build_dir"
 
-cxxflags=(-std=c++23 -Wall -Wextra -Werror -Isrc)
+# Glaze is header-only and normally supplied by xmake; fetch the pinned tag
+# for host builds that have no game toolchain.
+glaze_dir="$build_dir/glaze"
+if [ ! -d "$glaze_dir/include/glaze" ]; then
+    echo "[verify-host] fetching glaze v7.0.2"
+    rm -rf "$glaze_dir"
+    git clone --depth 1 --branch v7.0.2 https://github.com/stephenberry/glaze "$glaze_dir"
+fi
+
+cxxflags=(-std=c++23 -Wall -Wextra -Werror -Isrc -isystem "$glaze_dir/include")
 
 echo "[verify-host] building host test suites with $cxx"
 "$cxx" "${cxxflags[@]}" \
@@ -24,12 +33,10 @@ echo "[verify-host] building host test suites with $cxx"
     src/NpcAppearance/ManifestParser.cpp \
     src/NpcAppearance/PackageDiscovery.cpp \
     src/NpcAppearance/Selection.cpp \
-    src/NpcAppearance/Json.cpp \
     -o "$build_dir/npc-appearance-config-tests"
 "$cxx" "${cxxflags[@]}" \
     tools/tests/npc_appearance_preset_tests.cpp \
     src/NpcAppearance/Preset.cpp \
-    src/NpcAppearance/Json.cpp \
     -o "$build_dir/npc-appearance-preset-tests"
 
 echo "[verify-host] running host test suites"

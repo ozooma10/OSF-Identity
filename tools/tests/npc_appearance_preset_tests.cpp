@@ -1,4 +1,3 @@
-#include "NpcAppearance/Config.h"
 #include "NpcAppearance/Preset.h"
 
 #include <algorithm>
@@ -124,9 +123,7 @@ int main()
         return 1;
     }
 
-    Check(baseline->producer == "Creation Kit 1.16.244" &&
-              baseline->schemaVersion == NA::kCkPresetSchemaVersion &&
-              baseline->npcFormEditorID == "Companion_SarahMorgan" &&
+    Check(baseline->npcFormEditorID == "Companion_SarahMorgan" &&
               baseline->raceFormID == "HumanRace" && baseline->sex == NA::PresetSex::kFemale &&
               baseline->skinTone == 2,
           "CK 1.16.244 identity fields decode");
@@ -175,9 +172,7 @@ int main()
     }
     Check(expected == *composite, "Sarah composite is exactly the four decoded controlled edits");
 
-    Check(charGenBaseline->producer == NA::kCharGenMenuPresetProducer &&
-              charGenBaseline->schemaVersion == NA::kCkPresetSchemaVersion &&
-              charGenBaseline->npcFormEditorID.empty() &&
+    Check(charGenBaseline->npcFormEditorID.empty() &&
               charGenBaseline->raceFormID == "HumanRace" &&
               charGenBaseline->sex == NA::PresetSex::kFemale && charGenBaseline->skinTone == 2,
           "CharGenMenu producer contract and identity fields decode");

@@ -28,26 +28,17 @@ namespace NpcAppearance
         RE::TESRace* race{ nullptr };
         std::vector<RE::BGSHeadPart*> miscHeadParts;
         std::vector<RE::BGSHeadPart*> uniqueHeadParts;
-        std::size_t validatedBoneRegionGroups{ 0 };
-        std::size_t resolvedBoneSliderIDs{ 0 };
-        std::size_t resolvedBoneGroupNames{ 0 };
-        std::size_t resolvedFacialShapeNames{ 0 };
-        std::size_t resolvedAvmLayerNames{ 0 };
-        std::size_t resolvedAvmValues{ 0 };
-        std::size_t resolvedAvmModulations{ 0 };
-        std::size_t resolvedColorAndTeethAtoms{ 0 };
         bool formReferencesComplete{ false };
         bool boneReferencesComplete{ false };
         bool shapeReferencesComplete{ false };
         bool avmReferencesComplete{ false };
         bool colorReferencesComplete{ false };
-        bool stringCatalogsComplete{ false };
         std::vector<DependencyIssue> issues;
 
         [[nodiscard]] bool Complete() const noexcept
         {
             return formReferencesComplete && boneReferencesComplete && shapeReferencesComplete &&
-                   stringCatalogsComplete && issues.empty();
+                   colorReferencesComplete && avmReferencesComplete && issues.empty();
         }
     };
 

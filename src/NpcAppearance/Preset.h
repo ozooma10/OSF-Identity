@@ -10,9 +10,7 @@
 
 namespace NpcAppearance
 {
-    inline constexpr std::uint32_t kCkPresetSchemaVersion = 1;
-    inline constexpr std::string_view kCkPresetProducer = "Creation Kit 1.16.244";
-    inline constexpr std::string_view kCharGenMenuPresetProducer = "CharGenMenu (SFEE .npc)";
+    inline constexpr std::uintmax_t kMaxPresetBytes = 32 * 1024 * 1024; // 32 MiB
 
     enum class PresetSex
     {
@@ -66,8 +64,6 @@ namespace NpcAppearance
 
     struct AppearancePreset
     {
-        std::uint32_t schemaVersion{ kCkPresetSchemaVersion };
-        std::string producer{ kCkPresetProducer };
         std::string npcFormEditorID;
         std::string raceFormID;
         PresetSex sex{ PresetSex::kFemale };

@@ -1,5 +1,7 @@
 #include "NpcAppearance/ConfigDetail.h"
 
+#include "NpcAppearance/Preset.h"
+
 #include <algorithm>
 #include <charconv>
 #include <cwchar>

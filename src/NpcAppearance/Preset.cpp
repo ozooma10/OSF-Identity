@@ -1,6 +1,5 @@
 #include "NpcAppearance/Preset.h"
 
-#include "NpcAppearance/Config.h"
 #include "NpcAppearance/JsonSchema.h"
 
 #include <algorithm>
@@ -225,7 +224,7 @@ namespace NpcAppearance
 
         Schema::CkPreset document;
         if (const auto ec = glz::read<Schema::kParseOpts>(document, a_json); ec) {
-            result.issues.push_back({ a_path, ec.count, Schema::IssueCodeFor(ec, a_json, "invalid_json"),
+            result.issues.push_back({ a_path, ec.count, "invalid_json",
                                       glz::format_error(ec, a_json) });
             return result;
         }
@@ -257,9 +256,6 @@ namespace NpcAppearance
         // A CharGenMenu export carries no editor ID; that is what distinguishes
         // it from a Creation Kit preset and it changes the tint contract below.
         const bool isCharGenMenu = preset.npcFormEditorID.empty();
-        if (isCharGenMenu) {
-            preset.producer = kCharGenMenuPresetProducer;
-        }
 
         if (document.Sex == "Female") {
             preset.sex = PresetSex::kFemale;

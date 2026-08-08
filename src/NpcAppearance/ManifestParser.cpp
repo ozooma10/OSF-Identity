@@ -30,12 +30,8 @@ namespace NpcAppearance
 
             Schema::PresetMetadata document;
             if (const auto ec = glz::read<Schema::kParseOpts>(document, a_json); ec) {
-                AddIssue(diagnostics, a_path, ec.count,
-                         Schema::IssueCodeFor(ec, a_json, "invalid_preset_metadata_json"),
+                AddIssue(diagnostics, a_path, ec.count, "invalid_preset_metadata_json",
                          glz::format_error(ec, a_json));
-            } else if (Schema::HasNullValue(a_json)) {
-                AddIssue(diagnostics, a_path, 0, "wrong_type",
-                         "null is not a valid value anywhere in preset metadata; omit the property instead");
             } else if (document.schemaVersion != 1) {
                 AddIssue(diagnostics, a_path, 0, "unsupported_preset_metadata_schema",
                          "unsupported preset metadata schemaVersion " +
@@ -125,13 +121,8 @@ namespace NpcAppearance
 
         Schema::Manifest document;
         if (const auto ec = glz::read<Schema::kParseOpts>(document, a_json); ec) {
-            AddIssue(result, a_manifestPath, ec.count, Schema::IssueCodeFor(ec, a_json, "invalid_json"),
+            AddIssue(result, a_manifestPath, ec.count, "invalid_json",
                      glz::format_error(ec, a_json));
-            return result;
-        }
-        if (Schema::HasNullValue(a_json)) {
-            AddIssue(result, a_manifestPath, 0, "wrong_type",
-                     "null is not a valid value anywhere in a manifest; omit the property instead");
             return result;
         }
         if (document.schemaVersion != 1) {
@@ -152,12 +143,9 @@ namespace NpcAppearance
             return result;
         }
         PackageManifest manifest;
-        manifest.schemaVersion = 1;
         manifest.packageID = a_manifestPath.parent_path().filename().string();
         manifest.priority = static_cast<std::int32_t>(priority);
         manifest.manifestPath = a_manifestPath;
-        manifest.format = document.assignments ? PackageFormat::kExplicitAssignments :
-                                                 PackageFormat::kPluginFolderLocalFormID;
 
         if (document.requirements &&
             !ParseRequirements(*document.requirements, manifest.requirements, result,

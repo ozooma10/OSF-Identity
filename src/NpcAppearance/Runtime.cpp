@@ -1487,10 +1487,8 @@ namespace NpcAppearance
 
         void RunScan(const LineSink& a_out, const std::filesystem::path& a_packsRoot)
         {
-            const std::filesystem::path& packsRoot = a_packsRoot;
-
-            a_out(std::format("scan packsRoot={}", packsRoot.string()));
-            auto discovery = DiscoverPackages(packsRoot, true);
+            a_out(std::format("scan packsRoot={}", a_packsRoot.string()));
+            auto discovery = DiscoverPackages(a_packsRoot, true);
             for (const auto& issue : discovery.issues) {
                 a_out(std::format("pack issue code={} path={} @{}: {}",
                                   issue.code, issue.path.string(), issue.offset, issue.message));
@@ -1621,7 +1619,6 @@ namespace NpcAppearance
                         SelectedAssignment{
                             assignment.target,
                             assignment.presetPath,
-                            assignment.requirements,
                             package.packageID,
                             package.priority
                         }
@@ -1675,19 +1672,13 @@ namespace NpcAppearance
             const ResolvedAppearanceDependencies& a_result)
         {
             a_out(std::format(
-                "refs: forms={} bones={} shapes={} colors={} avm={} stringCatalogs={} complete={} race={} uniqueSlots={} misc={} regionGroups={} boneIDs={} boneGroups={} shapeNames={} colorAtoms={} avmLayers={} avmValues={} avmModulations={} issues={}",
+                "refs: forms={} bones={} shapes={} colors={} avm={} complete={} race={} uniqueSlots={} misc={} issues={}",
                 a_result.formReferencesComplete, a_result.boneReferencesComplete,
                 a_result.shapeReferencesComplete, a_result.colorReferencesComplete,
                 a_result.avmReferencesComplete,
-                a_result.stringCatalogsComplete,
                 a_result.Complete(),
                 static_cast<void*>(a_result.race), a_result.uniqueHeadParts.size(),
-                a_result.miscHeadParts.size(), a_result.validatedBoneRegionGroups,
-                a_result.resolvedBoneSliderIDs, a_result.resolvedBoneGroupNames,
-                a_result.resolvedFacialShapeNames,
-                a_result.resolvedColorAndTeethAtoms,
-                a_result.resolvedAvmLayerNames, a_result.resolvedAvmValues,
-                a_result.resolvedAvmModulations,
+                a_result.miscHeadParts.size(),
                 a_result.issues.size()));
             for (const auto& issue : a_result.issues) {
                 a_out(std::format("  dependency issue code={} field={} value='{}': {}",

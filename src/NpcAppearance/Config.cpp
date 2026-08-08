@@ -11,16 +11,19 @@ namespace NpcAppearance
         return std::format("{}:{:08x}", Detail::FoldASCII(plugin), localFormID);
     }
 
-    bool IsLocalFormIDValidForTier(
-        const std::uint32_t a_localFormID,
-        const PluginTier a_tier) noexcept
+    namespace
     {
-        switch (a_tier) {
-        case PluginTier::kSmall: return a_localFormID <= 0x00000FFF;
-        case PluginTier::kMedium: return a_localFormID <= 0x0000FFFF;
-        case PluginTier::kFull: return a_localFormID <= 0x00FFFFFF;
+        [[nodiscard]] bool IsLocalFormIDValidForTier(
+            const std::uint32_t a_localFormID,
+            const PluginTier a_tier) noexcept
+        {
+            switch (a_tier) {
+            case PluginTier::kSmall: return a_localFormID <= 0x00000FFF;
+            case PluginTier::kMedium: return a_localFormID <= 0x0000FFFF;
+            case PluginTier::kFull: return a_localFormID <= 0x00FFFFFF;
+            }
+            return false;
         }
-        return false;
     }
 
     std::optional<std::uint32_t> EncodeRuntimeFormID(

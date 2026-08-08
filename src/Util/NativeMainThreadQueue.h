@@ -13,9 +13,6 @@ namespace Util::NativeMainThreadQueue
         std::uint32_t  currentThreadID{ 0 };
         std::uint32_t  drainOwnerThreadID{ 0 };
         bool           insideDrain{ false };
-        std::uint64_t  posted{ 0 };
-        std::uint64_t  executed{ 0 };
-        std::uint64_t  rejected{ 0 };
     };
 
     enum class PostResult

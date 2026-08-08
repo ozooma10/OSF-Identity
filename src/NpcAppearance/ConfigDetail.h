@@ -12,8 +12,29 @@
 #include <vector>
 
 // Shared internals of the package-configuration pipeline
-// ConfigDetail.cpp (validation primitives), ManifestParser.cpp (JSON schema walks), 
+// ConfigDetail.cpp (validation primitives), ManifestParser.cpp (JSON schema walks),
 // PackageDiscovery.cpp (filesystem scanning), and Selection.cpp (conflict resolution).
+namespace NpcAppearance
+{
+    inline constexpr std::size_t kMaxManifestBytes = 1024 * 1024; // 1 MiB
+    inline constexpr std::size_t kMaxAssignments = 1024;
+    inline constexpr std::size_t kMaxPackages = 1024;
+    inline constexpr std::size_t kMaxRequirements = 256;
+    inline constexpr std::int32_t kMinPriority = -1'000'000;
+    inline constexpr std::int32_t kMaxPriority = 1'000'000;
+
+    // Parser entry points behind DiscoverPackages; exposed here for the
+    // host-side test suites.
+    [[nodiscard]] ManifestResult ParsePackageManifest(
+        std::string_view a_json,
+        const std::filesystem::path& a_manifestPath,
+        bool a_requirePresetFiles);
+
+    [[nodiscard]] ManifestResult LoadPackageManifest(
+        const std::filesystem::path& a_manifestPath,
+        bool a_requirePresetFiles = true);
+}
+
 namespace NpcAppearance::Detail
 {
     [[nodiscard]] std::string FoldASCII(std::string_view a_text);

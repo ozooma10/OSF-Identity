@@ -5,7 +5,6 @@
 #include <algorithm>
 #include <format>
 #include <map>
-#include <memory>
 #include <set>
 #include <string>
 #include <utility>
@@ -14,45 +13,6 @@
 namespace NpcAppearance
 {
     using Detail::FoldASCII;
-
-    SelectionResult SelectAssignments(const std::vector<PackageManifest>& a_packages)
-    {
-        struct Candidate
-        {
-            const PackageManifest* package;
-            const Assignment* assignment;
-        };
-        std::map<std::string, std::vector<Candidate>> groups;
-        for (const auto& package : a_packages) {
-            for (const auto& assignment : package.assignments) {
-                groups[assignment.target.CanonicalKey()].push_back({ &package, &assignment });
-            }
-        }
-
-        SelectionResult result;
-        for (auto& [targetKey, candidates] : groups) {
-            std::ranges::sort(candidates, [](const Candidate& a_left, const Candidate& a_right) {
-                if (a_left.package->priority != a_right.package->priority) {
-                    return a_left.package->priority > a_right.package->priority;
-                }
-                const auto leftID = FoldASCII(a_left.package->packageID);
-                const auto rightID = FoldASCII(a_right.package->packageID);
-                return leftID != rightID ? leftID < rightID :
-                    a_left.package->packageID < a_right.package->packageID;
-            });
-            const auto& winner = candidates.front();
-            result.winners.push_back({ winner.assignment->target, winner.assignment->presetPath,
-                                       winner.assignment->requirements,
-                                       winner.package->packageID, winner.package->priority });
-            for (const auto& candidate : candidates) {
-                const bool won = std::addressof(candidate) == std::addressof(candidates.front());
-                result.decisions.push_back({ targetKey, candidate.package->packageID,
-                                             candidate.package->priority, won,
-                                             won ? "winner" : "shadowed_by_" + winner.package->packageID });
-            }
-        }
-        return result;
-    }
 
     ResolvedSelectionResult SelectResolvedAssignments(
         const std::vector<ResolvedAssignment>& a_candidates)

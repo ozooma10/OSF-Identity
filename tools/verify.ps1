@@ -38,52 +38,6 @@ try {
     & python .\tools\re\npc_appearance_fixture_check.py
     if ($LASTEXITCODE -ne 0) { throw "Fixture provenance gate failed with exit code $LASTEXITCODE" }
 
-    $sourceFiles = Get-ChildItem -LiteralPath (Join-Path $repoRoot 'src') -Recurse -File |
-        Where-Object { $_.Extension -in @('.cpp', '.h') }
-    $deletedLifecycleSymbols = @(
-        'RequestNpcAppearanceNativeFrame',
-        'OnNpcAppearanceNativeFrame',
-        'PendingSceneApply',
-        'ObjectLoadedSink',
-        'ReferenceSet3dSink',
-        'ReferenceDetachSink',
-        'SuppressNextSceneSet3d',
-        'TargetHoldState',
-        'RunTargetRestore',
-        'PersistentAppliedState',
-        'g_persistentAppliedRefs',
-        'RemovePersistentAppearances'
-    )
-    foreach ($symbol in $deletedLifecycleSymbols) {
-        $match = $sourceFiles |
-            Select-String -SimpleMatch -Pattern $symbol |
-            Select-Object -First 1
-        if ($match) {
-            throw "Deleted lifecycle symbol '$symbol' returned at $($match.Path):$($match.LineNumber)"
-        }
-    }
-    Write-Host '[verify] deleted lifecycle symbols remain absent' -ForegroundColor Green
-
-    $deletedTargetingSymbols = @(
-        'EditorIDTarget',
-        'PluginLocalFormIDTarget',
-        'AsEditorID',
-        'AsPluginLocalFormID',
-        'kEditorIDFilenameConvention',
-        'kEditorIDFilename',
-        'target_editorid_mismatch',
-        'LookupByEditorID<RE::TESNPC>'
-    )
-    foreach ($symbol in $deletedTargetingSymbols) {
-        $match = $sourceFiles |
-            Select-String -SimpleMatch -Pattern $symbol |
-            Select-Object -First 1
-        if ($match) {
-            throw "Deleted targeting symbol '$symbol' returned at $($match.Path):$($match.LineNumber)"
-        }
-    }
-    Write-Host '[verify] EditorID targeting symbols remain absent' -ForegroundColor Green
-
     $resolverSourcePath = Join-Path $repoRoot 'src\NpcAppearance\Resolver.cpp'
     $resolverTargetLookup = Select-String -LiteralPath $resolverSourcePath -SimpleMatch -Pattern 'GetFormEditorID'
     if ($resolverTargetLookup) {

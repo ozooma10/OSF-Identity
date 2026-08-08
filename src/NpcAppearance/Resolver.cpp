@@ -301,7 +301,6 @@ namespace NpcAppearance
                              std::format("race/sex group '{}' was not found", groupName));
                     continue;
                 }
-                ++a_result.resolvedFacialShapeNames;
             }
             a_result.shapeReferencesComplete = shapeOK;
 
@@ -313,12 +312,9 @@ namespace NpcAppearance
                 // map while every nonzero child slider ID resolves. The preset
                 // decoder validates these group IDs structurally; only child IDs
                 // are engine descriptor references.
-                ++a_result.validatedBoneRegionGroups;
                 for (const auto& slider : region.sliders) {
                     if (!slider.groupName.empty()) {
-                        if (groupNames.contains(slider.groupName)) {
-                            ++a_result.resolvedBoneGroupNames;
-                        } else {
+                        if (!groupNames.contains(slider.groupName)) {
                             ok = false;
                             AddIssue(a_result, "FacialBoneRegionDataA.SlidersA.GroupName",
                                      slider.groupName, "bone_group_not_found",
@@ -326,9 +322,7 @@ namespace NpcAppearance
                         }
                     }
                     if (slider.id != 0 && checkedDescriptors.insert(slider.id).second) {
-                        if (getRegion(a_result.race, static_cast<std::int32_t>(a_sex), slider.id)) {
-                            ++a_result.resolvedBoneSliderIDs;
-                        } else {
+                        if (!getRegion(a_result.race, static_cast<std::int32_t>(a_sex), slider.id)) {
                             ok = false;
                             AddIssue(a_result, "FacialBoneRegionDataA.SlidersA.ID",
                                      std::to_string(slider.id), "bone_slider_not_found",
@@ -424,7 +418,6 @@ namespace NpcAppearance
                                      a_layer.name));
                 return false;
             }
-            ++a_result.resolvedAvmModulations;
             return true;
         }
 
@@ -482,7 +475,6 @@ namespace NpcAppearance
                     continue;
                 }
 
-                ++a_result.resolvedAvmLayerNames;
                 const auto valueFound = std::ranges::any_of(
                     values, [&](const RE::BSFixedString& a_value) {
                         return EqualEditorID(layer.value, a_value.c_str());
@@ -493,8 +485,6 @@ namespace NpcAppearance
                              layer.value, "avm_value_not_found",
                              std::format("value is absent from layer '{}' for skin tone {}",
                                          layer.name, a_preset.skinTone));
-                } else {
-                    ++a_result.resolvedAvmValues;
                 }
 
                 if (!ResolveAvmModulation(a_result, layer, category,
@@ -561,8 +551,6 @@ namespace NpcAppearance
                     AddIssue(a_result, std::string{ a_field }, a_atom,
                              "color_catalog_atom_not_found",
                              "name is absent from the engine FaceDB AVMD catalog");
-                } else {
-                    ++a_result.resolvedColorAndTeethAtoms;
                 }
             };
             const auto checkMapped = [&](const std::string_view a_field,
@@ -592,8 +580,6 @@ namespace NpcAppearance
                     AddIssue(a_result, std::string{ a_field }, a_atom,
                              "color_catalog_atom_not_found",
                              "name is absent from the selected headpart's FaceDB AVMD palette");
-                } else {
-                    ++a_result.resolvedColorAndTeethAtoms;
                 }
             };
 
@@ -611,8 +597,6 @@ namespace NpcAppearance
             checkSimple("TeethCustomization", a_preset.teethCustomization, 1, teethCategory);
 
             a_result.colorReferencesComplete = ok;
-            a_result.stringCatalogsComplete =
-                a_result.colorReferencesComplete && a_result.avmReferencesComplete;
         }
     }
 

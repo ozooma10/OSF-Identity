@@ -63,11 +63,9 @@ namespace NpcAppearance
             const auto folderName = a_packageDirectory.filename().string();
 
             PackageManifest manifest;
-            manifest.schemaVersion = 1;
             manifest.packageID = folderName;
             manifest.priority = 0;
             manifest.manifestPath = a_packageDirectory / "package.json";
-            manifest.format = PackageFormat::kPluginFolderLocalFormID;
             manifest.implicitManifest = true;
             DiscoverConventionAssignments(manifest, result, a_requirePresetFiles);
             result.manifest = std::move(manifest);
@@ -352,13 +350,6 @@ namespace NpcAppearance
             return true;
         });
         return result;
-    }
-
-    AssetRequirementResult CheckRequiredAssets(
-        const PackageManifest& a_package,
-        const std::filesystem::path& a_dataRoot)
-    {
-        return CheckRequiredAssets(a_package.requirements, a_dataRoot);
     }
 
     AssetRequirementResult CheckRequiredAssets(

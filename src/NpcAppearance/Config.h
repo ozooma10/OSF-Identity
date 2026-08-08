@@ -1,23 +1,17 @@
 #pragma once
 
-#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <string>
-#include <string_view>
 #include <vector>
 
+// Public surface of the package-configuration pipeline: discover packs on
+// disk, check their requirements, and pick a deterministic winner per
+// resolved base form. Parser entry points and safety limits are internals
+// and live in ConfigDetail.h.
 namespace NpcAppearance
 {
-    inline constexpr std::size_t kMaxManifestBytes = 1024 * 1024; // 1 MiB
-    inline constexpr std::size_t kMaxAssignments = 1024;
-    inline constexpr std::size_t kMaxPackages = 1024;
-    inline constexpr std::size_t kMaxRequirements = 256;
-    inline constexpr std::uintmax_t kMaxPresetBytes = 32 * 1024 * 1024; // 32 MiB
-    inline constexpr std::int32_t kMinPriority = -1'000'000;
-    inline constexpr std::int32_t kMaxPriority = 1'000'000;
-
     struct Target
     {
         std::string plugin;
@@ -32,10 +26,6 @@ namespace NpcAppearance
         kMedium,
         kSmall
     };
-
-    [[nodiscard]] bool IsLocalFormIDValidForTier(
-        std::uint32_t a_localFormID,
-        PluginTier a_tier) noexcept;
 
     [[nodiscard]] std::optional<std::uint32_t> EncodeRuntimeFormID(
         std::uint32_t a_localFormID,
@@ -55,21 +45,13 @@ namespace NpcAppearance
         Requirements requirements;
     };
 
-    enum class PackageFormat
-    {
-        kExplicitAssignments,
-        kPluginFolderLocalFormID
-    };
-
     struct PackageManifest
     {
-        std::uint32_t schemaVersion{ 0 };
         std::string packageID;
         std::int32_t priority{ 0 };
         Requirements requirements;
         std::vector<Assignment> assignments;
         std::filesystem::path manifestPath;
-        PackageFormat format{ PackageFormat::kExplicitAssignments };
         bool implicitManifest{ false };
 
         // Package root directory. For an implicit package `manifestPath` names the
@@ -118,7 +100,6 @@ namespace NpcAppearance
     {
         Target target;
         std::filesystem::path presetPath;
-        Requirements requirements;
         std::string packageID;
         std::int32_t priority{ 0 };
     };
@@ -130,12 +111,6 @@ namespace NpcAppearance
         std::int32_t priority{ 0 };
         bool winner{ false };
         std::string reason;
-    };
-
-    struct SelectionResult
-    {
-        std::vector<SelectedAssignment> winners;
-        std::vector<ConflictDecision> decisions;
     };
 
     struct ResolvedAssignment
@@ -151,29 +126,13 @@ namespace NpcAppearance
         std::vector<std::string> rejectedPackages;
     };
 
-    [[nodiscard]] ManifestResult ParsePackageManifest(
-        std::string_view a_json,
-        const std::filesystem::path& a_manifestPath,
-        bool a_requirePresetFiles);
-
-    [[nodiscard]] ManifestResult LoadPackageManifest(
-        const std::filesystem::path& a_manifestPath,
-        bool a_requirePresetFiles = true);
-
     [[nodiscard]] DiscoveryResult DiscoverPackages(
         const std::filesystem::path& a_packsRoot,
         bool a_requirePresetFiles = true);
 
     [[nodiscard]] AssetRequirementResult CheckRequiredAssets(
-        const PackageManifest& a_package,
-        const std::filesystem::path& a_dataRoot);
-
-    [[nodiscard]] AssetRequirementResult CheckRequiredAssets(
         const Requirements& a_requirements,
         const std::filesystem::path& a_dataRoot);
-
-    [[nodiscard]] SelectionResult SelectAssignments(
-        const std::vector<PackageManifest>& a_packages);
 
     [[nodiscard]] ResolvedSelectionResult SelectResolvedAssignments(
         const std::vector<ResolvedAssignment>& a_candidates);

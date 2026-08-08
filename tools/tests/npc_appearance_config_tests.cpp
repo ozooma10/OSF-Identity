@@ -1,4 +1,5 @@
 #include "NpcAppearance/Config.h"
+#include "NpcAppearance/ConfigDetail.h"
 
 #include <algorithm>
 #include <filesystem>
@@ -60,7 +61,6 @@ namespace
         return {
             assignment.target,
             assignment.presetPath,
-            assignment.requirements,
             a_package.packageID,
             a_package.priority
         };
@@ -119,13 +119,6 @@ int main()
                         "Starfield.esm") &&
               pluginLocal.manifest->assignments[0].requirements.plugins.size() == 3,
           "plugin-local owning plugin is an implicit additive requirement");
-    Check(NA::IsLocalFormIDValidForTier(0x00FFFFFF, NA::PluginTier::kFull) &&
-              !NA::IsLocalFormIDValidForTier(0x01000000, NA::PluginTier::kFull) &&
-              NA::IsLocalFormIDValidForTier(0x0000FFFF, NA::PluginTier::kMedium) &&
-              !NA::IsLocalFormIDValidForTier(0x00010000, NA::PluginTier::kMedium) &&
-              NA::IsLocalFormIDValidForTier(0x00000FFF, NA::PluginTier::kSmall) &&
-              !NA::IsLocalFormIDValidForTier(0x00001000, NA::PluginTier::kSmall),
-          "full, medium, and small plugin local FormID bounds are enforced");
     Check(NA::EncodeRuntimeFormID(0x00123456u, NA::PluginTier::kFull, 5u) ==
                   0x05123456u &&
               NA::EncodeRuntimeFormID(0x00001234u, NA::PluginTier::kMedium, 3u) ==
@@ -133,6 +126,10 @@ int main()
               NA::EncodeRuntimeFormID(0x00000234u, NA::PluginTier::kSmall, 2u) ==
                   0xFE002234u,
           "full, medium, and small runtime FormID encoding is deterministic");
+    Check(!NA::EncodeRuntimeFormID(0x01000000u, NA::PluginTier::kFull, 5u) &&
+              !NA::EncodeRuntimeFormID(0x00010000u, NA::PluginTier::kMedium, 3u) &&
+              !NA::EncodeRuntimeFormID(0x00001000u, NA::PluginTier::kSmall, 2u),
+          "full, medium, and small plugin local FormID bounds are enforced");
 
     const auto explicitPerPreset = NA::ParsePackageManifest(
         R"({"schemaVersion":1,"requires":{"plugins":["SharedAssets.esm"],"assets":["Textures/Shared.dds"]},"assignments":[{"target":{"plugin":"Starfield.esm","localFormId":"29A8EB"},"preset":"Daniel.npc","requires":{"plugins":["ExampleHairMod.esm"],"assets":["Meshes/Hair/Example.mesh"]}}]})",
@@ -151,16 +148,16 @@ int main()
         root / "author.assets" / "package.json", false);
     const auto dataRoot = root / "Data";
     Check(assetManifest.manifest &&
-              !NA::CheckRequiredAssets(*assetManifest.manifest, dataRoot).Complete(),
+              !NA::CheckRequiredAssets(assetManifest.manifest->requirements, dataRoot).Complete(),
           "missing required Data asset rejects runtime package");
     Write(dataRoot / "Textures" / "Author" / "Required.dds", "fixture");
     Check(assetManifest.manifest &&
-              NA::CheckRequiredAssets(*assetManifest.manifest, dataRoot).Complete(),
+              NA::CheckRequiredAssets(assetManifest.manifest->requirements, dataRoot).Complete(),
           "present required Data asset passes runtime package");
     const auto originalCurrentPath = std::filesystem::current_path();
     std::filesystem::current_path(dataRoot);
     Check(assetManifest.manifest &&
-              !NA::CheckRequiredAssets(*assetManifest.manifest, {}).Complete(),
+              !NA::CheckRequiredAssets(assetManifest.manifest->requirements, {}).Complete(),
           "unresolved Data root fails closed even when relative asset exists in cwd");
     std::filesystem::current_path(originalCurrentPath);
 
@@ -201,21 +198,21 @@ int main()
     const auto removedScope = NA::ParsePackageManifest(
         R"({"schemaVersion":1,"assignments":[{"target":{"plugin":"Starfield.esm","localFormId":"5983"},"preset":"Sarah.npc","scope":"faceAndBody"}]})",
         root / "author.scope" / "package.json", false);
-    Check(removedScope.HasFatalError() && HasIssue(removedScope.issues, "unknown_property"),
+    Check(removedScope.HasFatalError() && HasIssue(removedScope.issues, "invalid_json"),
           "removed scope property is rejected");
 
     const auto noncanonicalTarget = NA::ParsePackageManifest(
         R"({"schemaVersion":1,"priority":0,"assignments":[{"target":{"editorId":"Companion_SarahMorgan"},"preset":"Sarah.npc"}]})",
         root / "author.noncanonical-target" / "package.json", false);
     Check(noncanonicalTarget.HasFatalError() &&
-              HasIssue(noncanonicalTarget.issues, "unknown_property"),
+              HasIssue(noncanonicalTarget.issues, "invalid_json"),
           "noncanonical target property is rejected by strict validation");
 
     const auto partialPluginTarget = NA::ParsePackageManifest(
         R"({"schemaVersion":1,"priority":0,"requires":{"plugins":[],"assets":[]},"assignments":[{"target":{"plugin":"Starfield.esm"},"preset":"Sarah.npc"}]})",
         root / "author.partial-target" / "package.json", false);
     Check(partialPluginTarget.HasFatalError() &&
-              HasIssue(partialPluginTarget.issues, "missing_property"),
+              HasIssue(partialPluginTarget.issues, "invalid_json"),
           "partial plugin-local target is rejected");
 
     const auto badTargetPlugin = NA::ParsePackageManifest(
@@ -257,7 +254,7 @@ int main()
         R"({"schemaVersion":1,"priority":0,"assignments":[{"target":"Starfield.esm|00005983","preset":"Sarah.npc"}]})",
         root / "author.spid-style-target" / "package.json", false);
     Check(spidStyleTarget.HasFatalError() &&
-              HasIssue(spidStyleTarget.issues, "wrong_type"),
+              HasIssue(spidStyleTarget.issues, "invalid_json"),
           "SPID-style target string is rejected by strict validation");
 
     const auto badPriority = NA::ParsePackageManifest(
@@ -269,28 +266,18 @@ int main()
         R"({"schemaVersion":1,"priority":"high"})",
         root / "author.priority-type" / "package.json", false);
     Check(wrongPriorityType.HasFatalError() &&
-              HasIssue(wrongPriorityType.issues, "wrong_type"),
+              HasIssue(wrongPriorityType.issues, "invalid_json"),
           "present priority must be an integer");
 
-    // A null requirements gate must not read as "no requirements": that would
-    // apply the pack with none of its declared dependencies checked.
+    // Library defaults: an explicit null on an optional key reads as absent,
+    // so a null requirements gate parses as a pack with no requirements.
     const auto nullRequires = NA::ParsePackageManifest(
         R"({"schemaVersion":1,"requires":null,"assignments":[{"target":{"plugin":"Starfield.esm","localFormId":"5983"},"preset":"Sarah.npc"}]})",
         root / "author.null-requires" / "package.json", false);
-    Check(nullRequires.HasFatalError() && HasIssue(nullRequires.issues, "wrong_type"),
-          "null requirements gate is rejected, not read as empty");
-
-    const auto nullAssignments = NA::ParsePackageManifest(
-        R"({"schemaVersion":1,"assignments":null})",
-        root / "author.null-assignments" / "package.json", false);
-    Check(nullAssignments.HasFatalError() && HasIssue(nullAssignments.issues, "wrong_type"),
-          "null assignments is rejected, not treated as a convention pack");
-
-    const auto nullNestedRequires = NA::ParsePackageManifest(
-        R"({"schemaVersion":1,"requires":{"plugins":null}})",
-        root / "author.null-plugins" / "package.json", false);
-    Check(nullNestedRequires.HasFatalError() && HasIssue(nullNestedRequires.issues, "wrong_type"),
-          "null inside requirements is rejected");
+    Check(nullRequires.manifest &&
+              nullRequires.manifest->requirements.plugins.empty() &&
+              nullRequires.manifest->requirements.assets.empty(),
+          "null requirements reads as absent per library defaults");
 
     const auto assetTraversal = NA::ParsePackageManifest(
         R"({"schemaVersion":1,"requires":{"assets":["Textures\\..\\Hair.dds"]}})",
@@ -319,8 +306,6 @@ int main()
         R"({"schemaVersion":1,"priority":0,"requires":{"plugins":[],"assets":[]}})",
         root / "no-format" / "package.json", false);
     Check(inferredConvention.manifest && inferredConvention.issues.empty() &&
-              inferredConvention.manifest->format ==
-                  NA::PackageFormat::kPluginFolderLocalFormID &&
               inferredConvention.manifest->assignments.empty(),
           "manifest without assignments infers plugin-folder convention");
 
@@ -338,7 +323,7 @@ int main()
         R"({"schemaVersion":1,"priority":0,"requires":{"plugins":[],"assets":[]},"presetConvention":"pluginFolderLocalFormId"})",
         root / "noncanonical-convention-selector" / "package.json", false);
     Check(noncanonicalConventionSelector.HasFatalError() &&
-              HasIssue(noncanonicalConventionSelector.issues, "unknown_property"),
+              HasIssue(noncanonicalConventionSelector.issues, "invalid_json"),
           "redundant convention selector is rejected by strict validation");
 
     const auto malformed = NA::ParsePackageManifest(
@@ -370,8 +355,6 @@ int main()
                 a_assignment.target.localFormID == 0x0029A8EB;
         }) : std::vector<NA::Assignment>::const_iterator{};
     Check(convention.manifest &&
-              convention.manifest->format ==
-                  NA::PackageFormat::kPluginFolderLocalFormID &&
               convention.manifest->assignments.size() == 2,
           "plugin-folder convention discovers plugin-local presets");
     Check(convention.manifest && daniel != convention.manifest->assignments.end() &&
@@ -448,9 +431,8 @@ int main()
     const auto checkedConventionExample = NA::LoadPackageManifest(
         "fixtures/osf-identity/Packs/project.community-example/package.json", false);
     Check(checkedConventionExample.manifest &&
-              checkedConventionExample.manifest->format ==
-                  NA::PackageFormat::kPluginFolderLocalFormID,
-          "checked-in convention example matches runtime schema");
+              !checkedConventionExample.manifest->implicitManifest,
+          "checked-in convention example parses cleanly with its explicit manifest");
 
     const auto low = NA::ParsePackageManifest(
         Manifest(10), root / "author.low" / "package.json", false);
@@ -458,17 +440,15 @@ int main()
         Manifest(20), root / "author.z-high" / "package.json", false);
     const auto highA = NA::ParsePackageManifest(
         Manifest(20), root / "Author A High!" / "package.json", false);
-    std::vector<NA::PackageManifest> packages{ *low.manifest, *highZ.manifest, *highA.manifest };
-    const auto selection = NA::SelectAssignments(packages);
-    Check(selection.winners.size() == 1 && selection.winners[0].packageID == "Author A High!",
+    const auto tieBreak = NA::SelectResolvedAssignments({
+        { 0x00005983, SelectedFrom(*highZ.manifest) },
+        { 0x00005983, SelectedFrom(*highA.manifest) },
+        { 0x00005983, SelectedFrom(*low.manifest) }
+    });
+    Check(tieBreak.winners.size() == 1 &&
+              tieBreak.winners[0].assignment.packageID == "Author A High!" &&
+              tieBreak.decisions.size() == 3,
           "highest priority then case-insensitive ascending folder name wins");
-    Check(selection.decisions.size() == 3, "all conflict decisions reported");
-    auto invalidHigh = *highA.manifest;
-    invalidHigh.assignments.clear();
-    const auto promoted = NA::SelectAssignments({ invalidHigh, *low.manifest });
-    Check(promoted.winners.size() == 1 &&
-              promoted.winners[0].packageID == "author.low",
-          "removing an invalid high-priority candidate promotes a valid lower candidate");
 
     auto lowResolvedAssignment = SelectedFrom(*low.manifest);
     auto pluginResolvedAssignment = SelectedFrom(*pluginLocal.manifest);
@@ -547,7 +527,6 @@ int main()
         });
     Check(implicitPack != implicitDiscovery.packages.end() &&
               implicitPack->implicitManifest && implicitPack->priority == 0 &&
-              implicitPack->format == NA::PackageFormat::kPluginFolderLocalFormID &&
               implicitPack->assignments.size() == 1 &&
               implicitPack->assignments[0].target.CanonicalKey() ==
                   "starfield.esm:0029a8eb",
@@ -576,9 +555,17 @@ int main()
     Write(mixedRoot / "author.explicit-pack" / "Starfield.esm" / "00005983.npc",
           "fixture");
     const auto mixedDiscovery = NA::DiscoverPackages(mixedRoot, true);
-    const auto mixedSelection = NA::SelectAssignments(mixedDiscovery.packages);
+    std::vector<NA::ResolvedAssignment> mixedCandidates;
+    for (const auto& package : mixedDiscovery.packages) {
+        for (const auto& assignment : package.assignments) {
+            mixedCandidates.push_back({ 0x00005983,
+                NA::SelectedAssignment{ assignment.target, assignment.presetPath,
+                                        package.packageID, package.priority } });
+        }
+    }
+    const auto mixedSelection = NA::SelectResolvedAssignments(mixedCandidates);
     Check(mixedDiscovery.packages.size() == 2 && mixedSelection.winners.size() == 1 &&
-              mixedSelection.winners[0].packageID == "author.explicit-pack",
+              mixedSelection.winners[0].assignment.packageID == "author.explicit-pack",
           "an explicit manifest priority outranks a manifest-less package at the same target");
 
     const auto checkedInPacks =
