@@ -1,7 +1,7 @@
 #include "NpcAppearance/Config.h"
 
 #include "NpcAppearance/ConfigDetail.h"
-#include "NpcAppearance/Json.h"
+#include "NpcAppearance/JsonSchema.h"
 
 #include <fstream>
 #include <string>
@@ -15,8 +15,6 @@ namespace NpcAppearance
 
     namespace
     {
-        using JsonValue = Json::Value;
-
         [[nodiscard]] PresetMetadataResult ParsePresetMetadata(
             const std::string_view a_json,
             const std::filesystem::path& a_path) try
@@ -30,39 +28,23 @@ namespace NpcAppearance
                 return result;
             }
 
-            JsonValue root;
-            Json::Reader reader{ a_json, kManifestJsonLimits };
-            if (!reader.Parse(root)) {
-                AddIssue(diagnostics, a_path, reader.ErrorOffset(),
-                         "invalid_preset_metadata_json", reader.Error());
-            } else if (root.kind != JsonValue::Kind::kObject) {
-                AddIssue(diagnostics, a_path, root.offset, "wrong_type",
-                         "preset metadata root must be an object");
-            } else if (HasOnlyProperties(
-                           root, { "$schema", "schemaVersion", "requires" },
-                           diagnostics, a_path)) {
-                if (const auto* schemaHint = root.Find("$schema");
-                    schemaHint && schemaHint->kind != JsonValue::Kind::kString) {
-                    AddIssue(diagnostics, a_path, schemaHint->offset, "wrong_type",
-                             "property '$schema' has the wrong type");
-                } else {
-                    const auto* schema = Require(
-                        root, "schemaVersion", JsonValue::Kind::kNumber,
-                        diagnostics, a_path);
-                    const auto* requirementsNode = root.Find("requires");
-                    Requirements requirements;
-                    if (schema) {
-                        if (schema->integer != 1) {
-                            AddIssue(diagnostics, a_path, schema->offset,
-                                     "unsupported_preset_metadata_schema",
-                                     "unsupported preset metadata schemaVersion " +
-                                         std::to_string(schema->integer));
-                        } else if (!requirementsNode || ParseRequirementsNode(
-                                   *requirementsNode, requirements,
-                                   diagnostics, a_path)) {
-                            result.requirements = std::move(requirements);
-                        }
-                    }
+            Schema::PresetMetadata document;
+            if (const auto ec = glz::read<Schema::kParseOpts>(document, a_json); ec) {
+                AddIssue(diagnostics, a_path, ec.count,
+                         Schema::IssueCodeFor(ec, a_json, "invalid_preset_metadata_json"),
+                         glz::format_error(ec, a_json));
+            } else if (Schema::HasNullValue(a_json)) {
+                AddIssue(diagnostics, a_path, 0, "wrong_type",
+                         "null is not a valid value anywhere in preset metadata; omit the property instead");
+            } else if (document.schemaVersion != 1) {
+                AddIssue(diagnostics, a_path, 0, "unsupported_preset_metadata_schema",
+                         "unsupported preset metadata schemaVersion " +
+                             std::to_string(document.schemaVersion));
+            } else {
+                Requirements requirements;
+                if (!document.requirements ||
+                    ParseRequirements(*document.requirements, requirements, diagnostics, a_path)) {
+                    result.requirements = std::move(requirements);
                 }
             }
             result.issues = std::move(diagnostics.issues);
@@ -141,149 +123,87 @@ namespace NpcAppearance
             return result;
         }
 
-        JsonValue root;
-        Json::Reader reader{ a_json, kManifestJsonLimits };
-        if (!reader.Parse(root)) {
-            AddIssue(result, a_manifestPath, reader.ErrorOffset(), "invalid_json", reader.Error());
+        Schema::Manifest document;
+        if (const auto ec = glz::read<Schema::kParseOpts>(document, a_json); ec) {
+            AddIssue(result, a_manifestPath, ec.count, Schema::IssueCodeFor(ec, a_json, "invalid_json"),
+                     glz::format_error(ec, a_json));
             return result;
         }
-        if (root.kind != JsonValue::Kind::kObject) {
-            AddIssue(result, a_manifestPath, root.offset, "wrong_type", "manifest root must be an object");
+        if (Schema::HasNullValue(a_json)) {
+            AddIssue(result, a_manifestPath, 0, "wrong_type",
+                     "null is not a valid value anywhere in a manifest; omit the property instead");
             return result;
         }
-        if (!HasOnlyProperties(root, { "$schema", "schemaVersion", "priority",
-                                       "requires", "assignments" },
-                                result, a_manifestPath)) {
+        if (document.schemaVersion != 1) {
+            AddIssue(result, a_manifestPath, 0, "unsupported_schema",
+                     "unsupported schemaVersion " + std::to_string(document.schemaVersion));
             return result;
         }
-        if (const auto* schemaHint = root.Find("$schema");
-            schemaHint && schemaHint->kind != JsonValue::Kind::kString) {
-            AddIssue(result, a_manifestPath, schemaHint->offset, "wrong_type",
-                     "property '$schema' has the wrong type");
+        const auto priority = document.priority.value_or(0);
+        if (priority < kMinPriority || priority > kMaxPriority) {
+            AddIssue(result, a_manifestPath, 0, "invalid_priority",
+                     "priority is outside the accepted range");
             return result;
         }
-
-        const auto* schema = Require(root, "schemaVersion", JsonValue::Kind::kNumber, result, a_manifestPath);
-        const auto* priority = root.Find("priority");
-        const auto* requirementsNode = root.Find("requires");
-        const auto* assignments = root.Find("assignments");
-        if (!schema) {
-            return result;
-        }
-        if (priority && priority->kind != JsonValue::Kind::kNumber) {
-            AddIssue(result, a_manifestPath, priority->offset, "wrong_type",
-                     "property 'priority' has the wrong type");
-            return result;
-        }
-        if (requirementsNode && requirementsNode->kind != JsonValue::Kind::kObject) {
-            AddIssue(result, a_manifestPath, requirementsNode->offset, "wrong_type",
-                     "property 'requires' has the wrong type");
-            return result;
-        }
-        if (assignments && assignments->kind != JsonValue::Kind::kArray) {
-            AddIssue(result, a_manifestPath, assignments->offset, "wrong_type",
-                     "property 'assignments' must be an array");
-            return result;
-        }
-        if (schema->integer != 1) {
-            AddIssue(result, a_manifestPath, schema->offset, "unsupported_schema",
-                     "unsupported schemaVersion " + std::to_string(schema->integer));
-            return result;
-        }
-        if (priority &&
-            (priority->integer < kMinPriority || priority->integer > kMaxPriority)) {
-            AddIssue(result, a_manifestPath, priority->offset, "invalid_priority", "priority is outside the accepted range");
-            return result;
-        }
-        if (assignments &&
-            (assignments->array.empty() || assignments->array.size() > kMaxAssignments)) {
-            AddIssue(result, a_manifestPath, assignments->offset, "invalid_assignment_count",
+        if (document.assignments &&
+            (document.assignments->empty() || document.assignments->size() > kMaxAssignments)) {
+            AddIssue(result, a_manifestPath, 0, "invalid_assignment_count",
                      "assignments must contain 1-1024 entries");
             return result;
         }
         PackageManifest manifest;
         manifest.schemaVersion = 1;
         manifest.packageID = a_manifestPath.parent_path().filename().string();
-        manifest.priority = priority ? static_cast<std::int32_t>(priority->integer) : 0;
+        manifest.priority = static_cast<std::int32_t>(priority);
         manifest.manifestPath = a_manifestPath;
-        manifest.format = assignments ? PackageFormat::kExplicitAssignments :
-                                        PackageFormat::kPluginFolderLocalFormID;
+        manifest.format = document.assignments ? PackageFormat::kExplicitAssignments :
+                                                 PackageFormat::kPluginFolderLocalFormID;
 
-        if (requirementsNode) {
-            if (!ParseRequirementsNode(
-                    *requirementsNode, manifest.requirements, result, a_manifestPath)) {
-                return result;
-            }
+        if (document.requirements &&
+            !ParseRequirements(*document.requirements, manifest.requirements, result,
+                               a_manifestPath)) {
+            return result;
         }
 
-        if (assignments) {
+        if (document.assignments) {
             std::unordered_set<std::string> targets;
-            for (const auto& rawAssignment : assignments->array) {
-                if (rawAssignment.kind != JsonValue::Kind::kObject ||
-                    !HasOnlyProperties(rawAssignment, { "target", "preset", "requires" },
-                                       result, a_manifestPath)) {
-                    if (rawAssignment.kind != JsonValue::Kind::kObject) {
-                        AddIssue(result, a_manifestPath, rawAssignment.offset, "wrong_type",
-                                 "assignment must be an object");
-                    }
-                    return result;
-                }
-                const auto* target = Require(rawAssignment, "target", JsonValue::Kind::kObject,
-                                             result, a_manifestPath);
-                const auto* preset = Require(rawAssignment, "preset", JsonValue::Kind::kString,
-                                             result, a_manifestPath);
-                if (!target || !preset ||
-                    !HasOnlyProperties(*target, { "plugin", "localFormId" },
-                                       result, a_manifestPath)) {
-                    return result;
-                }
-
-                Assignment assignment;
-                const auto* plugin = Require(
-                    *target, "plugin", JsonValue::Kind::kString, result, a_manifestPath);
-                const auto* localFormID = Require(
-                    *target, "localFormId", JsonValue::Kind::kString, result, a_manifestPath);
-                if (!plugin || !localFormID) {
-                    return result;
-                }
-                if (!IsPluginName(plugin->string)) {
-                    AddIssue(result, a_manifestPath, plugin->offset, "invalid_plugin",
+            for (const auto& rawAssignment : *document.assignments) {
+                if (!IsPluginName(rawAssignment.target.plugin)) {
+                    AddIssue(result, a_manifestPath, 0, "invalid_plugin",
                              "target plugin name is invalid");
                     return result;
                 }
                 std::uint32_t parsedLocalFormID = 0;
-                if (!ParseLocalFormID(localFormID->string, parsedLocalFormID)) {
-                    AddIssue(result, a_manifestPath, localFormID->offset,
-                             "invalid_local_form_id",
+                if (!ParseLocalFormID(rawAssignment.target.localFormId, parsedLocalFormID)) {
+                    AddIssue(result, a_manifestPath, 0, "invalid_local_form_id",
                              "localFormId must be 1-8 hexadecimal digits no greater than 00FFFFFF and must not use a 0x prefix");
                     return result;
                 }
-                assignment.target = Target{ plugin->string, parsedLocalFormID };
+                Assignment assignment;
+                assignment.target = Target{ rawAssignment.target.plugin, parsedLocalFormID };
                 Requirements assignmentRequirements;
-                if (const auto* assignmentRequirementsNode = rawAssignment.Find("requires")) {
-                    if (!ParseRequirementsNode(*assignmentRequirementsNode,
-                                               assignmentRequirements, result,
-                                               a_manifestPath)) {
-                        return result;
-                    }
+                if (rawAssignment.requirements &&
+                    !ParseRequirements(*rawAssignment.requirements, assignmentRequirements,
+                                       result, a_manifestPath)) {
+                    return result;
                 }
                 std::string requirementsError;
                 if (!MergeRequirements(manifest.requirements, assignmentRequirements,
-                                       assignment.requirements,
-                                       requirementsError, plugin->string)) {
-                    AddIssue(result, a_manifestPath, rawAssignment.offset,
-                             "effective_requirements_invalid", requirementsError);
+                                       assignment.requirements, requirementsError,
+                                       rawAssignment.target.plugin)) {
+                    AddIssue(result, a_manifestPath, 0, "effective_requirements_invalid",
+                             requirementsError);
                     return result;
                 }
                 std::string presetError;
-                if (!ResolvePresetPath(a_manifestPath, preset->string, a_requirePresetFiles,
+                if (!ResolvePresetPath(a_manifestPath, rawAssignment.preset, a_requirePresetFiles,
                                        assignment.presetPath, presetError)) {
-                    AddIssue(result, a_manifestPath, preset->offset, "invalid_preset", presetError);
+                    AddIssue(result, a_manifestPath, 0, "invalid_preset", presetError);
                     return result;
                 }
                 const auto targetKey = assignment.target.CanonicalKey();
                 if (!targets.insert(targetKey).second) {
-                    AddIssue(result, a_manifestPath, target->offset, "duplicate_target",
+                    AddIssue(result, a_manifestPath, 0, "duplicate_target",
                              "pack contains more than one assignment for target " + targetKey);
                     return result;
                 }

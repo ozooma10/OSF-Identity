@@ -272,6 +272,26 @@ int main()
               HasIssue(wrongPriorityType.issues, "wrong_type"),
           "present priority must be an integer");
 
+    // A null requirements gate must not read as "no requirements": that would
+    // apply the pack with none of its declared dependencies checked.
+    const auto nullRequires = NA::ParsePackageManifest(
+        R"({"schemaVersion":1,"requires":null,"assignments":[{"target":{"plugin":"Starfield.esm","localFormId":"5983"},"preset":"Sarah.npc"}]})",
+        root / "author.null-requires" / "package.json", false);
+    Check(nullRequires.HasFatalError() && HasIssue(nullRequires.issues, "wrong_type"),
+          "null requirements gate is rejected, not read as empty");
+
+    const auto nullAssignments = NA::ParsePackageManifest(
+        R"({"schemaVersion":1,"assignments":null})",
+        root / "author.null-assignments" / "package.json", false);
+    Check(nullAssignments.HasFatalError() && HasIssue(nullAssignments.issues, "wrong_type"),
+          "null assignments is rejected, not treated as a convention pack");
+
+    const auto nullNestedRequires = NA::ParsePackageManifest(
+        R"({"schemaVersion":1,"requires":{"plugins":null}})",
+        root / "author.null-plugins" / "package.json", false);
+    Check(nullNestedRequires.HasFatalError() && HasIssue(nullNestedRequires.issues, "wrong_type"),
+          "null inside requirements is rejected");
+
     const auto assetTraversal = NA::ParsePackageManifest(
         R"({"schemaVersion":1,"requires":{"assets":["Textures\\..\\Hair.dds"]}})",
         root / "author.asset-traversal" / "package.json", false);

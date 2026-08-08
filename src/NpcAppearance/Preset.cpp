@@ -1,16 +1,14 @@
 #include "NpcAppearance/Preset.h"
 
 #include "NpcAppearance/Config.h"
-#include "NpcAppearance/Json.h"
+#include "NpcAppearance/JsonSchema.h"
 
 #include <algorithm>
-#include <charconv>
 #include <cctype>
 #include <cmath>
 #include <fstream>
-#include <limits>
-#include <memory>
 #include <ranges>
+#include <string>
 #include <system_error>
 #include <unordered_set>
 #include <utility>
@@ -19,11 +17,6 @@ namespace NpcAppearance
 {
     namespace
     {
-        constexpr std::size_t kMaxJsonDepth = 32;
-        constexpr std::size_t kMaxJsonProperties = 128;
-        constexpr std::size_t kMaxJsonArrayElements = 4096;
-        constexpr std::size_t kMaxJsonStringBytes = 4096;
-        constexpr std::size_t kMaxJsonTotalNodes = 300000;
         constexpr std::size_t kMaxSemanticStringBytes = 256;
         constexpr std::size_t kBodyMorphRegionCount = 5;
         constexpr std::size_t kMaxHeadParts = 128;
@@ -31,65 +24,13 @@ namespace NpcAppearance
         constexpr std::size_t kMaxBoneRegions = 256;
         constexpr std::size_t kMaxBoneSlidersPerRegion = 256;
         constexpr std::size_t kMaxTintLayers = 256;
+        constexpr std::int64_t kMaxRegionOrSliderID = 65535;
         constexpr double kCharGenMenuTintScale = 128.0;
         constexpr double kRuntimeTintScale = 64.0;
         constexpr double kTintQuantizationTolerance = 1.0e-6;
 
-        using JsonValue = Json::Value;
-
-        // Preset JSON allows real numbers and is bounded by the caps above;
-        // decoded strings must additionally be well-formed UTF-8.
-        constexpr Json::ReaderLimits kPresetJsonLimits{
-            .maxDepth = kMaxJsonDepth,
-            .maxStringBytes = kMaxJsonStringBytes,
-            .maxArrayElements = kMaxJsonArrayElements,
-            .maxObjectProperties = kMaxJsonProperties,
-            .maxTotalNodes = kMaxJsonTotalNodes,
-            .validateUTF8 = true,
-        };
-
-        void AddIssue(PresetResult& a_result, const std::filesystem::path& a_path,
-                      const std::size_t a_offset, std::string a_code, std::string a_message)
-        {
-            a_result.issues.push_back({ a_path, a_offset, std::move(a_code), std::move(a_message) });
-        }
-
-        [[nodiscard]] bool HasOnlyProperties(const JsonValue& a_object,
-                                             const std::initializer_list<std::string_view> a_allowed,
-                                             PresetResult& a_result,
-                                             const std::filesystem::path& a_path,
-                                             const std::string_view a_context)
-        {
-            for (const auto& [name, value] : a_object.object) {
-                if (std::ranges::find(a_allowed, name) == a_allowed.end()) {
-                    AddIssue(a_result, a_path, value.offset, "unknown_property",
-                             std::string(a_context) + " has unknown property '" + name + "'");
-                    return false;
-                }
-            }
-            return true;
-        }
-
-        [[nodiscard]] const JsonValue* Require(const JsonValue& a_object, const std::string_view a_name,
-                                               const JsonValue::Kind a_kind, PresetResult& a_result,
-                                               const std::filesystem::path& a_path,
-                                               const std::string_view a_context)
-        {
-            const auto* value = a_object.Find(a_name);
-            if (!value) {
-                AddIssue(a_result, a_path, a_object.offset, "missing_property",
-                         std::string(a_context) + " is missing property '" + std::string(a_name) + "'");
-                return nullptr;
-            }
-            if (value->kind != a_kind) {
-                AddIssue(a_result, a_path, value->offset, "wrong_type",
-                         std::string(a_context) + " property '" + std::string(a_name) + "' has the wrong type");
-                return nullptr;
-            }
-            return value;
-        }
-
-        [[nodiscard]] bool IsSemanticString(const std::string_view a_value, const bool a_allowEmpty) noexcept
+        [[nodiscard]] bool IsSemanticString(const std::string_view a_value,
+                                            const bool a_allowEmpty) noexcept
         {
             if ((!a_allowEmpty && a_value.empty()) || a_value.size() > kMaxSemanticStringBytes) {
                 return false;
@@ -99,329 +40,171 @@ namespace NpcAppearance
             });
         }
 
-        [[nodiscard]] bool ReadString(const JsonValue& a_object, const std::string_view a_name,
-                                      std::string& a_out, PresetResult& a_result,
-                                      const std::filesystem::path& a_path,
-                                      const bool a_allowEmpty = true)
+        // Domain rules that survive a successful Glaze read: value ranges, the
+        // semantic uniqueness the schema cannot express, and the collection
+        // bounds that keep a runaway preset from reaching the engine.
+        struct Validator
         {
-            const auto* value = Require(a_object, a_name, JsonValue::Kind::kString, a_result, a_path, "preset");
-            if (!value) {
-                return false;
-            }
-            if (!IsSemanticString(value->string, a_allowEmpty)) {
-                AddIssue(a_result, a_path, value->offset, "invalid_string",
-                         "property '" + std::string(a_name) + "' contains an invalid or oversized string");
-                return false;
-            }
-            a_out = value->string;
-            return true;
-        }
+            PresetResult& result;
+            const std::filesystem::path& path;
 
-        [[nodiscard]] bool ReadBoundedNumber(const JsonValue& a_value, const double a_min,
-                                             const double a_max, double& a_out, PresetResult& a_result,
-                                             const std::filesystem::path& a_path,
-                                             const std::string_view a_context)
-        {
-            if (a_value.kind != JsonValue::Kind::kNumber) {
-                AddIssue(a_result, a_path, a_value.offset, "wrong_type",
-                         std::string(a_context) + " must be a number");
+            bool Fail(std::string a_code, std::string a_message)
+            {
+                result.issues.push_back({ path, 0, std::move(a_code), std::move(a_message) });
                 return false;
             }
-            if (!std::isfinite(a_value.number) || a_value.number < a_min || a_value.number > a_max) {
-                AddIssue(a_result, a_path, a_value.offset, "number_out_of_range",
-                         std::string(a_context) + " is outside the accepted range");
-                return false;
-            }
-            a_out = a_value.number;
-            return true;
-        }
 
-        [[nodiscard]] bool ReadUInt(const JsonValue& a_value, const std::uint32_t a_max,
-                                    std::uint32_t& a_out, PresetResult& a_result,
-                                    const std::filesystem::path& a_path,
-                                    const std::string_view a_context)
-        {
-            if (a_value.kind != JsonValue::Kind::kNumber || !a_value.numberIsInteger ||
-                a_value.number < 0.0 || a_value.number > static_cast<double>(a_max)) {
-                AddIssue(a_result, a_path, a_value.offset, "invalid_integer",
-                         std::string(a_context) + " must be a bounded non-negative integer");
-                return false;
+            bool Str(const std::string& a_value, const std::string_view a_context,
+                     const bool a_allowEmpty = true)
+            {
+                return IsSemanticString(a_value, a_allowEmpty) ||
+                       Fail("invalid_string",
+                            std::string(a_context) + " contains an invalid or oversized string");
             }
-            a_out = static_cast<std::uint32_t>(a_value.number);
-            return true;
-        }
 
-        [[nodiscard]] bool ReadStringArray(const JsonValue& a_value, const std::size_t a_maxCount,
-                                           std::vector<std::string>& a_out, PresetResult& a_result,
-                                           const std::filesystem::path& a_path,
+            bool Bounded(const double a_value, const double a_min, const double a_max,
+                         const std::string_view a_context)
+            {
+                return (std::isfinite(a_value) && a_value >= a_min && a_value <= a_max) ||
+                       Fail("number_out_of_range",
+                            std::string(a_context) + " is outside the accepted range");
+            }
+
+            bool Index(const std::int64_t a_value, const std::int64_t a_max,
+                       const std::string_view a_context)
+            {
+                return (a_value >= 0 && a_value <= a_max) ||
+                       Fail("invalid_integer",
+                            std::string(a_context) + " must be a bounded non-negative integer");
+            }
+
+            bool Count(const std::size_t a_size, const std::size_t a_max,
+                       const std::string_view a_context)
+            {
+                return a_size <= a_max ||
+                       Fail("count_out_of_range",
+                            std::string(a_context) + " exceeds its element limit");
+            }
+
+            bool Unique(std::unordered_set<std::string>& a_seen, const std::string& a_key,
+                        const std::string_view a_context)
+            {
+                return a_seen.insert(a_key).second ||
+                       Fail("duplicate_semantic_key", std::string(a_context));
+            }
+        };
+
+        [[nodiscard]] bool ReadStringArray(const std::vector<std::string>& a_items,
+                                           std::vector<std::string>& a_out, Validator& a_validator,
                                            const std::string_view a_context)
         {
-            if (a_value.kind != JsonValue::Kind::kArray) {
-                AddIssue(a_result, a_path, a_value.offset, "wrong_type",
-                         std::string(a_context) + " must be an array");
+            if (!a_validator.Count(a_items.size(), kMaxHeadParts, a_context)) {
                 return false;
             }
-            if (a_value.array.size() > a_maxCount) {
-                AddIssue(a_result, a_path, a_value.offset, "count_out_of_range",
-                         std::string(a_context) + " exceeds its element limit");
-                return false;
-            }
-            a_out.reserve(a_value.array.size());
-            for (const auto& entry : a_value.array) {
-                if (entry.kind != JsonValue::Kind::kString || !IsSemanticString(entry.string, true)) {
-                    AddIssue(a_result, a_path, entry.offset, "invalid_string",
-                             std::string(a_context) + " contains a non-string or invalid string");
+            for (const auto& item : a_items) {
+                if (!a_validator.Str(item, a_context)) {
                     return false;
                 }
-                a_out.push_back(entry.string);
             }
+            a_out = a_items;
             return true;
         }
 
-        [[nodiscard]] bool ReadMorphWeights(const JsonValue& a_value, PresetMorphWeights& a_out,
-                                            PresetResult& a_result, const std::filesystem::path& a_path)
-        {
-            if (a_value.kind != JsonValue::Kind::kObject ||
-                !HasOnlyProperties(a_value, { "x", "y", "z" }, a_result, a_path, "MorphWeights")) {
-                if (a_value.kind != JsonValue::Kind::kObject) {
-                    AddIssue(a_result, a_path, a_value.offset, "wrong_type", "MorphWeights must be an object");
-                }
-                return false;
-            }
-            const auto* x = Require(a_value, "x", JsonValue::Kind::kNumber, a_result, a_path, "MorphWeights");
-            const auto* y = Require(a_value, "y", JsonValue::Kind::kNumber, a_result, a_path, "MorphWeights");
-            const auto* z = Require(a_value, "z", JsonValue::Kind::kNumber, a_result, a_path, "MorphWeights");
-            return x && y && z &&
-                   ReadBoundedNumber(*x, 0.0, 1.0, a_out.x, a_result, a_path, "MorphWeights.x") &&
-                   ReadBoundedNumber(*y, 0.0, 1.0, a_out.y, a_result, a_path, "MorphWeights.y") &&
-                   ReadBoundedNumber(*z, 0.0, 1.0, a_out.z, a_result, a_path, "MorphWeights.z");
-        }
-
-        [[nodiscard]] bool ReadNamedMorphs(const JsonValue& a_value,
+        [[nodiscard]] bool ReadNamedMorphs(const std::vector<Schema::NamedMorph>& a_items,
                                            std::vector<PresetNamedMorph>& a_out,
-                                           PresetResult& a_result,
-                                           const std::filesystem::path& a_path)
+                                           Validator& a_validator)
         {
-            if (a_value.kind != JsonValue::Kind::kArray || a_value.array.size() > kMaxFacialMorphs) {
-                AddIssue(a_result, a_path, a_value.offset, "count_or_type",
-                         "FacialMorphSliderDataA must be a bounded array");
+            if (!a_validator.Count(a_items.size(), kMaxFacialMorphs, "FacialMorphSliderDataA")) {
                 return false;
             }
             std::unordered_set<std::string> names;
-            a_out.reserve(a_value.array.size());
-            for (const auto& entry : a_value.array) {
-                if (entry.kind != JsonValue::Kind::kObject ||
-                    !HasOnlyProperties(entry, { "Name", "Value" }, a_result, a_path,
-                                       "FacialMorphSliderDataA element")) {
-                    if (entry.kind != JsonValue::Kind::kObject) {
-                        AddIssue(a_result, a_path, entry.offset, "wrong_type",
-                                 "FacialMorphSliderDataA elements must be objects");
-                    }
+            a_out.reserve(a_items.size());
+            for (const auto& item : a_items) {
+                if (!a_validator.Str(item.Name, "facial morph name", false) ||
+                    !a_validator.Unique(names, item.Name,
+                                        "duplicate facial morph name '" + item.Name + "'") ||
+                    !a_validator.Bounded(item.Value, 0.0, 1.0, "facial morph value")) {
                     return false;
                 }
-                const auto* name = Require(entry, "Name", JsonValue::Kind::kString, a_result, a_path,
-                                           "FacialMorphSliderDataA element");
-                const auto* value = Require(entry, "Value", JsonValue::Kind::kNumber, a_result, a_path,
-                                            "FacialMorphSliderDataA element");
-                if (!name || !value || !IsSemanticString(name->string, false)) {
-                    if (name && !IsSemanticString(name->string, false)) {
-                        AddIssue(a_result, a_path, name->offset, "invalid_string", "facial morph name is invalid");
-                    }
-                    return false;
-                }
-                if (!names.insert(name->string).second) {
-                    AddIssue(a_result, a_path, name->offset, "duplicate_semantic_key",
-                             "duplicate facial morph name '" + name->string + "'");
-                    return false;
-                }
-                PresetNamedMorph decoded{ .name = name->string };
-                if (!ReadBoundedNumber(*value, 0.0, 1.0, decoded.value, a_result, a_path,
-                                       "facial morph value")) {
-                    return false;
-                }
-                a_out.push_back(std::move(decoded));
+                a_out.push_back(PresetNamedMorph{ .name = item.Name, .value = item.Value });
             }
             return true;
         }
 
-        [[nodiscard]] bool ReadBoneRegions(const JsonValue& a_value,
+        [[nodiscard]] bool ReadBoneRegions(const std::vector<Schema::BoneRegion>& a_items,
                                            std::vector<PresetBoneRegion>& a_out,
-                                           PresetResult& a_result,
-                                           const std::filesystem::path& a_path)
+                                           Validator& a_validator)
         {
-            if (a_value.kind != JsonValue::Kind::kArray || a_value.array.size() > kMaxBoneRegions) {
-                AddIssue(a_result, a_path, a_value.offset, "count_or_type",
-                         "FacialBoneRegionDataA must be a bounded array");
+            if (!a_validator.Count(a_items.size(), kMaxBoneRegions, "FacialBoneRegionDataA")) {
                 return false;
             }
-            std::unordered_set<std::uint32_t> regionIDs;
-            a_out.reserve(a_value.array.size());
-            for (const auto& entry : a_value.array) {
-                if (entry.kind != JsonValue::Kind::kObject ||
-                    !HasOnlyProperties(entry, { "RegionID", "SlidersA" }, a_result, a_path,
-                                       "FacialBoneRegionDataA element")) {
-                    if (entry.kind != JsonValue::Kind::kObject) {
-                        AddIssue(a_result, a_path, entry.offset, "wrong_type",
-                                 "FacialBoneRegionDataA elements must be objects");
-                    }
+            std::unordered_set<std::string> regionIDs;
+            a_out.reserve(a_items.size());
+            for (const auto& item : a_items) {
+                if (!a_validator.Index(item.RegionID, kMaxRegionOrSliderID, "RegionID") ||
+                    !a_validator.Unique(regionIDs, std::to_string(item.RegionID),
+                                        "duplicate facial bone RegionID") ||
+                    !a_validator.Count(item.SlidersA.size(), kMaxBoneSlidersPerRegion, "SlidersA")) {
                     return false;
                 }
-                const auto* regionID = Require(entry, "RegionID", JsonValue::Kind::kNumber, a_result, a_path,
-                                               "FacialBoneRegionDataA element");
-                const auto* sliders = Require(entry, "SlidersA", JsonValue::Kind::kArray, a_result, a_path,
-                                              "FacialBoneRegionDataA element");
                 PresetBoneRegion decoded;
-                if (!regionID || !sliders || !ReadUInt(*regionID, 65535, decoded.regionID, a_result, a_path,
-                                                       "RegionID")) {
-                    return false;
-                }
-                if (!regionIDs.insert(decoded.regionID).second) {
-                    AddIssue(a_result, a_path, regionID->offset, "duplicate_semantic_key",
-                             "duplicate facial bone RegionID");
-                    return false;
-                }
-                if (sliders->array.size() > kMaxBoneSlidersPerRegion) {
-                    AddIssue(a_result, a_path, sliders->offset, "count_out_of_range",
-                             "SlidersA exceeds its element limit");
-                    return false;
-                }
+                decoded.regionID = static_cast<std::uint32_t>(item.RegionID);
                 std::unordered_set<std::string> sliderKeys;
-                decoded.sliders.reserve(sliders->array.size());
-                for (const auto& slider : sliders->array) {
-                    if (slider.kind != JsonValue::Kind::kObject ||
-                        !HasOnlyProperties(slider, { "GroupName", "ID", "Value" }, a_result, a_path,
-                                           "SlidersA element")) {
-                        if (slider.kind != JsonValue::Kind::kObject) {
-                            AddIssue(a_result, a_path, slider.offset, "wrong_type",
-                                     "SlidersA elements must be objects");
-                        }
+                decoded.sliders.reserve(item.SlidersA.size());
+                for (const auto& slider : item.SlidersA) {
+                    if (!a_validator.Str(slider.GroupName, "slider group") ||
+                        !a_validator.Index(slider.ID, kMaxRegionOrSliderID, "slider ID") ||
+                        !a_validator.Bounded(slider.Value, -1.0, 1.0, "bone slider value") ||
+                        !a_validator.Unique(
+                            sliderKeys, slider.GroupName + '\x1F' + std::to_string(slider.ID),
+                            "duplicate slider group/ID within facial bone region")) {
                         return false;
                     }
-                    const auto* group = Require(slider, "GroupName", JsonValue::Kind::kString, a_result, a_path,
-                                                "SlidersA element");
-                    const auto* id = Require(slider, "ID", JsonValue::Kind::kNumber, a_result, a_path,
-                                             "SlidersA element");
-                    const auto* value = Require(slider, "Value", JsonValue::Kind::kNumber, a_result, a_path,
-                                                "SlidersA element");
-                    PresetBoneSlider decodedSlider;
-                    if (!group || !id || !value || !IsSemanticString(group->string, true) ||
-                        !ReadUInt(*id, 65535, decodedSlider.id, a_result, a_path, "slider ID") ||
-                        !ReadBoundedNumber(*value, -1.0, 1.0, decodedSlider.value, a_result, a_path,
-                                           "bone slider value")) {
-                        if (group && !IsSemanticString(group->string, true)) {
-                            AddIssue(a_result, a_path, group->offset, "invalid_string", "slider group is invalid");
-                        }
-                        return false;
-                    }
-                    decodedSlider.groupName = group->string;
-                    const auto key = decodedSlider.groupName + '\x1F' + std::to_string(decodedSlider.id);
-                    if (!sliderKeys.insert(key).second) {
-                        AddIssue(a_result, a_path, slider.offset, "duplicate_semantic_key",
-                                 "duplicate slider group/ID within facial bone region");
-                        return false;
-                    }
-                    decoded.sliders.push_back(std::move(decodedSlider));
+                    decoded.sliders.push_back(PresetBoneSlider{
+                        .groupName = slider.GroupName,
+                        .id = static_cast<std::uint32_t>(slider.ID),
+                        .value = slider.Value });
                 }
                 a_out.push_back(std::move(decoded));
             }
             return true;
         }
 
-        [[nodiscard]] bool ReadValueWrapper(const JsonValue& a_object, std::string& a_out,
-                                            PresetResult& a_result, const std::filesystem::path& a_path,
-                                            const std::string_view a_context)
-        {
-            if (a_object.kind != JsonValue::Kind::kObject ||
-                !HasOnlyProperties(a_object, { "Value" }, a_result, a_path, a_context)) {
-                if (a_object.kind != JsonValue::Kind::kObject) {
-                    AddIssue(a_result, a_path, a_object.offset, "wrong_type",
-                             std::string(a_context) + " must be an object");
-                }
-                return false;
-            }
-            const auto* value = Require(a_object, "Value", JsonValue::Kind::kString, a_result, a_path, a_context);
-            if (!value || !IsSemanticString(value->string, true)) {
-                if (value && !IsSemanticString(value->string, true)) {
-                    AddIssue(a_result, a_path, value->offset, "invalid_string",
-                             std::string(a_context) + " string is invalid");
-                }
-                return false;
-            }
-            a_out = value->string;
-            return true;
-        }
-
-        [[nodiscard]] bool ReadTintLayers(const JsonValue& a_value,
+        [[nodiscard]] bool ReadTintLayers(const std::vector<Schema::TintLayer>& a_items,
                                           std::vector<PresetTintLayer>& a_out,
-                                          PresetResult& a_result,
-                                          const std::filesystem::path& a_path,
-                                          const bool a_charGenMenu)
+                                          Validator& a_validator, const bool a_charGenMenu)
         {
-            if (a_value.kind != JsonValue::Kind::kObject ||
-                !HasOnlyProperties(a_value, { "LayersA" }, a_result, a_path,
-                                   "PostBlendFaceCustomization")) {
-                if (a_value.kind != JsonValue::Kind::kObject) {
-                    AddIssue(a_result, a_path, a_value.offset, "wrong_type",
-                             "PostBlendFaceCustomization must be an object");
-                }
-                return false;
-            }
-            const auto* layers = Require(a_value, "LayersA", JsonValue::Kind::kArray, a_result, a_path,
-                                         "PostBlendFaceCustomization");
-            if (!layers || layers->array.size() > kMaxTintLayers) {
-                if (layers && layers->array.size() > kMaxTintLayers) {
-                    AddIssue(a_result, a_path, layers->offset, "count_out_of_range",
-                             "PostBlendFaceCustomization.LayersA exceeds its element limit");
-                }
+            if (!a_validator.Count(a_items.size(), kMaxTintLayers,
+                                   "PostBlendFaceCustomization.LayersA")) {
                 return false;
             }
             std::unordered_set<std::string> names;
-            a_out.reserve(layers->array.size());
-            for (const auto& layer : layers->array) {
-                if (layer.kind != JsonValue::Kind::kObject ||
-                    !HasOnlyProperties(layer, { "Intensity", "ModulationValue", "Name", "Value" },
-                                       a_result, a_path, "tint layer")) {
-                    if (layer.kind != JsonValue::Kind::kObject) {
-                        AddIssue(a_result, a_path, layer.offset, "wrong_type", "tint layers must be objects");
-                    }
+            a_out.reserve(a_items.size());
+            for (const auto& item : a_items) {
+                if (!a_validator.Str(item.Name, "tint layer name", false) ||
+                    !a_validator.Unique(names, item.Name,
+                                        "duplicate tint layer name '" + item.Name + "'") ||
+                    !a_validator.Str(item.ModulationValue.Value, "tint layer ModulationValue") ||
+                    !a_validator.Str(item.Value.Value, "tint layer Value") ||
+                    !a_validator.Bounded(item.Intensity, 0.0, a_charGenMenu ? 0.5 : 1.0,
+                                         "tint layer intensity")) {
                     return false;
                 }
-                const auto* intensity = Require(layer, "Intensity", JsonValue::Kind::kNumber, a_result, a_path,
-                                                "tint layer");
-                const auto* modulation = Require(layer, "ModulationValue", JsonValue::Kind::kObject,
-                                                 a_result, a_path, "tint layer");
-                const auto* name = Require(layer, "Name", JsonValue::Kind::kString, a_result, a_path,
-                                           "tint layer");
-                const auto* value = Require(layer, "Value", JsonValue::Kind::kObject, a_result, a_path,
-                                            "tint layer");
-                if (!intensity || !modulation || !name || !value || !IsSemanticString(name->string, false)) {
-                    if (name && !IsSemanticString(name->string, false)) {
-                        AddIssue(a_result, a_path, name->offset, "invalid_string", "tint layer name is invalid");
-                    }
-                    return false;
-                }
-                if (!names.insert(name->string).second) {
-                    AddIssue(a_result, a_path, name->offset, "duplicate_semantic_key",
-                             "duplicate tint layer name '" + name->string + "'");
-                    return false;
-                }
-                PresetTintLayer decoded;
-                decoded.name = name->string;
-                if (!ReadBoundedNumber(*intensity, 0.0, a_charGenMenu ? 0.5 : 1.0,
-                                       decoded.intensity, a_result, a_path,
-                                       "tint layer intensity") ||
-                    !ReadValueWrapper(*modulation, decoded.modulationValue, a_result, a_path,
-                                      "tint layer ModulationValue") ||
-                    !ReadValueWrapper(*value, decoded.value, a_result, a_path, "tint layer Value")) {
-                    return false;
-                }
+                PresetTintLayer decoded{
+                    .name = item.Name,
+                    .value = item.Value.Value,
+                    .modulationValue = item.ModulationValue.Value,
+                    .intensity = item.Intensity };
                 if (a_charGenMenu) {
+                    // CharGenMenu writes 1/128-quantized intensities that the
+                    // runtime consumes on a 1/64 scale; this is a conversion, not
+                    // just a check, so it has to happen here.
                     const auto scaled = decoded.intensity * kCharGenMenuTintScale;
                     const auto packed = std::round(scaled);
                     if (std::abs(scaled - packed) > kTintQuantizationTolerance) {
-                        AddIssue(a_result, a_path, intensity->offset, "invalid_char_gen_tint_intensity",
-                                 "CharGenMenu tint intensity must be a 1/128-quantized value from 0 to 0.5");
-                        return false;
+                        return a_validator.Fail(
+                            "invalid_char_gen_tint_intensity",
+                            "CharGenMenu tint intensity must be a 1/128-quantized value from 0 to 0.5");
                     }
                     decoded.intensity = packed / kRuntimeTintScale;
                 }
@@ -435,101 +218,88 @@ namespace NpcAppearance
     {
         PresetResult result;
         if (a_json.empty() || a_json.size() > kMaxPresetBytes) {
-            AddIssue(result, a_path, 0, "invalid_size", "preset is empty or exceeds the 32 MiB safety limit");
+            result.issues.push_back({ a_path, 0, "invalid_size",
+                                      "preset is empty or exceeds the 32 MiB safety limit" });
             return result;
         }
 
-        JsonValue root;
-        Json::Reader reader{ a_json, kPresetJsonLimits };
-        if (!reader.Parse(root)) {
-            AddIssue(result, a_path, reader.ErrorOffset(), "invalid_json", reader.Error());
-            return result;
-        }
-        if (root.kind != JsonValue::Kind::kObject) {
-            AddIssue(result, a_path, root.offset, "wrong_type", "CK preset root must be an object");
-            return result;
-        }
-        if (!HasOnlyProperties(root,
-                               { "BodyMorphRegionValuesA", "BrowHairColor", "EyeColor",
-                                 "FacialBoneRegionDataA", "FacialHairColor", "FacialMorphSliderDataA",
-                                 "HairColor", "JewelryColor", "MiscHeadPartsA", "MorphWeights",
-                                 "NPCFormEditorID", "PostBlendFaceCustomization", "RaceFormID", "Sex",
-                                 "SkinTone", "TeethCustomization", "UniqueHeadPartsA" },
-                               result, a_path, "CK preset root")) {
+        Schema::CkPreset document;
+        if (const auto ec = glz::read<Schema::kParseOpts>(document, a_json); ec) {
+            result.issues.push_back({ a_path, ec.count, Schema::IssueCodeFor(ec, a_json, "invalid_json"),
+                                      glz::format_error(ec, a_json) });
             return result;
         }
 
+        Validator validator{ result, a_path };
         AppearancePreset preset;
-        const auto* body = Require(root, "BodyMorphRegionValuesA", JsonValue::Kind::kArray,
-                                   result, a_path, "CK preset root");
-        const auto* bones = Require(root, "FacialBoneRegionDataA", JsonValue::Kind::kArray,
-                                    result, a_path, "CK preset root");
-        const auto* facialMorphs = Require(root, "FacialMorphSliderDataA", JsonValue::Kind::kArray,
-                                           result, a_path, "CK preset root");
-        const auto* miscHeadParts = Require(root, "MiscHeadPartsA", JsonValue::Kind::kArray,
-                                            result, a_path, "CK preset root");
-        const auto* weights = Require(root, "MorphWeights", JsonValue::Kind::kObject,
-                                      result, a_path, "CK preset root");
-        const auto* postBlend = Require(root, "PostBlendFaceCustomization", JsonValue::Kind::kObject,
-                                        result, a_path, "CK preset root");
-        const auto* skinTone = Require(root, "SkinTone", JsonValue::Kind::kNumber,
-                                       result, a_path, "CK preset root");
-        const auto* uniqueHeadParts = Require(root, "UniqueHeadPartsA", JsonValue::Kind::kArray,
-                                              result, a_path, "CK preset root");
-        const auto* sex = Require(root, "Sex", JsonValue::Kind::kString,
-                                  result, a_path, "CK preset root");
 
-        if (!body || !bones || !facialMorphs || !miscHeadParts || !weights || !postBlend ||
-            !skinTone || !uniqueHeadParts || !sex ||
-            !ReadString(root, "BrowHairColor", preset.browHairColor, result, a_path) ||
-            !ReadString(root, "EyeColor", preset.eyeColor, result, a_path) ||
-            !ReadString(root, "FacialHairColor", preset.facialHairColor, result, a_path) ||
-            !ReadString(root, "HairColor", preset.hairColor, result, a_path) ||
-            !ReadString(root, "JewelryColor", preset.jewelryColor, result, a_path) ||
-            !ReadString(root, "NPCFormEditorID", preset.npcFormEditorID, result, a_path) ||
-            !ReadString(root, "RaceFormID", preset.raceFormID, result, a_path, false) ||
-            !ReadString(root, "TeethCustomization", preset.teethCustomization, result, a_path) ||
-            !ReadUInt(*skinTone, 255, preset.skinTone, result, a_path, "SkinTone")) {
+        if (!validator.Str(document.BrowHairColor, "BrowHairColor") ||
+            !validator.Str(document.EyeColor, "EyeColor") ||
+            !validator.Str(document.FacialHairColor, "FacialHairColor") ||
+            !validator.Str(document.HairColor, "HairColor") ||
+            !validator.Str(document.JewelryColor, "JewelryColor") ||
+            !validator.Str(document.NPCFormEditorID, "NPCFormEditorID") ||
+            !validator.Str(document.RaceFormID, "RaceFormID", false) ||
+            !validator.Str(document.TeethCustomization, "TeethCustomization") ||
+            !validator.Index(document.SkinTone, 255, "SkinTone")) {
             return result;
         }
+        preset.browHairColor = document.BrowHairColor;
+        preset.eyeColor = document.EyeColor;
+        preset.facialHairColor = document.FacialHairColor;
+        preset.hairColor = document.HairColor;
+        preset.jewelryColor = document.JewelryColor;
+        preset.npcFormEditorID = document.NPCFormEditorID;
+        preset.raceFormID = document.RaceFormID;
+        preset.teethCustomization = document.TeethCustomization;
+        preset.skinTone = static_cast<std::uint32_t>(document.SkinTone);
 
+        // A CharGenMenu export carries no editor ID; that is what distinguishes
+        // it from a Creation Kit preset and it changes the tint contract below.
         const bool isCharGenMenu = preset.npcFormEditorID.empty();
         if (isCharGenMenu) {
             preset.producer = kCharGenMenuPresetProducer;
         }
 
-        if (sex->string == "Female") {
+        if (document.Sex == "Female") {
             preset.sex = PresetSex::kFemale;
-        } else if (sex->string == "Male") {
+        } else if (document.Sex == "Male") {
             preset.sex = PresetSex::kMale;
         } else {
-            AddIssue(result, a_path, sex->offset, "unsupported_value", "Sex must be exactly 'Male' or 'Female'");
+            validator.Fail("unsupported_value", "Sex must be exactly 'Male' or 'Female'");
             return result;
         }
 
-        if (body->array.size() != kBodyMorphRegionCount) {
-            AddIssue(result, a_path, body->offset, "count_out_of_range",
-                     "BodyMorphRegionValuesA must contain exactly five values for CK 1.16.244");
+        if (document.BodyMorphRegionValuesA.size() != kBodyMorphRegionCount) {
+            validator.Fail("count_out_of_range",
+                           "BodyMorphRegionValuesA must contain exactly five values for CK 1.16.244");
             return result;
         }
-        preset.bodyMorphRegionValues.reserve(body->array.size());
-        for (const auto& value : body->array) {
-            double decoded = 0.0;
-            if (!ReadBoundedNumber(value, 0.0, 1.0, decoded, result, a_path,
-                                   "body morph region value")) {
+        preset.bodyMorphRegionValues.reserve(kBodyMorphRegionCount);
+        for (const auto value : document.BodyMorphRegionValuesA) {
+            if (!validator.Bounded(value, 0.0, 1.0, "body morph region value")) {
                 return result;
             }
-            preset.bodyMorphRegionValues.push_back(decoded);
+            preset.bodyMorphRegionValues.push_back(value);
         }
 
-        if (!ReadMorphWeights(*weights, preset.morphWeights, result, a_path) ||
-            !ReadStringArray(*miscHeadParts, kMaxHeadParts, preset.miscHeadParts, result, a_path,
+        if (!validator.Bounded(document.MorphWeights.x, 0.0, 1.0, "MorphWeights.x") ||
+            !validator.Bounded(document.MorphWeights.y, 0.0, 1.0, "MorphWeights.y") ||
+            !validator.Bounded(document.MorphWeights.z, 0.0, 1.0, "MorphWeights.z")) {
+            return result;
+        }
+        preset.morphWeights = PresetMorphWeights{ .x = document.MorphWeights.x,
+                                                  .y = document.MorphWeights.y,
+                                                  .z = document.MorphWeights.z };
+
+        if (!ReadStringArray(document.MiscHeadPartsA, preset.miscHeadParts, validator,
                              "MiscHeadPartsA") ||
-            !ReadStringArray(*uniqueHeadParts, kMaxHeadParts, preset.uniqueHeadParts, result, a_path,
+            !ReadStringArray(document.UniqueHeadPartsA, preset.uniqueHeadParts, validator,
                              "UniqueHeadPartsA") ||
-            !ReadNamedMorphs(*facialMorphs, preset.facialMorphSliders, result, a_path) ||
-            !ReadBoneRegions(*bones, preset.facialBoneRegions, result, a_path) ||
-            !ReadTintLayers(*postBlend, preset.postBlendLayers, result, a_path, isCharGenMenu)) {
+            !ReadNamedMorphs(document.FacialMorphSliderDataA, preset.facialMorphSliders, validator) ||
+            !ReadBoneRegions(document.FacialBoneRegionDataA, preset.facialBoneRegions, validator) ||
+            !ReadTintLayers(document.PostBlendFaceCustomization.LayersA, preset.postBlendLayers,
+                            validator, isCharGenMenu)) {
             return result;
         }
 
@@ -540,8 +310,8 @@ namespace NpcAppearance
     {
         PresetResult result;
         try {
-            AddIssue(result, a_path, 0, "parser_exception",
-                     "preset parser exception: " + std::string{ e.what() });
+            result.issues.push_back({ a_path, 0, "parser_exception",
+                                      "preset parser exception: " + std::string{ e.what() } });
         } catch (...) {
         }
         return result;
@@ -550,8 +320,8 @@ namespace NpcAppearance
     {
         PresetResult result;
         try {
-            AddIssue(result, a_path, 0, "parser_exception",
-                     "preset parser unknown exception");
+            result.issues.push_back({ a_path, 0, "parser_exception",
+                                      "preset parser unknown exception" });
         } catch (...) {
         }
         return result;
@@ -565,23 +335,25 @@ namespace NpcAppearance
             return static_cast<char>(std::tolower(a_ch));
         });
         if (extension != ".npc") {
-            AddIssue(result, a_path, 0, "invalid_extension", "preset path must use the .npc extension");
+            result.issues.push_back({ a_path, 0, "invalid_extension",
+                                      "preset path must use the .npc extension" });
             return result;
         }
 
         std::error_code ec;
         const auto size = std::filesystem::file_size(a_path, ec);
         if (ec || size == 0 || size > kMaxPresetBytes) {
-            AddIssue(result, a_path, 0, "invalid_size",
-                     ec ? "could not determine preset size: " + ec.message()
-                        : "preset is empty or exceeds the 32 MiB safety limit");
+            result.issues.push_back({ a_path, 0, "invalid_size",
+                                      ec ? "could not determine preset size: " + ec.message()
+                                         : "preset is empty or exceeds the 32 MiB safety limit" });
             return result;
         }
 
         std::string bytes(static_cast<std::size_t>(size), '\0');
         std::ifstream stream{ a_path, std::ios::binary };
         if (!stream.is_open() || !stream.read(bytes.data(), static_cast<std::streamsize>(bytes.size()))) {
-            AddIssue(result, a_path, 0, "read_failed", "could not read the complete preset file");
+            result.issues.push_back({ a_path, 0, "read_failed",
+                                      "could not read the complete preset file" });
             return result;
         }
         return ParseCkPreset(bytes, a_path);

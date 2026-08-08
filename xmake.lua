@@ -9,6 +9,9 @@ set_warnings("allextra")
 add_rules("mode.debug", "mode.releasedbg")
 add_rules("plugin.vsxmake.autoupdate")
 
+-- Structural JSON parsing and string decoding for the manifest/preset readers.
+add_requires("glaze v7.0.2")
+
 target("OSF Identity")
     add_rules("commonlibsf.plugin", {
         name = "osf-identity",
@@ -24,7 +27,6 @@ target("OSF Identity")
         "src/NpcAppearance/ManifestParser.cpp",
         "src/NpcAppearance/PackageDiscovery.cpp",
         "src/NpcAppearance/Selection.cpp",
-        "src/NpcAppearance/Json.cpp",
         "src/NpcAppearance/Preset.cpp",
         "src/NpcAppearance/Resolver.cpp",
         "src/NpcAppearance/Runtime.cpp",
@@ -33,6 +35,7 @@ target("OSF Identity")
     )
     add_headerfiles("src/**.h")
     add_includedirs("src")
+    add_packages("glaze")
     set_pcxxheader("src/pch.h")
     add_defines("NOMINMAX", "WIN32_LEAN_AND_MEAN")
 
@@ -83,10 +86,10 @@ target("npc-appearance-config-tests")
         "src/NpcAppearance/ConfigDetail.cpp",
         "src/NpcAppearance/ManifestParser.cpp",
         "src/NpcAppearance/PackageDiscovery.cpp",
-        "src/NpcAppearance/Selection.cpp",
-        "src/NpcAppearance/Json.cpp"
+        "src/NpcAppearance/Selection.cpp"
     )
     add_includedirs("src")
+    add_packages("glaze")
 
 target("npc-appearance-preset-tests")
     set_kind("binary")
@@ -94,7 +97,7 @@ target("npc-appearance-preset-tests")
     set_rundir(os.projectdir())
     add_files(
         "tools/tests/npc_appearance_preset_tests.cpp",
-        "src/NpcAppearance/Preset.cpp",
-        "src/NpcAppearance/Json.cpp"
+        "src/NpcAppearance/Preset.cpp"
     )
     add_includedirs("src")
+    add_packages("glaze")

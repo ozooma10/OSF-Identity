@@ -41,51 +41,54 @@ namespace NpcAppearance::Detail
             return false;
         }
 
-        [[nodiscard]] bool ParseStringArray(const Json::Value& a_value, const std::string_view a_property,
-                                            const bool a_plugins, std::vector<std::string>& a_strings,
-                                            std::vector<std::filesystem::path>& a_paths,
-                                            ManifestResult& a_result, const std::filesystem::path& a_path)
+        [[nodiscard]] bool ParsePluginRequirements(const std::vector<std::string>& a_items,
+                                                   std::vector<std::string>& a_out,
+                                                   ManifestResult& a_result,
+                                                   const std::filesystem::path& a_path)
         {
-            if (a_value.kind != Json::Value::Kind::kArray) {
-                AddIssue(a_result, a_path, a_value.offset, "wrong_type",
-                         "property '" + std::string(a_property) + "' must be an array");
-                return false;
-            }
-            if (a_value.array.size() > kMaxRequirements) {
-                AddIssue(a_result, a_path, a_value.offset, "limit_exceeded",
-                         "property '" + std::string(a_property) + "' exceeds the requirement limit");
+            if (a_items.size() > kMaxRequirements) {
+                AddIssue(a_result, a_path, 0, "limit_exceeded",
+                         "property 'plugins' exceeds the requirement limit");
                 return false;
             }
             std::unordered_set<std::string> seen;
-            for (const auto& item : a_value.array) {
-                if (item.kind != Json::Value::Kind::kString) {
-                    AddIssue(a_result, a_path, item.offset, "wrong_type",
-                             "property '" + std::string(a_property) + "' must contain strings");
+            for (const auto& item : a_items) {
+                if (!IsPluginName(item)) {
+                    AddIssue(a_result, a_path, 0, "invalid_plugin", "invalid required plugin name");
                     return false;
                 }
-                if (a_plugins) {
-                    if (!IsPluginName(item.string)) {
-                        AddIssue(a_result, a_path, item.offset, "invalid_plugin", "invalid required plugin name");
-                        return false;
-                    }
-                    if (!seen.insert(FoldASCII(item.string)).second) {
-                        AddIssue(a_result, a_path, item.offset, "duplicate_requirement", "duplicate required plugin");
-                        return false;
-                    }
-                    a_strings.push_back(item.string);
-                } else {
-                    std::filesystem::path relative;
-                    std::string error;
-                    if (!ValidateRelativePath(item.string, relative, error)) {
-                        AddIssue(a_result, a_path, item.offset, "invalid_asset_path", error);
-                        return false;
-                    }
-                    if (!seen.insert(FoldASCII(relative.generic_string())).second) {
-                        AddIssue(a_result, a_path, item.offset, "duplicate_requirement", "duplicate required asset");
-                        return false;
-                    }
-                    a_paths.push_back(std::move(relative));
+                if (!seen.insert(FoldASCII(item)).second) {
+                    AddIssue(a_result, a_path, 0, "duplicate_requirement", "duplicate required plugin");
+                    return false;
                 }
+                a_out.push_back(item);
+            }
+            return true;
+        }
+
+        [[nodiscard]] bool ParseAssetRequirements(const std::vector<std::string>& a_items,
+                                                  std::vector<std::filesystem::path>& a_out,
+                                                  ManifestResult& a_result,
+                                                  const std::filesystem::path& a_path)
+        {
+            if (a_items.size() > kMaxRequirements) {
+                AddIssue(a_result, a_path, 0, "limit_exceeded",
+                         "property 'assets' exceeds the requirement limit");
+                return false;
+            }
+            std::unordered_set<std::string> seen;
+            for (const auto& item : a_items) {
+                std::filesystem::path relative;
+                std::string error;
+                if (!ValidateRelativePath(item, relative, error)) {
+                    AddIssue(a_result, a_path, 0, "invalid_asset_path", error);
+                    return false;
+                }
+                if (!seen.insert(FoldASCII(relative.generic_string())).second) {
+                    AddIssue(a_result, a_path, 0, "duplicate_requirement", "duplicate required asset");
+                    return false;
+                }
+                a_out.push_back(std::move(relative));
             }
             return true;
         }
@@ -105,39 +108,6 @@ namespace NpcAppearance::Detail
                   const std::size_t a_offset, std::string a_code, std::string a_message)
     {
         a_result.issues.push_back({ a_path, a_offset, std::move(a_code), std::move(a_message) });
-    }
-
-    bool HasOnlyProperties(const Json::Value& a_object,
-                           const std::initializer_list<std::string_view> a_allowed,
-                           ManifestResult& a_result,
-                           const std::filesystem::path& a_path)
-    {
-        for (const auto& [name, value] : a_object.object) {
-            if (std::ranges::find(a_allowed, name) == a_allowed.end()) {
-                AddIssue(a_result, a_path, value.offset, "unknown_property",
-                         "unknown property '" + name + "'");
-                return false;
-            }
-        }
-        return true;
-    }
-
-    const Json::Value* Require(const Json::Value& a_object, const std::string_view a_name,
-                               const Json::Value::Kind a_kind, ManifestResult& a_result,
-                               const std::filesystem::path& a_path)
-    {
-        const auto* value = a_object.Find(a_name);
-        if (!value) {
-            AddIssue(a_result, a_path, a_object.offset, "missing_property",
-                     "missing property '" + std::string(a_name) + "'");
-            return nullptr;
-        }
-        if (value->kind != a_kind) {
-            AddIssue(a_result, a_path, value->offset, "wrong_type",
-                     "property '" + std::string(a_name) + "' has the wrong type");
-            return nullptr;
-        }
-        return value;
     }
 
     bool IsPluginName(const std::string_view a_name)
@@ -259,31 +229,17 @@ namespace NpcAppearance::Detail
         return true;
     }
 
-    bool ParseRequirementsNode(const Json::Value& a_node,
-                               Requirements& a_requirements,
-                               ManifestResult& a_result,
-                               const std::filesystem::path& a_path)
+    bool ParseRequirements(const Schema::Requirements& a_node,
+                           Requirements& a_requirements,
+                           ManifestResult& a_result,
+                           const std::filesystem::path& a_path)
     {
-        if (a_node.kind != Json::Value::Kind::kObject) {
-            AddIssue(a_result, a_path, a_node.offset, "wrong_type",
-                     "requirements must be an object");
+        if (a_node.plugins &&
+            !ParsePluginRequirements(*a_node.plugins, a_requirements.plugins, a_result, a_path)) {
             return false;
         }
-        if (!HasOnlyProperties(a_node, { "plugins", "assets" }, a_result, a_path)) {
-            return false;
-        }
-        if (const auto* plugins = a_node.Find("plugins");
-            plugins && !ParseStringArray(*plugins, "plugins", true,
-                                         a_requirements.plugins,
-                                         a_requirements.assets,
-                                         a_result, a_path)) {
-            return false;
-        }
-        if (const auto* assets = a_node.Find("assets");
-            assets && !ParseStringArray(*assets, "assets", false,
-                                        a_requirements.plugins,
-                                        a_requirements.assets,
-                                        a_result, a_path)) {
+        if (a_node.assets &&
+            !ParseAssetRequirements(*a_node.assets, a_requirements.assets, a_result, a_path)) {
             return false;
         }
         return true;
