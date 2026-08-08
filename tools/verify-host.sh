@@ -20,6 +20,10 @@ echo "[verify-host] building host test suites with $cxx"
 "$cxx" "${cxxflags[@]}" \
     tools/tests/npc_appearance_config_tests.cpp \
     src/NpcAppearance/Config.cpp \
+    src/NpcAppearance/ConfigDetail.cpp \
+    src/NpcAppearance/ManifestParser.cpp \
+    src/NpcAppearance/PackageDiscovery.cpp \
+    src/NpcAppearance/Selection.cpp \
     src/NpcAppearance/Json.cpp \
     -o "$build_dir/npc-appearance-config-tests"
 "$cxx" "${cxxflags[@]}" \

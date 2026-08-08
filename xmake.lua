@@ -20,6 +20,10 @@ target("OSF Identity")
     add_files(
         "src/main.cpp",
         "src/NpcAppearance/Config.cpp",
+        "src/NpcAppearance/ConfigDetail.cpp",
+        "src/NpcAppearance/ManifestParser.cpp",
+        "src/NpcAppearance/PackageDiscovery.cpp",
+        "src/NpcAppearance/Selection.cpp",
         "src/NpcAppearance/Json.cpp",
         "src/NpcAppearance/Preset.cpp",
         "src/NpcAppearance/Resolver.cpp",
@@ -76,6 +80,10 @@ target("npc-appearance-config-tests")
     add_files(
         "tools/tests/npc_appearance_config_tests.cpp",
         "src/NpcAppearance/Config.cpp",
+        "src/NpcAppearance/ConfigDetail.cpp",
+        "src/NpcAppearance/ManifestParser.cpp",
+        "src/NpcAppearance/PackageDiscovery.cpp",
+        "src/NpcAppearance/Selection.cpp",
         "src/NpcAppearance/Json.cpp"
     )
     add_includedirs("src")
