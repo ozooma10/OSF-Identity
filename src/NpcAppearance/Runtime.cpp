@@ -12,9 +12,7 @@
 
 #include <algorithm>
 #include <array>
-#include <charconv>
 #include <chrono>
-#include <cctype>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -36,13 +34,16 @@ namespace NpcAppearance
 {
     namespace
     {
+        // Per-line log emitter; production sinks are REX::INFO adapters that
+        // carry a context prefix ("startup: ", per-actor base ID, ...).
+        using LineSink = std::function<void(const std::string&)>;
+
         // ==================================================================
         // Native byte contracts
         // Address Library IDs and the expected prologue bytes of every
         // native routine the runtime may call on 1.16.244. Each call site
         // re-verifies these at runtime; any mismatch fails the apply closed.
         // ==================================================================
-        constexpr REL::ID kActorCopyAppearanceWorkerID{ 97401 };
         constexpr REL::ID kNpcFactorySingletonID{ 824718 };
         constexpr REL::ID kNpcFactoryVtableID{ 420871 };
         constexpr REL::ID kNpcFactoryCreateID{ 68242 };
@@ -59,16 +60,9 @@ namespace NpcAppearance
         constexpr REL::ID kNpcSetAvmDataID{ 68087 };
         constexpr REL::ID kNpcRemoveAvmDataID{ 68088 };
         constexpr REL::ID kActorAppearanceRefreshID{ 101307 };
-        constexpr std::uint32_t kAppearanceRefreshDirtyActorFlag = 0x00008000;
         constexpr std::uintptr_t kProcessListsVtableRva = 0x4CC01B0;
         constexpr std::uintptr_t kActorVtableRva = 0x4CB9248;
         constexpr REL::Offset kNpcOwnedVisualCopyOffset{ 0xCD56E0 };
-        constexpr std::array<std::uint8_t, 17> kActorCopyAppearanceGate{
-            0x48, 0x85, 0xD2,
-            0x0F, 0x84, 0x94, 0x00, 0x00, 0x00,
-            0x48, 0x89, 0x5C, 0x24, 0x08,
-            0x48, 0x89, 0x6C
-        };
         constexpr std::array<std::uint8_t, 16> kNpcFactoryCreateGate{
             0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48, 0x83,
             0xEC, 0x30, 0x8B, 0xDA, 0xB9, 0x58, 0x04, 0x00
@@ -142,7 +136,6 @@ namespace NpcAppearance
         std::atomic<bool>             g_mutationKilled{ false };
         std::atomic<bool>             g_saveLoadSinkRegistered{ false };
         std::mutex                    g_eventMutex;
-        std::unordered_set<RE::TESFormID> g_targetBaseIDs;
         std::unordered_map<RE::TESFormID, SelectedAssignment> g_sceneAssignments;
 
         // The SaveLoadEvent sink is observer-only telemetry: it is not
@@ -262,65 +255,6 @@ namespace NpcAppearance
             [[nodiscard]] bool operator==(const VisualSeedSnapshot&) const = default;
         };
 
-        [[nodiscard]] std::string JoinArguments(const std::vector<std::string>& a_args,
-                                                const std::size_t a_begin)
-        {
-            std::string joined;
-            for (std::size_t i = a_begin; i < a_args.size(); ++i) {
-                if (!joined.empty()) {
-                    joined.push_back(' ');
-                }
-                joined += a_args[i];
-            }
-            return joined;
-        }
-
-        [[nodiscard]] std::optional<std::uint32_t> ParseFormID(std::string_view a_text)
-        {
-            if (a_text.starts_with("0x") || a_text.starts_with("0X")) {
-                a_text.remove_prefix(2);
-            }
-            if (a_text.empty()) {
-                return std::nullopt;
-            }
-            std::uint32_t value = 0;
-            const auto [ptr, ec] = std::from_chars(a_text.data(), a_text.data() + a_text.size(), value, 16);
-            if (ec != std::errc{} || ptr != a_text.data() + a_text.size()) {
-                return std::nullopt;
-            }
-            return value;
-        }
-
-        [[nodiscard]] std::optional<Target> ParseTargetToken(
-            const std::string_view a_text)
-        {
-            const auto separator = a_text.rfind(':');
-            if (separator == std::string_view::npos || separator == 0 ||
-                separator + 1 >= a_text.size()) {
-                return std::nullopt;
-            }
-            const std::string plugin{ a_text.substr(0, separator) };
-            const auto extension = std::filesystem::path{ plugin }.extension().string();
-            if (plugin.size() <= 4 || plugin.size() > 260 || plugin.contains('/') ||
-                plugin.contains('\\') || plugin.contains(':') ||
-                (::_stricmp(extension.c_str(), ".esm") != 0 &&
-                 ::_stricmp(extension.c_str(), ".esp") != 0 &&
-                 ::_stricmp(extension.c_str(), ".esl") != 0)) {
-                return std::nullopt;
-            }
-            const auto localText = a_text.substr(separator + 1);
-            if (localText.size() > 8 || localText.starts_with("0x") ||
-                localText.starts_with("0X")) {
-                return std::nullopt;
-            }
-            const auto localFormID = ParseFormID(localText);
-            if (!localFormID || *localFormID > 0x00FFFFFF) {
-                return std::nullopt;
-            }
-            return Target{
-                plugin, *localFormID };
-        }
-
         [[nodiscard]] std::filesystem::path GetThisDllDirectory()
         {
             HMODULE module = nullptr;
@@ -395,14 +329,6 @@ namespace NpcAppearance
             return snap;
         }
 
-        [[nodiscard]] bool SameNonVisualIgnoringRefreshDirtyFlag(
-            NonVisualSnapshot a_left, NonVisualSnapshot a_right)
-        {
-            a_left.actorFlagsExceptSex &= ~kAppearanceRefreshDirtyActorFlag;
-            a_right.actorFlagsExceptSex &= ~kAppearanceRefreshDirtyActorFlag;
-            return a_left == a_right;
-        }
-
         [[nodiscard]] VisualSeedSnapshot SnapshotVisualSeed(RE::TESNPC* a_npc)
         {
             VisualSeedSnapshot snap;
@@ -441,66 +367,6 @@ namespace NpcAppearance
             }
             snap.pronoun = a_npc->pronoun.underlying();
             return snap;
-        }
-
-        [[nodiscard]] bool SameVisualSeedValues(const VisualSeedSnapshot& a_left,
-                                                const VisualSeedSnapshot& a_right)
-        {
-            return a_left.thin == a_right.thin &&
-                   a_left.muscular == a_right.muscular &&
-                   a_left.fat == a_right.fat &&
-                   a_left.headParts == a_right.headParts &&
-                   a_left.morphRegionCount == a_right.morphRegionCount &&
-                   a_left.boneValueCount == a_right.boneValueCount &&
-                   a_left.boneGroupCount == a_right.boneGroupCount &&
-                   a_left.tintCount == a_right.tintCount &&
-                   a_left.skinToneIndex == a_right.skinToneIndex &&
-                   a_left.teeth == a_right.teeth &&
-                   a_left.jewelryColor == a_right.jewelryColor &&
-                   a_left.eyeColor == a_right.eyeColor &&
-                   a_left.hairColor == a_right.hairColor &&
-                   a_left.facialColor == a_right.facialColor &&
-                   a_left.eyebrowColor == a_right.eyebrowColor &&
-                   a_left.shapeBlendCount == a_right.shapeBlendCount &&
-                   a_left.pronoun == a_right.pronoun;
-        }
-
-        void ReportVisualSeedComparison(const LineSink& a_out,
-                                        const VisualSeedSnapshot& a_source,
-                                        const VisualSeedSnapshot& a_donor)
-        {
-            a_out(std::format(
-                "donorseed diff: morph={} headParts={} morphRegions={} boneValues={} boneGroups={} tint={} skinTone={} shapeBlend={} pronoun={} source/donor skin={}/{} pronoun={}/{}",
-                a_source.thin == a_donor.thin &&
-                    a_source.muscular == a_donor.muscular && a_source.fat == a_donor.fat,
-                a_source.headParts == a_donor.headParts,
-                a_source.morphRegionCount == a_donor.morphRegionCount,
-                a_source.boneValueCount == a_donor.boneValueCount,
-                a_source.boneGroupCount == a_donor.boneGroupCount,
-                a_source.tintCount == a_donor.tintCount,
-                a_source.skinToneIndex == a_donor.skinToneIndex,
-                a_source.shapeBlendCount == a_donor.shapeBlendCount,
-                a_source.pronoun == a_donor.pronoun,
-                a_source.skinToneIndex, a_donor.skinToneIndex,
-                a_source.pronoun, a_donor.pronoun));
-            a_out(std::format(
-                "donorseed diff: teeth={} jewelry={} eye={} hair={} facial={} eyebrow={} source/donor morph=({:.6g},{:.6g},{:.6g})/({:.6g},{:.6g},{:.6g})",
-                a_source.teeth == a_donor.teeth,
-                a_source.jewelryColor == a_donor.jewelryColor,
-                a_source.eyeColor == a_donor.eyeColor,
-                a_source.hairColor == a_donor.hairColor,
-                a_source.facialColor == a_donor.facialColor,
-                a_source.eyebrowColor == a_donor.eyebrowColor,
-                a_source.thin, a_source.muscular, a_source.fat,
-                a_donor.thin, a_donor.muscular, a_donor.fat));
-            a_out(std::format(
-                "donorseed diff strings: teeth='{}'/'{}' jewelry='{}'/'{}' eye='{}'/'{}' hair='{}'/'{}' facial='{}'/'{}' eyebrow='{}'/'{}'",
-                a_source.teeth, a_donor.teeth,
-                a_source.jewelryColor, a_donor.jewelryColor,
-                a_source.eyeColor, a_donor.eyeColor,
-                a_source.hairColor, a_donor.hairColor,
-                a_source.facialColor, a_donor.facialColor,
-                a_source.eyebrowColor, a_donor.eyebrowColor));
         }
 
         [[nodiscard]] bool HasIndependentVisualStorage(const VisualSeedSnapshot& a_source,
@@ -931,9 +797,9 @@ namespace NpcAppearance
         }
 
         // ==================================================================
-        // Original-state capture for one transient overlay window (and the
-        // probe commands). Since Phase 4 nothing is tracked between windows:
-        // the snapshot lives on the stack for the duration of one drain task.
+        // Original-state capture for one transient overlay window. Nothing
+        // is tracked between windows: the snapshot lives on the stack for
+        // the duration of one drain task.
         // ==================================================================
         struct AppliedBaseState
         {
@@ -947,20 +813,20 @@ namespace NpcAppearance
 
         std::atomic<std::uint64_t>                      g_loadReturnCount{ 0 };
         std::atomic<std::uint64_t>                      g_loadGeneration{ 0 };
-        constexpr std::uint32_t                         kC2LoadReadyMaxNativeFrames = 600;
-        struct DeferredC2LoadTask
+        constexpr std::uint32_t                         kLoadSweepReadyMaxNativeFrames = 600;
+        struct DeferredLoadSweepTask
         {
             std::uint64_t                    generation{ 0 };
             std::function<bool(std::uint32_t)> run;
             std::uint32_t                   attempts{ 0 };
             bool                            deferralLogged{ false };
         };
-        std::mutex                                      g_deferredC2LoadMutex;
-        std::shared_ptr<DeferredC2LoadTask>             g_deferredC2LoadTask;
-        std::shared_ptr<DeferredC2LoadTask>             g_deferredC2LoadInFlight;
-        std::atomic<bool>                               g_deferredC2RetryScheduled{ false };
-        constexpr std::uint32_t                         kDeferredC2RetryMaxWaits = 400;
-        constexpr std::chrono::milliseconds             kDeferredC2RetryDelay{ 25 };
+        std::mutex                                      g_deferredLoadSweepMutex;
+        std::shared_ptr<DeferredLoadSweepTask>             g_deferredLoadSweepTask;
+        std::shared_ptr<DeferredLoadSweepTask>             g_deferredLoadSweepInFlight;
+        std::atomic<bool>                               g_deferredLoadSweepRetryScheduled{ false };
+        constexpr std::uint32_t                         kLoadSweepRetryMaxWaits = 400;
+        constexpr std::chrono::milliseconds             kLoadSweepRetryDelay{ 25 };
 
         using ResolveFaceDbEntry = bool (*)(
             std::uint32_t, const RE::BSFixedString*, const RE::BSFixedString*,
@@ -1389,34 +1255,6 @@ namespace NpcAppearance
             return failed == 0;
         }
 
-        void ReportSnapshot(const LineSink& a_out, std::string_view a_label,
-                            const NonVisualSnapshot& a_snap)
-        {
-            a_out(std::format(
-                "{} editorID='{}' name='{}' flagsNoSex=0x{:08X} level={}/{}..{} disposition={} templateFlags=0x{:04X} pronoun={}",
-                a_label, a_snap.editorID, a_snap.name, a_snap.actorFlagsExceptSex,
-                a_snap.level, a_snap.calcLevelMin, a_snap.calcLevelMax,
-                a_snap.baseDisposition, a_snap.templateUseFlags, a_snap.pronoun));
-            a_out(std::format(
-                "{} race={} originalRace={} class={} voice={} combat={} outfits={}/{} crimeFaction={} factions={}@{} inventory={}@{}",
-                a_label,
-                static_cast<void*>(a_snap.race), static_cast<void*>(a_snap.originalRace),
-                static_cast<void*>(a_snap.npcClass), static_cast<void*>(a_snap.voiceType),
-                static_cast<void*>(a_snap.combatStyle), static_cast<void*>(a_snap.defaultOutfit),
-                static_cast<void*>(a_snap.sleepOutfit), static_cast<void*>(a_snap.crimeFaction),
-                a_snap.factionCount, a_snap.factionData, a_snap.inventoryCount, a_snap.inventoryData));
-        }
-
-        [[nodiscard]] bool HasExpectedGate(const std::uintptr_t a_address)
-        {
-            if (!Util::IsReadableRange(a_address, kActorCopyAppearanceGate.size())) {
-                return false;
-            }
-            return std::memcmp(reinterpret_cast<const void*>(a_address),
-                               kActorCopyAppearanceGate.data(),
-                               kActorCopyAppearanceGate.size()) == 0;
-        }
-
         template <std::size_t N>
         [[nodiscard]] bool HasExpectedBytes(const std::uintptr_t a_address,
                                             const std::array<std::uint8_t, N>& a_expected)
@@ -1643,116 +1481,13 @@ namespace NpcAppearance
             return npc;
         }
 
-        [[nodiscard]] RE::TESNPC* ResolveTargetArgument(
-            const LineSink& a_out,
-            const std::string_view a_text)
-        {
-            const auto target = ParseTargetToken(a_text);
-            if (!target) {
-                a_out("invalid target; expected <plugin:localFormID> with a 1-8 digit plugin-local hexadecimal FormID and no 0x prefix");
-                return nullptr;
-            }
-            return ResolveEligibleTarget(a_out, *target);
-        }
-
-        // ==================================================================
-        // Diagnostic command surface (npcapp ...)
-        // Unbound in release builds; mirrors the pipeline stages so each
-        // layer can be exercised and inspected in isolation.
-        // ==================================================================
-        void RunStatus(const LineSink& a_out)
-        {
-            const auto root = DefaultPluginDirectory();
-            a_out("OSF Identity diagnostics: overlay runtime + SaveLoadEvent sink + retained pipeline commands");
-            a_out(std::format("runtimeOperational={} saveLoadSinkRegistered={} mutationKilled={}",
-                              g_runtimeOperational.load(std::memory_order_relaxed),
-                              g_saveLoadSinkRegistered.load(std::memory_order_relaxed),
-                              g_mutationKilled.load(std::memory_order_relaxed)));
-            a_out(std::format(
-                "runtimeArmed={} loadReturns={} loadGeneration={}",
-                g_runtimeArmed.load(std::memory_order_relaxed),
-                g_loadReturnCount.load(std::memory_order_relaxed),
-                g_loadGeneration.load(std::memory_order_relaxed)));
-            a_out(std::format("pluginDirectory={}", root.string()));
-            a_out(std::format("packsDirectory={}", DefaultPacksDirectory().string()));
-            a_out("manifestParser=implemented (strict package schema v1, canonical plugin/local targeting, containment, deterministic conflicts)");
-            a_out("npcDecoder=implemented (strict CK 1.16.244 JSON contract; golden matrix and adversarial corpus pass)");
-            a_out("dependencyResolver=RUNTIME-PROVEN read-only on Sarah (forms/headparts + facial shape/bone + FaceDB color/teeth/AVM catalogs)");
-            a_out("runtimeNpcImporter=NO SAFE SEAM FOUND (SavePCFace is a parse-only console wrapper)");
-            a_out("ownedEngineConstruction=RUNTIME-PROVEN (100/100 registered-empty Create(false)+destroy+unregister cycles)");
-            a_out("copyAppearance=deep-owned containers STATIC-PROVEN, but also copies pronoun; visual-only path pending");
-            a_out("appearanceRefresh=ID 101307 (byte-contract gated; runtime-proven one-shot for matching loaded actors)");
-        }
-
-        void RunSelfTest(const LineSink& a_out)
-        {
-            const std::filesystem::path root{ LR"(C:\OSFIdentity)" };
-            const auto manifestPath = root / L"author.sarah" / L"package.json";
-            std::size_t passed = 0;
-            std::size_t failed = 0;
-            auto check = [&](const bool a_ok, const std::string_view a_name) {
-                if (a_ok) {
-                    ++passed;
-                    a_out(std::format("PASS {}", a_name));
-                } else {
-                    ++failed;
-                    a_out(std::format("FAIL {}", a_name));
-                }
-            };
-
-            const auto valid = ParsePackageManifest(
-                R"({"schemaVersion":1,"requires":{},"assignments":[{"target":{"plugin":"Starfield.esm","localFormId":"5983"},"preset":"Sarah.npc"}]})",
-                manifestPath, false);
-            check(valid.manifest && valid.manifest->priority == 0 &&
-                      valid.manifest->assignments.size() == 1 && valid.issues.empty(),
-                  "valid production manifest");
-            check(valid.manifest && valid.manifest->assignments[0].target.CanonicalKey() ==
-                                        "starfield.esm:00005983",
-                  "canonical plugin-local target");
-
-            const auto traversal = ParsePackageManifest(
-                R"({"schemaVersion":1,"assignments":[{"target":{"plugin":"Starfield.esm","localFormId":"5983"},"preset":"../escape.npc"}]})",
-                manifestPath, false);
-            check(traversal.HasFatalError(), "parent traversal rejected");
-
-            const auto removedScope = ParsePackageManifest(
-                R"({"schemaVersion":1,"assignments":[{"target":{"plugin":"Starfield.esm","localFormId":"5983"},"preset":"Sarah.npc","scope":"faceAndBody"}]})",
-                manifestPath, false);
-            check(removedScope.HasFatalError(), "removed scope property rejected");
-
-            const auto unsupported = ParsePackageManifest(
-                R"({"schemaVersion":2,"priority":0,"requires":{"plugins":[],"assets":[]},"assignments":[]})",
-                manifestPath, false);
-            check(unsupported.HasFatalError(), "unknown schema version rejected");
-
-            const auto unknownProperty = ParsePackageManifest(
-                R"({"schemaVersion":1,"priority":0,"requires":{"plugins":[],"assets":[]},"assignments":[],"surprise":true})",
-                manifestPath, false);
-            check(unknownProperty.HasFatalError(), "unknown root property rejected");
-
-            const auto malformed = ParsePackageManifest(
-                R"({"schemaVersion":)", manifestPath, false);
-            check(malformed.HasFatalError(), "truncated JSON rejected");
-
-            std::string oversized(kMaxManifestBytes + 1, ' ');
-            const auto tooLarge = ParsePackageManifest(oversized, manifestPath, false);
-            check(tooLarge.HasFatalError(), "oversized manifest rejected");
-
-            a_out(std::format("selftest: {} passed, {} failed", passed, failed));
-        }
-
         void ReportDependencyResolution(
             const LineSink& a_out,
             const ResolvedAppearanceDependencies& a_result);
 
-        void RunScan(const LineSink& a_out, const std::vector<std::string>& a_args)
+        void RunScan(const LineSink& a_out, const std::filesystem::path& a_packsRoot)
         {
-            std::filesystem::path packsRoot;
-            if (a_args.size() > 2) {
-                packsRoot = std::filesystem::path{ JoinArguments(a_args, 2) };
-            } else {
-                packsRoot = DefaultPacksDirectory();
-            }
+            const std::filesystem::path& packsRoot = a_packsRoot;
 
             a_out(std::format("scan packsRoot={}", packsRoot.string()));
             auto discovery = DiscoverPackages(packsRoot, true);
@@ -1927,61 +1662,12 @@ namespace NpcAppearance
             const auto resolvedCount = resolvedBaseIDs.size();
             {
                 const std::scoped_lock lock{ g_eventMutex };
-                g_targetBaseIDs = std::move(resolvedBaseIDs);
                 g_sceneAssignments = std::move(resolvedAssignments);
             }
             a_out(std::format("scan: discoveredPacks={} implicitPacks={} validPacks={} decodedPresets={} validCandidates={} winners={} resolvedTargets={}; validation only, owned population/application gate prevents mutation",
                               discovery.packages.size(), implicitPacks, validPacks,
                               decodedPresets, validatedCandidates.size(), selection.winners.size(),
                               resolvedCount));
-        }
-
-        void RunInspect(const LineSink& a_out, const std::vector<std::string>& a_args)
-        {
-            if (a_args.size() < 3) {
-                a_out("usage: npcapp inspect <preset.npc>");
-                return;
-            }
-            const std::filesystem::path path{ JoinArguments(a_args, 2) };
-            const auto result = LoadCkPreset(path);
-            if (!result.preset) {
-                a_out(std::format("inspect: REJECTED path={} issues={}", path.string(), result.issues.size()));
-                for (const auto& issue : result.issues) {
-                    a_out(std::format("issue code={} offset=0x{:X}: {}", issue.code, issue.offset,
-                                      issue.message));
-                }
-                return;
-            }
-
-            const auto& preset = *result.preset;
-            std::size_t boneSliders = 0;
-            for (const auto& region : preset.facialBoneRegions) {
-                boneSliders += region.sliders.size();
-            }
-            std::string bodyValues;
-            for (const auto value : preset.bodyMorphRegionValues) {
-                if (!bodyValues.empty()) {
-                    bodyValues += ", ";
-                }
-                bodyValues += std::format("{:.6g}", value);
-            }
-
-            a_out(std::format("inspect: ACCEPTED path={} producer='{}' schema={}", path.string(),
-                              preset.producer, preset.schemaVersion));
-            a_out(std::format("identity editorID='{}' race='{}' sex={} skinTone={}",
-                              preset.npcFormEditorID, preset.raceFormID,
-                              preset.sex == PresetSex::kFemale ? "Female" : "Male", preset.skinTone));
-            a_out(std::format("colors hair='{}' brow='{}' facialHair='{}' eye='{}' jewelry='{}' teeth='{}'",
-                              preset.hairColor, preset.browHairColor, preset.facialHairColor,
-                              preset.eyeColor, preset.jewelryColor, preset.teethCustomization));
-            a_out(std::format("counts bodyRegions={} miscHeadParts={} uniqueHeadParts={} facialMorphs={} boneRegions={} boneSliders={} tintLayers={}",
-                              preset.bodyMorphRegionValues.size(), preset.miscHeadParts.size(),
-                              preset.uniqueHeadParts.size(), preset.facialMorphSliders.size(),
-                              preset.facialBoneRegions.size(), boneSliders, preset.postBlendLayers.size()));
-            a_out(std::format("morphWeights=({:.6g}, {:.6g}, {:.6g}) bodyValues=[{}]",
-                              preset.morphWeights.x, preset.morphWeights.y, preset.morphWeights.z,
-                              bodyValues));
-            a_out("inspect: decoded only; no game state mutated");
         }
 
         void ReportDependencyResolution(
@@ -2007,910 +1693,6 @@ namespace NpcAppearance
                 a_out(std::format("  dependency issue code={} field={} value='{}': {}",
                                   issue.code, issue.field, issue.value, issue.message));
             }
-        }
-
-        void RunRefs(const LineSink& a_out, const std::vector<std::string>& a_args)
-        {
-            if (a_args.size() < 4) {
-                a_out("usage: npcapp refs <plugin:localFormID> <preset.npc>");
-                return;
-            }
-            auto* target = ResolveTargetArgument(a_out, a_args[2]);
-            if (!target) {
-                return;
-            }
-            const std::filesystem::path path{ JoinArguments(a_args, 3) };
-            const auto decoded = LoadCkPreset(path);
-            if (!decoded.preset) {
-                a_out(std::format("refs: preset rejected path={} issues={}",
-                                  path.string(), decoded.issues.size()));
-                for (const auto& issue : decoded.issues) {
-                    a_out(std::format("  preset issue code={} @0x{:X}: {}",
-                                      issue.code, issue.offset, issue.message));
-                }
-                return;
-            }
-            const auto resolved = ResolveAppearanceDependencies(*decoded.preset, target);
-            ReportDependencyResolution(a_out, resolved);
-            a_out("refs: read-only; donor creation and all NPC mutation remain disabled");
-        }
-
-        void RunAvmInspect(const LineSink& a_out, const std::vector<std::string>& a_args)
-        {
-            if (a_args.size() < 4) {
-                a_out("usage: npcapp avm <plugin:localFormID> <preset.npc>");
-                return;
-            }
-            auto* target = ResolveTargetArgument(a_out, a_args[2]);
-            if (!target) {
-                return;
-            }
-            const std::filesystem::path path{ JoinArguments(a_args, 3) };
-            const auto decoded = LoadCkPreset(path);
-            if (!decoded.preset) {
-                a_out(std::format("avm: preset rejected path={} issues={}",
-                                  path.string(), decoded.issues.size()));
-                return;
-            }
-            const auto resolved = ResolveAppearanceDependencies(*decoded.preset, target);
-            ReportDependencyResolution(a_out, resolved);
-            if (!resolved.Complete()) {
-                a_out("avm: dependency resolution incomplete; no live AVM read");
-                return;
-            }
-
-            std::size_t matched = 0;
-            for (const auto& layer : decoded.preset->postBlendLayers) {
-                const auto found = std::ranges::find_if(
-                    target->tintAVMData, [&](const RE::AVMData& a_avm) {
-                        return ::_stricmp(SafeText(a_avm.category.c_str()), layer.name.c_str()) == 0;
-                    });
-                if (found == target->tintAVMData.end()) {
-                    a_out(std::format(
-                        "avm layer='{}' presetValue='{}' presetMod='{}' presetIntensity={:.9g} live=MISSING",
-                        layer.name, layer.value, layer.modulationValue, layer.intensity));
-                    continue;
-                }
-                ++matched;
-                a_out(std::format(
-                    "avm layer='{}' presetValue='{}' presetMod='{}' presetIntensity={:.9g} liveType={} liveValue='{}' liveTexture='{}' liveIntensity={} liveColor={:02X}{:02X}{:02X}{:02X}",
-                    layer.name, layer.value, layer.modulationValue, layer.intensity,
-                    static_cast<std::uint32_t>(found->type),
-                    SafeText(found->unk10.name.c_str()),
-                    SafeText(found->unk10.texturePath.c_str()),
-                    found->unk10.intensity,
-                    found->unk10.color.red, found->unk10.color.green,
-                    found->unk10.color.blue, found->unk10.color.alpha));
-            }
-            a_out(std::format(
-                "avm: matched={}/{} liveEntries={}; read-only, no donor or target mutation",
-                matched, decoded.preset->postBlendLayers.size(), target->tintAVMData.size()));
-        }
-
-        void RunResolve(const LineSink& a_out, const std::vector<std::string>& a_args)
-        {
-            if (a_args.size() < 3) {
-                a_out("usage: npcapp resolve <plugin:localFormID>");
-                return;
-            }
-            const auto target = ParseTargetToken(a_args[2]);
-            if (!target) {
-                a_out("resolve: invalid target token");
-                return;
-            }
-            (void)ResolveEligibleTarget(a_out, *target);
-        }
-
-        void RunDonor(const LineSink& a_out, const std::vector<std::string>& a_args)
-        {
-            if (!RequireMutationOperational(a_out, "donor")) {
-                return;
-            }
-            std::uint32_t count = 1;
-            if (a_args.size() >= 3) {
-                const auto [ptr, ec] = std::from_chars(
-                    a_args[2].data(), a_args[2].data() + a_args[2].size(), count, 10);
-                if (ec != std::errc{} || ptr != a_args[2].data() + a_args[2].size() ||
-                    count == 0 || count > 1000) {
-                    a_out("donor: count must be a decimal integer from 1 through 1000");
-                    return;
-                }
-            }
-
-            const auto factoryAddress = REL::Relocation<std::uintptr_t>{ kNpcFactorySingletonID }.address();
-            const auto factoryVtable = REL::Relocation<std::uintptr_t>{ kNpcFactoryVtableID }.address();
-            const auto createAddress = REL::Relocation<std::uintptr_t>{ kNpcFactoryCreateID }.address();
-            const auto npcVtable = REL::Relocation<std::uintptr_t>{ kNpcPrimaryVtableID }.address();
-            const auto destructorAddress =
-                REL::Relocation<std::uintptr_t>{ kNpcScalarDeletingDestructorID }.address();
-
-            if (!Util::IsReadableRange(factoryAddress, sizeof(std::uintptr_t)) ||
-                *reinterpret_cast<const std::uintptr_t*>(factoryAddress) != factoryVtable ||
-                !Util::IsReadableRange(factoryVtable + sizeof(std::uintptr_t), sizeof(std::uintptr_t)) ||
-                *reinterpret_cast<const std::uintptr_t*>(factoryVtable + sizeof(std::uintptr_t)) != createAddress ||
-                !HasExpectedBytes(createAddress, kNpcFactoryCreateGate) ||
-                !HasExpectedBytes(destructorAddress, kNpcDestructorGate)) {
-                a_out("donor: factory/create/destructor contract mismatch; FAIL CLOSED");
-                return;
-            }
-
-            using Create = RE::TESNPC* (*)(void*, bool);
-            using Destroy = RE::TESNPC* (*)(RE::TESNPC*, std::uint32_t);
-            const auto create = reinterpret_cast<Create>(createAddress);
-            const auto destroy = reinterpret_cast<Destroy>(destructorAddress);
-
-            std::size_t valid = 0;
-            for (std::uint32_t i = 0; i < count; ++i) {
-                auto* donor = create(reinterpret_cast<void*>(factoryAddress), false);
-                if (!donor) {
-                    a_out(std::format("donor: Create(false) returned null at cycle {}", i));
-                    break;
-                }
-                std::size_t headPartCount = 0;
-                {
-                    auto headParts = donor->headParts.Lock();
-                    headPartCount = (*headParts).size();
-                }
-                const auto formID = donor->GetFormID();
-                const bool registered =
-                    formID != 0 && RE::TESForm::LookupByID<RE::TESNPC>(formID) == donor;
-                const bool initialized =
-                    *reinterpret_cast<const std::uintptr_t*>(donor) == npcVtable &&
-                    registered && donor->QRefCount() == 0 && donor->GetRace() == nullptr &&
-                    donor->faceNPC == nullptr &&
-                    headPartCount == 0 && donor->unk3D8 == nullptr && donor->unk3E0 == nullptr &&
-                    donor->unk3E8 == nullptr && donor->tintAVMData.size() == 0 &&
-                    donor->shapeBlendData == nullptr && donor->pronoun.underlying() == 0;
-                if (i == 0 || !initialized) {
-                    a_out(std::format(
-                        "donor cycle={} ptr={} formID=0x{:08X} refCount={} vtableMatch={} race={} faceNPC={} headParts={} morphPtrs={}/{}/{} tint={} shapeBlend={} pronoun={} initialized={}",
-                        i, static_cast<void*>(donor), formID, donor->QRefCount(),
-                        *reinterpret_cast<const std::uintptr_t*>(donor) == npcVtable,
-                        static_cast<void*>(donor->GetRace()), static_cast<void*>(donor->faceNPC),
-                        headPartCount, static_cast<void*>(donor->unk3D8),
-                        static_cast<void*>(donor->unk3E0), static_cast<void*>(donor->unk3E8),
-                        donor->tintAVMData.size(), static_cast<void*>(donor->shapeBlendData),
-                        donor->pronoun.underlying(), initialized));
-                }
-                destroy(donor, 1);
-                const bool unregistered = RE::TESForm::LookupByID<RE::TESNPC>(formID) == nullptr;
-                if (!initialized) {
-                    a_out("donor: engine object did not satisfy registered-empty-container invariants; stopped after safe teardown");
-                    break;
-                }
-                if (!unregistered) {
-                    a_out(std::format(
-                        "donor: formID 0x{:08X} remained registered after engine teardown; FAIL CLOSED",
-                        formID));
-                    break;
-                }
-                ++valid;
-            }
-            a_out(std::format(
-                "donor: {}/{} Create(false)+registered-empty+engine-destroy+unregister cycles passed",
-                valid, count));
-        }
-
-        void RunDonorSeed(const LineSink& a_out, const std::vector<std::string>& a_args)
-        {
-            if (!RequireMutationOperational(a_out, "donorseed")) {
-                return;
-            }
-            if (a_args.size() < 4) {
-                a_out("usage: npcapp donorseed <plugin:localFormID> <preset.npc>");
-                return;
-            }
-            auto* target = ResolveTargetArgument(a_out, a_args[2]);
-            if (!target) {
-                return;
-            }
-
-            const std::filesystem::path path{ JoinArguments(a_args, 3) };
-            const auto decoded = LoadCkPreset(path);
-            if (!decoded.preset) {
-                a_out(std::format("donorseed: preset rejected path={} issues={}",
-                                  path.string(), decoded.issues.size()));
-                for (const auto& issue : decoded.issues) {
-                    a_out(std::format("  preset issue code={} @0x{:X}: {}",
-                                      issue.code, issue.offset, issue.message));
-                }
-                return;
-            }
-            const auto resolved = ResolveAppearanceDependencies(*decoded.preset, target);
-            ReportDependencyResolution(a_out, resolved);
-            if (!resolved.Complete()) {
-                a_out("donorseed: dependency resolution incomplete; no donor created");
-                return;
-            }
-
-            const auto factoryAddress = REL::Relocation<std::uintptr_t>{ kNpcFactorySingletonID }.address();
-            const auto factoryVtable = REL::Relocation<std::uintptr_t>{ kNpcFactoryVtableID }.address();
-            const auto createAddress = REL::Relocation<std::uintptr_t>{ kNpcFactoryCreateID }.address();
-            const auto npcVtable = REL::Relocation<std::uintptr_t>{ kNpcPrimaryVtableID }.address();
-            const auto destructorAddress =
-                REL::Relocation<std::uintptr_t>{ kNpcScalarDeletingDestructorID }.address();
-            const auto copyAddress = REL::Relocation<std::uintptr_t>{ kNpcCopyAppearanceID }.address();
-
-            if (!Util::IsReadableRange(factoryAddress, sizeof(std::uintptr_t)) ||
-                *reinterpret_cast<const std::uintptr_t*>(factoryAddress) != factoryVtable ||
-                !Util::IsReadableRange(factoryVtable + sizeof(std::uintptr_t), sizeof(std::uintptr_t)) ||
-                *reinterpret_cast<const std::uintptr_t*>(factoryVtable + sizeof(std::uintptr_t)) != createAddress ||
-                !HasExpectedBytes(createAddress, kNpcFactoryCreateGate) ||
-                !HasExpectedBytes(destructorAddress, kNpcDestructorGate) ||
-                !HasExpectedBytes(copyAddress, kNpcCopyAppearanceGate)) {
-                a_out("donorseed: factory/create/copy/destructor contract mismatch; FAIL CLOSED");
-                return;
-            }
-
-            using Create = RE::TESNPC* (*)(void*, bool);
-            using Copy = void (*)(RE::TESNPC*, RE::TESNPC*, bool);
-            using Destroy = RE::TESNPC* (*)(RE::TESNPC*, std::uint32_t);
-            const auto create = reinterpret_cast<Create>(createAddress);
-            const auto copy = reinterpret_cast<Copy>(copyAddress);
-            const auto destroy = reinterpret_cast<Destroy>(destructorAddress);
-
-            const auto targetNonVisualBefore = Snapshot(target);
-            const auto targetVisualBefore = SnapshotVisualSeed(target);
-            auto* donor = create(reinterpret_cast<void*>(factoryAddress), false);
-            if (!donor) {
-                a_out("donorseed: Create(false) returned null; no target mutation");
-                return;
-            }
-            const auto donorFormID = donor->GetFormID();
-            std::size_t donorInitialHeadParts = 0;
-            {
-                auto headParts = donor->headParts.Lock();
-                donorInitialHeadParts = (*headParts).size();
-            }
-            const bool donorInitialized =
-                *reinterpret_cast<const std::uintptr_t*>(donor) == npcVtable &&
-                donorFormID != 0 && RE::TESForm::LookupByID<RE::TESNPC>(donorFormID) == donor &&
-                donor->QRefCount() == 0 && donor->GetRace() == nullptr && donor->faceNPC == nullptr &&
-                donorInitialHeadParts == 0 && donor->unk3D8 == nullptr && donor->unk3E0 == nullptr &&
-                donor->unk3E8 == nullptr && donor->tintAVMData.size() == 0 &&
-                donor->shapeBlendData == nullptr && donor->pronoun.underlying() == 0;
-            if (!donorInitialized) {
-                destroy(donor, 1);
-                a_out("donorseed: donor failed registered-empty-container invariants; safely destroyed before copy");
-                return;
-            }
-
-            copy(donor, target, false);
-            const bool engineCopiedSkinTone = donor->skinToneIndex == target->skinToneIndex;
-            const auto donorVisual = SnapshotVisualSeed(donor);
-            const auto targetNonVisualMid = Snapshot(target);
-            const auto targetVisualMid = SnapshotVisualSeed(target);
-            const bool valuesMatch = SameVisualSeedValues(targetVisualBefore, donorVisual);
-            const bool storageIndependent =
-                HasIndependentVisualStorage(targetVisualBefore, donorVisual);
-            const bool targetUnchangedMid =
-                targetNonVisualBefore == targetNonVisualMid && targetVisualBefore == targetVisualMid;
-
-            destroy(donor, 1);
-            const bool donorUnregistered =
-                RE::TESForm::LookupByID<RE::TESNPC>(donorFormID) == nullptr;
-            const auto targetNonVisualAfter = Snapshot(target);
-            const auto targetVisualAfter = SnapshotVisualSeed(target);
-            const bool targetUnchangedAfter =
-                targetNonVisualBefore == targetNonVisualAfter && targetVisualBefore == targetVisualAfter;
-            const bool passed = valuesMatch && storageIndependent && targetUnchangedMid &&
-                                donorUnregistered && targetUnchangedAfter;
-
-            a_out(std::format(
-                "donorseed: donorFormID=0x{:08X} engineCopiedSkinToneByte={} visualValuesMatch={} storageIndependent={} targetUnchangedMid={} donorUnregistered={} targetUnchangedAfter={}",
-                donorFormID, engineCopiedSkinTone,
-                valuesMatch, storageIndependent, targetUnchangedMid,
-                donorUnregistered, targetUnchangedAfter));
-            a_out(std::format(
-                "donorseed: source/donor headParts={}/{} morphRegions={}/{} boneValues={}/{} boneGroups={}/{} tint={}/{} shapeBlend={}/{}",
-                targetVisualBefore.headParts.size(), donorVisual.headParts.size(),
-                targetVisualBefore.morphRegionCount, donorVisual.morphRegionCount,
-                targetVisualBefore.boneValueCount, donorVisual.boneValueCount,
-                targetVisualBefore.boneGroupCount, donorVisual.boneGroupCount,
-                targetVisualBefore.tintCount, donorVisual.tintCount,
-                targetVisualBefore.shapeBlendCount, donorVisual.shapeBlendCount));
-            if (!valuesMatch) {
-                ReportVisualSeedComparison(a_out, targetVisualBefore, donorVisual);
-            }
-            a_out(passed ?
-                      "donorseed: PASS engine-owned donor seed/copy/teardown; preset population pending; no target mutation" :
-                      "donorseed: FAIL CLOSED; do not advance to preset population or target application");
-        }
-
-        void RunDonorMorph(const LineSink& a_out, const std::vector<std::string>& a_args)
-        {
-            if (!RequireMutationOperational(a_out, "donormorph")) {
-                return;
-            }
-            if (a_args.size() < 4) {
-                a_out("usage: npcapp donormorph <plugin:localFormID> <preset.npc>");
-                return;
-            }
-            auto* target = ResolveTargetArgument(a_out, a_args[2]);
-            if (!target) {
-                return;
-            }
-            const std::filesystem::path path{ JoinArguments(a_args, 3) };
-            const auto decoded = LoadCkPreset(path);
-            if (!decoded.preset) {
-                a_out(std::format("donormorph: preset rejected path={} issues={}",
-                                  path.string(), decoded.issues.size()));
-                return;
-            }
-            const auto resolved = ResolveAppearanceDependencies(*decoded.preset, target);
-            ReportDependencyResolution(a_out, resolved);
-            if (!resolved.Complete()) {
-                a_out("donormorph: dependency resolution incomplete; no donor created");
-                return;
-            }
-
-            const auto factoryAddress = REL::Relocation<std::uintptr_t>{ kNpcFactorySingletonID }.address();
-            const auto factoryVtable = REL::Relocation<std::uintptr_t>{ kNpcFactoryVtableID }.address();
-            const auto createAddress = REL::Relocation<std::uintptr_t>{ kNpcFactoryCreateID }.address();
-            const auto npcVtable = REL::Relocation<std::uintptr_t>{ kNpcPrimaryVtableID }.address();
-            const auto destructorAddress =
-                REL::Relocation<std::uintptr_t>{ kNpcScalarDeletingDestructorID }.address();
-            const auto copyAddress = REL::Relocation<std::uintptr_t>{ kNpcCopyAppearanceID }.address();
-            const auto shapeAddress = REL::Relocation<std::uintptr_t>{ kNpcSetShapeBlendID }.address();
-            const auto bodyAddress = REL::Relocation<std::uintptr_t>{ kNpcSetBodyMorphID }.address();
-            const auto boneAddress = REL::Relocation<std::uintptr_t>{ kNpcSetBoneValueID }.address();
-            const auto boneGroupAddress =
-                REL::Relocation<std::uintptr_t>{ kNpcSetBoneGroupValueID }.address();
-
-            if (!Util::IsReadableRange(factoryAddress, sizeof(std::uintptr_t)) ||
-                *reinterpret_cast<const std::uintptr_t*>(factoryAddress) != factoryVtable ||
-                !Util::IsReadableRange(factoryVtable + sizeof(std::uintptr_t), sizeof(std::uintptr_t)) ||
-                *reinterpret_cast<const std::uintptr_t*>(factoryVtable + sizeof(std::uintptr_t)) != createAddress ||
-                !HasExpectedBytes(createAddress, kNpcFactoryCreateGate) ||
-                !HasExpectedBytes(destructorAddress, kNpcDestructorGate) ||
-                !HasExpectedBytes(copyAddress, kNpcCopyAppearanceGate) ||
-                !HasExpectedBytes(shapeAddress, kNpcSetShapeBlendGate) ||
-                !HasExpectedBytes(bodyAddress, kNpcSetBodyMorphGate) ||
-                !HasExpectedBytes(boneAddress, kNpcSetBoneValueGate) ||
-                !HasExpectedBytes(boneGroupAddress, kNpcSetBoneGroupValueGate)) {
-                a_out("donormorph: factory/copy/morph-setter/destructor contract mismatch; FAIL CLOSED");
-                return;
-            }
-
-            using Create = RE::TESNPC* (*)(void*, bool);
-            using Copy = void (*)(RE::TESNPC*, RE::TESNPC*, bool);
-            using SetShape = void (*)(RE::TESNPC*, const RE::BSFixedStringCS*, float);
-            using SetBody = void (*)(RE::TESNPC*, std::uint32_t, float);
-            using SetBone = void (*)(RE::TESNPC*, std::uint32_t, float);
-            using EnsureBoneGroup = void (*)(
-                RE::TESNPC*, std::uint32_t, const RE::BSFixedStringCS*);
-            using Destroy = RE::TESNPC* (*)(RE::TESNPC*, std::uint32_t);
-            const auto create = reinterpret_cast<Create>(createAddress);
-            const auto copy = reinterpret_cast<Copy>(copyAddress);
-            const auto setShape = reinterpret_cast<SetShape>(shapeAddress);
-            const auto setBody = reinterpret_cast<SetBody>(bodyAddress);
-            const auto setBone = reinterpret_cast<SetBone>(boneAddress);
-            const auto ensureBoneGroup = reinterpret_cast<EnsureBoneGroup>(boneGroupAddress);
-            const auto destroy = reinterpret_cast<Destroy>(destructorAddress);
-
-            const auto targetNonVisualBefore = Snapshot(target);
-            const auto targetVisualBefore = SnapshotVisualSeed(target);
-            auto* donor = create(reinterpret_cast<void*>(factoryAddress), false);
-            if (!donor) {
-                a_out("donormorph: Create(false) returned null; no target mutation");
-                return;
-            }
-            const auto donorFormID = donor->GetFormID();
-            const bool donorInitialized =
-                *reinterpret_cast<const std::uintptr_t*>(donor) == npcVtable &&
-                donorFormID != 0 && RE::TESForm::LookupByID<RE::TESNPC>(donorFormID) == donor &&
-                donor->QRefCount() == 0 && donor->unk3D8 == nullptr && donor->unk3E0 == nullptr &&
-                donor->unk3E8 == nullptr && donor->shapeBlendData == nullptr;
-            if (!donorInitialized) {
-                destroy(donor, 1);
-                a_out("donormorph: donor failed empty-container invariants; safely destroyed before copy");
-                return;
-            }
-
-            copy(donor, target, false);
-            donor->morphWeight.thin = static_cast<float>(decoded.preset->morphWeights.x);
-            donor->morphWeight.muscular = static_cast<float>(decoded.preset->morphWeights.y);
-            donor->morphWeight.fat = static_cast<float>(decoded.preset->morphWeights.z);
-            for (std::size_t i = 0; i < decoded.preset->bodyMorphRegionValues.size(); ++i) {
-                setBody(donor, static_cast<std::uint32_t>(i),
-                        static_cast<float>(decoded.preset->bodyMorphRegionValues[i]));
-            }
-            for (const auto& morph : decoded.preset->facialMorphSliders) {
-                const RE::BSFixedStringCS key{ morph.name.c_str() };
-                setShape(donor, &key, static_cast<float>(morph.value));
-            }
-            for (const auto& region : decoded.preset->facialBoneRegions) {
-                for (const auto& slider : region.sliders) {
-                    if (slider.id != 0) {
-                        setBone(donor, slider.id, static_cast<float>(slider.value));
-                    } else {
-                        const RE::BSFixedStringCS key{ slider.groupName.c_str() };
-                        ensureBoneGroup(donor, region.regionID, &key);
-                        if (donor->unk3E8) {
-                            const auto outer = donor->unk3E8->find(region.regionID);
-                            if (outer != donor->unk3E8->end() && outer->value) {
-                                for (auto& entry : *outer->value) {
-                                    if (::_stricmp(SafeText(entry.key.c_str()),
-                                                   slider.groupName.c_str()) == 0) {
-                                        entry.value = static_cast<float>(slider.value);
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            const bool morphsMatch =
-                ValidateDonorMorphPopulation(a_out, donor, *decoded.preset);
-            const auto donorVisual = SnapshotVisualSeed(donor);
-            const bool storageIndependent =
-                HasIndependentVisualStorage(targetVisualBefore, donorVisual);
-            const bool targetUnchangedMid =
-                targetNonVisualBefore == Snapshot(target) &&
-                targetVisualBefore == SnapshotVisualSeed(target);
-
-            destroy(donor, 1);
-            const bool donorUnregistered =
-                RE::TESForm::LookupByID<RE::TESNPC>(donorFormID) == nullptr;
-            const bool targetUnchangedAfter =
-                targetNonVisualBefore == Snapshot(target) &&
-                targetVisualBefore == SnapshotVisualSeed(target);
-            const bool passed = morphsMatch && storageIndependent && targetUnchangedMid &&
-                                donorUnregistered && targetUnchangedAfter;
-            a_out(std::format(
-                "donormorph: populated containers body={} shape={} boneValues={} boneRegionGroups={}",
-                donorVisual.morphRegionCount, donorVisual.shapeBlendCount,
-                donorVisual.boneValueCount, donorVisual.boneGroupCount));
-            a_out(std::format(
-                "donormorph: donorFormID=0x{:08X} morphsMatch={} storageIndependent={} targetUnchangedMid={} donorUnregistered={} targetUnchangedAfter={}",
-                donorFormID, morphsMatch, storageIndependent, targetUnchangedMid,
-                donorUnregistered, targetUnchangedAfter));
-            a_out(passed ?
-                      "donormorph: PASS decoded body/shape/bone population on temporary donor; headparts/colors/AVM and all target writes remain disabled" :
-                      "donormorph: FAIL CLOSED; do not advance to other donor categories or target application");
-        }
-
-        void RunDonorVisual(const LineSink& a_out, const std::vector<std::string>& a_args)
-        {
-            if (!RequireMutationOperational(a_out, "donorvisual")) {
-                return;
-            }
-            if (a_args.size() < 4) {
-                a_out("usage: npcapp donorvisual <plugin:localFormID> <preset.npc>");
-                return;
-            }
-            auto* target = ResolveTargetArgument(a_out, a_args[2]);
-            if (!target) {
-                return;
-            }
-            const std::filesystem::path path{ JoinArguments(a_args, 3) };
-            const auto decoded = LoadCkPreset(path);
-            if (!decoded.preset) {
-                a_out(std::format("donorvisual: preset rejected path={} issues={}",
-                                  path.string(), decoded.issues.size()));
-                return;
-            }
-            const auto resolved = ResolveAppearanceDependencies(*decoded.preset, target);
-            ReportDependencyResolution(a_out, resolved);
-            if (!resolved.Complete()) {
-                a_out("donorvisual: dependency resolution incomplete; no donor created");
-                return;
-            }
-
-            const auto factoryAddress = REL::Relocation<std::uintptr_t>{ kNpcFactorySingletonID }.address();
-            const auto factoryVtable = REL::Relocation<std::uintptr_t>{ kNpcFactoryVtableID }.address();
-            const auto createAddress = REL::Relocation<std::uintptr_t>{ kNpcFactoryCreateID }.address();
-            const auto npcVtable = REL::Relocation<std::uintptr_t>{ kNpcPrimaryVtableID }.address();
-            const auto destructorAddress =
-                REL::Relocation<std::uintptr_t>{ kNpcScalarDeletingDestructorID }.address();
-            const auto copyAddress = REL::Relocation<std::uintptr_t>{ kNpcCopyAppearanceID }.address();
-            const auto removeHeadAddress =
-                REL::Relocation<std::uintptr_t>{ kNpcRemoveHeadPartID }.address();
-            const auto changeHeadAddress =
-                REL::Relocation<std::uintptr_t>{ kNpcChangeHeadPartID }.address();
-            const auto resolveEntryAddress =
-                REL::Relocation<std::uintptr_t>{ kFaceDbResolveEntryID }.address();
-            const auto setAvmAddress =
-                REL::Relocation<std::uintptr_t>{ kNpcSetAvmDataID }.address();
-            const auto removeAvmAddress =
-                REL::Relocation<std::uintptr_t>{ kNpcRemoveAvmDataID }.address();
-
-            if (!Util::IsReadableRange(factoryAddress, sizeof(std::uintptr_t)) ||
-                *reinterpret_cast<const std::uintptr_t*>(factoryAddress) != factoryVtable ||
-                !Util::IsReadableRange(factoryVtable + sizeof(std::uintptr_t), sizeof(std::uintptr_t)) ||
-                *reinterpret_cast<const std::uintptr_t*>(factoryVtable + sizeof(std::uintptr_t)) != createAddress ||
-                !HasExpectedBytes(createAddress, kNpcFactoryCreateGate) ||
-                !HasExpectedBytes(destructorAddress, kNpcDestructorGate) ||
-                !HasExpectedBytes(copyAddress, kNpcCopyAppearanceGate) ||
-                !HasExpectedBytes(removeHeadAddress, kNpcRemoveHeadPartGate) ||
-                !HasExpectedBytes(changeHeadAddress, kNpcChangeHeadPartGate) ||
-                !HasExpectedBytes(resolveEntryAddress, kFaceDbResolveEntryGate) ||
-                !HasExpectedBytes(setAvmAddress, kNpcSetAvmDataGate) ||
-                !HasExpectedBytes(removeAvmAddress, kNpcRemoveAvmDataGate)) {
-                a_out("donorvisual: factory/copy/headpart/FaceDB/AVM/destructor contract mismatch; FAIL CLOSED");
-                return;
-            }
-
-            const auto resolveEntry = reinterpret_cast<ResolveFaceDbEntry>(resolveEntryAddress);
-            std::vector<MaterializedAvmLayer> expectedAvms;
-            if (!MaterializeAvmLayers(a_out, *decoded.preset, resolveEntry, expectedAvms)) {
-                a_out("donorvisual: AVM materialization incomplete; no donor created");
-                return;
-            }
-
-            using Create = RE::TESNPC* (*)(void*, bool);
-            using Copy = void (*)(RE::TESNPC*, RE::TESNPC*, bool);
-            using RemoveHeadPart = void (*)(RE::TESNPC*, RE::BGSHeadPart*, bool);
-            using ChangeHeadPart = void (*)(RE::TESNPC*, RE::BGSHeadPart*);
-            using SetAvmData = void (*)(RE::TESNPC*, const RE::AVMData*);
-            using RemoveAvmData = void (*)(RE::TESNPC*, const RE::BSFixedString*);
-            using Destroy = RE::TESNPC* (*)(RE::TESNPC*, std::uint32_t);
-            const auto create = reinterpret_cast<Create>(createAddress);
-            const auto copy = reinterpret_cast<Copy>(copyAddress);
-            const auto removeHeadPart = reinterpret_cast<RemoveHeadPart>(removeHeadAddress);
-            const auto changeHeadPart = reinterpret_cast<ChangeHeadPart>(changeHeadAddress);
-            const auto setAvmData = reinterpret_cast<SetAvmData>(setAvmAddress);
-            const auto removeAvmData = reinterpret_cast<RemoveAvmData>(removeAvmAddress);
-            const auto destroy = reinterpret_cast<Destroy>(destructorAddress);
-
-            const auto targetNonVisualBefore = Snapshot(target);
-            const auto targetVisualBefore = SnapshotVisualSeed(target);
-            auto* donor = create(reinterpret_cast<void*>(factoryAddress), false);
-            if (!donor) {
-                a_out("donorvisual: Create(false) returned null; no target mutation");
-                return;
-            }
-            const auto donorFormID = donor->GetFormID();
-            const bool donorInitialized =
-                *reinterpret_cast<const std::uintptr_t*>(donor) == npcVtable &&
-                donorFormID != 0 && RE::TESForm::LookupByID<RE::TESNPC>(donorFormID) == donor &&
-                donor->QRefCount() == 0 && donor->tintAVMData.empty();
-            if (!donorInitialized) {
-                destroy(donor, 1);
-                a_out("donorvisual: donor failed registered-empty invariants; safely destroyed before copy");
-                return;
-            }
-
-            copy(donor, target, false);
-
-            std::vector<RE::BGSHeadPart*> donorHeadParts;
-            {
-                auto headParts = donor->headParts.Lock();
-                donorHeadParts.assign((*headParts).begin(), (*headParts).end());
-            }
-            for (std::size_t i = 1; i < resolved.uniqueHeadParts.size(); ++i) {
-                if (resolved.uniqueHeadParts[i]) {
-                    continue;
-                }
-                for (auto* part : donorHeadParts) {
-                    if (part && static_cast<std::size_t>(part->type.get()) == i) {
-                        removeHeadPart(donor, part, false);
-                    }
-                }
-            }
-            for (auto* part : resolved.uniqueHeadParts) {
-                if (!part) {
-                    continue;
-                }
-                bool present = false;
-                {
-                    auto headParts = donor->headParts.Lock();
-                    present = std::ranges::find(*headParts, part) != (*headParts).end();
-                }
-                if (!present) {
-                    changeHeadPart(donor, part);
-                }
-            }
-            for (auto* part : resolved.miscHeadParts) {
-                bool present = false;
-                {
-                    auto headParts = donor->headParts.Lock();
-                    present = std::ranges::find(*headParts, part) != (*headParts).end();
-                }
-                if (!present) {
-                    changeHeadPart(donor, part);
-                }
-            }
-
-            donor->skinToneIndex = static_cast<std::uint8_t>(decoded.preset->skinTone);
-            donor->teeth = decoded.preset->teethCustomization;
-            donor->jewelryColor = decoded.preset->jewelryColor;
-            donor->eyeColor = decoded.preset->eyeColor;
-            donor->hairColor = decoded.preset->hairColor;
-            donor->facialColor = decoded.preset->facialHairColor;
-            donor->eyebrowColor = decoded.preset->browHairColor;
-
-            std::vector<RE::BSFixedString> existingAvmCategories;
-            existingAvmCategories.reserve(donor->tintAVMData.size());
-            for (const auto& avm : donor->tintAVMData) {
-                existingAvmCategories.push_back(avm.category);
-            }
-            for (const auto& category : existingAvmCategories) {
-                const bool desired = std::ranges::any_of(
-                    expectedAvms, [&](const MaterializedAvmLayer& a_expected) {
-                        return ::_stricmp(SafeText(category.c_str()),
-                                          SafeText(a_expected.data.category.c_str())) == 0;
-                    });
-                if (!desired) {
-                    removeAvmData(donor, &category);
-                }
-            }
-            for (const auto& expected : expectedAvms) {
-                setAvmData(donor, &expected.data);
-            }
-
-            const bool visualValuesMatch = ValidateDonorVisualPopulation(
-                a_out, donor, *decoded.preset, resolved, expectedAvms);
-            const auto donorVisual = SnapshotVisualSeed(donor);
-            const bool storageIndependent =
-                HasIndependentVisualStorage(targetVisualBefore, donorVisual);
-            const bool targetUnchangedMid =
-                targetNonVisualBefore == Snapshot(target) &&
-                targetVisualBefore == SnapshotVisualSeed(target);
-
-            destroy(donor, 1);
-            const bool donorUnregistered =
-                RE::TESForm::LookupByID<RE::TESNPC>(donorFormID) == nullptr;
-            const bool targetUnchangedAfter =
-                targetNonVisualBefore == Snapshot(target) &&
-                targetVisualBefore == SnapshotVisualSeed(target);
-            const bool passed = visualValuesMatch && storageIndependent && targetUnchangedMid &&
-                                donorUnregistered && targetUnchangedAfter;
-            a_out(std::format(
-                "donorvisual: populated headParts={} colors=7 avm={}",
-                donorVisual.headParts.size(), donorVisual.tintCount));
-            a_out(std::format(
-                "donorvisual: donorFormID=0x{:08X} visualValuesMatch={} storageIndependent={} targetUnchangedMid={} donorUnregistered={} targetUnchangedAfter={}",
-                donorFormID, visualValuesMatch, storageIndependent, targetUnchangedMid,
-                donorUnregistered, targetUnchangedAfter));
-            a_out(passed ?
-                      "donorvisual: PASS decoded headparts/colors/AVM population on temporary donor; all target writes remain disabled" :
-                      "donorvisual: FAIL CLOSED; do not advance to target application");
-        }
-
-        void RunDonorCopy(const LineSink& a_out, const std::vector<std::string>& a_args)
-        {
-            if (!RequireMutationOperational(a_out, "donorcopy")) {
-                return;
-            }
-            if (a_args.size() < 4) {
-                a_out("usage: npcapp donorcopy <plugin:localFormID> <preset.npc>");
-                return;
-            }
-            auto* target = ResolveTargetArgument(a_out, a_args[2]);
-            if (!target) {
-                return;
-            }
-            const std::filesystem::path path{ JoinArguments(a_args, 3) };
-            const auto decoded = LoadCkPreset(path);
-            if (!decoded.preset) {
-                a_out(std::format("donorcopy: preset rejected path={} issues={}",
-                                  path.string(), decoded.issues.size()));
-                return;
-            }
-            const auto resolved = ResolveAppearanceDependencies(*decoded.preset, target);
-            ReportDependencyResolution(a_out, resolved);
-            if (!resolved.Complete()) {
-                a_out("donorcopy: dependency resolution incomplete; no donors created");
-                return;
-            }
-
-            const auto factoryAddress = REL::Relocation<std::uintptr_t>{ kNpcFactorySingletonID }.address();
-            const auto factoryVtable = REL::Relocation<std::uintptr_t>{ kNpcFactoryVtableID }.address();
-            const auto createAddress = REL::Relocation<std::uintptr_t>{ kNpcFactoryCreateID }.address();
-            const auto npcVtable = REL::Relocation<std::uintptr_t>{ kNpcPrimaryVtableID }.address();
-            const auto destructorAddress =
-                REL::Relocation<std::uintptr_t>{ kNpcScalarDeletingDestructorID }.address();
-            const auto copyAddress = REL::Relocation<std::uintptr_t>{ kNpcCopyAppearanceID }.address();
-            const auto shapeAddress = REL::Relocation<std::uintptr_t>{ kNpcSetShapeBlendID }.address();
-            const auto bodyAddress = REL::Relocation<std::uintptr_t>{ kNpcSetBodyMorphID }.address();
-            const auto boneAddress = REL::Relocation<std::uintptr_t>{ kNpcSetBoneValueID }.address();
-            const auto boneGroupAddress =
-                REL::Relocation<std::uintptr_t>{ kNpcSetBoneGroupValueID }.address();
-            const auto removeHeadAddress =
-                REL::Relocation<std::uintptr_t>{ kNpcRemoveHeadPartID }.address();
-            const auto changeHeadAddress =
-                REL::Relocation<std::uintptr_t>{ kNpcChangeHeadPartID }.address();
-            const auto resolveEntryAddress =
-                REL::Relocation<std::uintptr_t>{ kFaceDbResolveEntryID }.address();
-            const auto setAvmAddress =
-                REL::Relocation<std::uintptr_t>{ kNpcSetAvmDataID }.address();
-            const auto removeAvmAddress =
-                REL::Relocation<std::uintptr_t>{ kNpcRemoveAvmDataID }.address();
-            const auto ownedCopyAddress = kNpcOwnedVisualCopyOffset.address();
-
-            if (!Util::IsReadableRange(factoryAddress, sizeof(std::uintptr_t)) ||
-                *reinterpret_cast<const std::uintptr_t*>(factoryAddress) != factoryVtable ||
-                !Util::IsReadableRange(factoryVtable + sizeof(std::uintptr_t), sizeof(std::uintptr_t)) ||
-                *reinterpret_cast<const std::uintptr_t*>(factoryVtable + sizeof(std::uintptr_t)) != createAddress ||
-                !HasExpectedBytes(createAddress, kNpcFactoryCreateGate) ||
-                !HasExpectedBytes(destructorAddress, kNpcDestructorGate) ||
-                !HasExpectedBytes(copyAddress, kNpcCopyAppearanceGate) ||
-                !HasExpectedBytes(shapeAddress, kNpcSetShapeBlendGate) ||
-                !HasExpectedBytes(bodyAddress, kNpcSetBodyMorphGate) ||
-                !HasExpectedBytes(boneAddress, kNpcSetBoneValueGate) ||
-                !HasExpectedBytes(boneGroupAddress, kNpcSetBoneGroupValueGate) ||
-                !HasExpectedBytes(removeHeadAddress, kNpcRemoveHeadPartGate) ||
-                !HasExpectedBytes(changeHeadAddress, kNpcChangeHeadPartGate) ||
-                !HasExpectedBytes(resolveEntryAddress, kFaceDbResolveEntryGate) ||
-                !HasExpectedBytes(setAvmAddress, kNpcSetAvmDataGate) ||
-                !HasExpectedBytes(removeAvmAddress, kNpcRemoveAvmDataGate) ||
-                !HasExpectedBytes(ownedCopyAddress, kNpcOwnedVisualCopyGate)) {
-                a_out("donorcopy: factory/population/owned-copy/destructor contract mismatch; FAIL CLOSED");
-                return;
-            }
-
-            const auto resolveEntry = reinterpret_cast<ResolveFaceDbEntry>(resolveEntryAddress);
-            std::vector<MaterializedAvmLayer> expectedAvms;
-            if (!MaterializeAvmLayers(a_out, *decoded.preset, resolveEntry, expectedAvms)) {
-                a_out("donorcopy: AVM materialization incomplete; no donors created");
-                return;
-            }
-
-            using Create = RE::TESNPC* (*)(void*, bool);
-            using Copy = void (*)(RE::TESNPC*, RE::TESNPC*, bool);
-            using OwnedCopy = void (*)(RE::TESNPC*, RE::TESNPC*, bool);
-            using Destroy = RE::TESNPC* (*)(RE::TESNPC*, std::uint32_t);
-            const auto create = reinterpret_cast<Create>(createAddress);
-            const auto copy = reinterpret_cast<Copy>(copyAddress);
-            const auto ownedCopy = reinterpret_cast<OwnedCopy>(ownedCopyAddress);
-            const auto setShape = reinterpret_cast<SetShapeBlend>(shapeAddress);
-            const auto setBody = reinterpret_cast<SetBodyMorph>(bodyAddress);
-            const auto setBone = reinterpret_cast<SetFacialBone>(boneAddress);
-            const auto ensureBoneGroup =
-                reinterpret_cast<EnsureFacialBoneGroup>(boneGroupAddress);
-            const auto removeHeadPart = reinterpret_cast<RemoveHeadPart>(removeHeadAddress);
-            const auto changeHeadPart = reinterpret_cast<ChangeHeadPart>(changeHeadAddress);
-            const auto setAvmData = reinterpret_cast<SetAvmData>(setAvmAddress);
-            const auto removeAvmData = reinterpret_cast<RemoveAvmData>(removeAvmAddress);
-            const auto destroy = reinterpret_cast<Destroy>(destructorAddress);
-
-            const auto targetNonVisualBefore = Snapshot(target);
-            const auto targetVisualBefore = SnapshotVisualSeed(target);
-            auto* sourceDonor = create(reinterpret_cast<void*>(factoryAddress), false);
-            if (!sourceDonor) {
-                a_out("donorcopy: source Create(false) returned null; no target mutation");
-                return;
-            }
-            auto* destinationDonor = create(reinterpret_cast<void*>(factoryAddress), false);
-            if (!destinationDonor) {
-                const auto sourceFormID = sourceDonor->GetFormID();
-                destroy(sourceDonor, 1);
-                a_out(std::format(
-                    "donorcopy: destination Create(false) returned null; source 0x{:08X} destroyed; no target mutation",
-                    sourceFormID));
-                return;
-            }
-            const auto sourceFormID = sourceDonor->GetFormID();
-            const auto destinationFormID = destinationDonor->GetFormID();
-            const auto initialized = [&](RE::TESNPC* a_donor, RE::TESFormID a_formID) {
-                return *reinterpret_cast<const std::uintptr_t*>(a_donor) == npcVtable &&
-                       a_formID != 0 &&
-                       RE::TESForm::LookupByID<RE::TESNPC>(a_formID) == a_donor &&
-                       a_donor->QRefCount() == 0 && a_donor->unk3D8 == nullptr &&
-                       a_donor->unk3E0 == nullptr && a_donor->unk3E8 == nullptr &&
-                       a_donor->shapeBlendData == nullptr && a_donor->tintAVMData.empty();
-            };
-            if (!initialized(sourceDonor, sourceFormID) ||
-                !initialized(destinationDonor, destinationFormID)) {
-                destroy(destinationDonor, 1);
-                destroy(sourceDonor, 1);
-                a_out("donorcopy: donor pair failed registered-empty invariants; both safely destroyed");
-                return;
-            }
-
-            copy(sourceDonor, target, false);
-            copy(destinationDonor, target, false);
-            PopulatePresetMorphs(sourceDonor, *decoded.preset, setShape, setBody,
-                                 setBone, ensureBoneGroup);
-            PopulatePresetVisuals(sourceDonor, *decoded.preset, resolved, expectedAvms,
-                                  removeHeadPart, changeHeadPart,
-                                  setAvmData, removeAvmData);
-
-            const bool sourceMorphsValid =
-                ValidateDonorMorphPopulation(a_out, sourceDonor, *decoded.preset);
-            const bool sourceVisualsValid = ValidateDonorVisualPopulation(
-                a_out, sourceDonor, *decoded.preset, resolved, expectedAvms);
-            const auto sourceVisualBefore = SnapshotVisualSeed(sourceDonor);
-
-            destinationDonor->morphWeight.thin =
-                static_cast<float>(decoded.preset->morphWeights.x);
-            destinationDonor->morphWeight.muscular =
-                static_cast<float>(decoded.preset->morphWeights.y);
-            destinationDonor->morphWeight.fat =
-                static_cast<float>(decoded.preset->morphWeights.z);
-            for (std::size_t i = 0; i < decoded.preset->bodyMorphRegionValues.size(); ++i) {
-                setBody(destinationDonor, static_cast<std::uint32_t>(i),
-                        static_cast<float>(decoded.preset->bodyMorphRegionValues[i]));
-            }
-            destinationDonor->skinToneIndex =
-                static_cast<std::uint8_t>(decoded.preset->skinTone);
-
-            const auto destinationNonVisualBefore = Snapshot(destinationDonor);
-            const auto destinationVisualBefore = SnapshotVisualSeed(destinationDonor);
-            const bool controlledDifference =
-                sourceVisualBefore.headParts != destinationVisualBefore.headParts ||
-                sourceVisualBefore.eyeColor != destinationVisualBefore.eyeColor ||
-                sourceVisualBefore.hairColor != destinationVisualBefore.hairColor;
-            const bool facePolicyPrecondition =
-                sourceDonor->faceNPC == nullptr && destinationDonor->faceNPC == nullptr;
-
-            ownedCopy(destinationDonor, sourceDonor, false);
-
-            const auto destinationVisualAfter = SnapshotVisualSeed(destinationDonor);
-            const bool excludedFieldsPreserved =
-                destinationVisualBefore.thin == destinationVisualAfter.thin &&
-                destinationVisualBefore.muscular == destinationVisualAfter.muscular &&
-                destinationVisualBefore.fat == destinationVisualAfter.fat &&
-                destinationVisualBefore.morphRegionCount == destinationVisualAfter.morphRegionCount &&
-                destinationVisualBefore.morphRegionStorage == destinationVisualAfter.morphRegionStorage &&
-                destinationVisualBefore.skinToneIndex == destinationVisualAfter.skinToneIndex &&
-                destinationVisualBefore.pronoun == destinationVisualAfter.pronoun;
-            const bool facePolicyMatch =
-                facePolicyPrecondition && destinationDonor->faceNPC == nullptr;
-            const bool destinationNonVisualPreserved =
-                destinationNonVisualBefore == Snapshot(destinationDonor);
-            const bool destinationMorphsValid =
-                ValidateDonorMorphPopulation(a_out, destinationDonor, *decoded.preset);
-            const bool destinationVisualsValid = ValidateDonorVisualPopulation(
-                a_out, destinationDonor, *decoded.preset, resolved, expectedAvms);
-            const bool completeValuesMatch =
-                SameVisualSeedValues(sourceVisualBefore, destinationVisualAfter);
-            const bool exactValuesMatch =
-                SameExactVisualValues(sourceDonor, destinationDonor);
-            const bool storageIndependent =
-                HasIndependentVisualStorage(sourceVisualBefore, destinationVisualAfter);
-            const bool sourceUnchanged =
-                sourceVisualBefore == SnapshotVisualSeed(sourceDonor);
-            const bool rollbackBodyCompatible = target->unk3D8 && destinationDonor->unk3D8 &&
-                target->unk3D8->size() == destinationDonor->unk3D8->size();
-            if (rollbackBodyCompatible) {
-                destinationDonor->morphWeight = target->morphWeight;
-                for (std::uint32_t i = 0; i < target->unk3D8->size(); ++i) {
-                    (*destinationDonor->unk3D8)[i] = (*target->unk3D8)[i];
-                }
-                destinationDonor->skinToneIndex = target->skinToneIndex;
-                ownedCopy(destinationDonor, target, false);
-            }
-            const bool rollbackExact = rollbackBodyCompatible &&
-                SameExactVisualValues(destinationDonor, target);
-            const bool rollbackNonVisualPreserved =
-                destinationNonVisualBefore == Snapshot(destinationDonor);
-            const bool targetUnchangedMid =
-                targetNonVisualBefore == Snapshot(target) &&
-                targetVisualBefore == SnapshotVisualSeed(target);
-
-            destroy(destinationDonor, 1);
-            destroy(sourceDonor, 1);
-            const bool donorsUnregistered =
-                RE::TESForm::LookupByID<RE::TESNPC>(sourceFormID) == nullptr &&
-                RE::TESForm::LookupByID<RE::TESNPC>(destinationFormID) == nullptr;
-            const bool targetUnchangedAfter =
-                targetNonVisualBefore == Snapshot(target) &&
-                targetVisualBefore == SnapshotVisualSeed(target);
-            const bool passed =
-                sourceMorphsValid && sourceVisualsValid && controlledDifference &&
-                excludedFieldsPreserved && facePolicyMatch && destinationNonVisualPreserved &&
-                destinationMorphsValid && destinationVisualsValid && completeValuesMatch &&
-                exactValuesMatch && storageIndependent && sourceUnchanged &&
-                rollbackBodyCompatible && rollbackExact && rollbackNonVisualPreserved &&
-                targetUnchangedMid &&
-                donorsUnregistered && targetUnchangedAfter;
-
-            a_out(std::format(
-                "donorcopy: source=0x{:08X} destination=0x{:08X} controlledDifference={} completeValuesMatch={} exactValuesMatch={} storageIndependent={} sourceUnchanged={}",
-                sourceFormID, destinationFormID, controlledDifference,
-                completeValuesMatch, exactValuesMatch, storageIndependent, sourceUnchanged));
-            a_out(std::format(
-                "donorcopy: excludedFieldsPreserved={} facePolicyMatch={} destinationNonVisualPreserved={} rollbackBodyCompatible={} rollbackExact={} rollbackNonVisualPreserved={} targetUnchangedMid={} donorsUnregistered={} targetUnchangedAfter={}",
-                excludedFieldsPreserved, facePolicyMatch, destinationNonVisualPreserved,
-                rollbackBodyCompatible, rollbackExact, rollbackNonVisualPreserved,
-                targetUnchangedMid, donorsUnregistered, targetUnchangedAfter));
-            a_out(passed ?
-                      "donorcopy: PASS lower owned visual-copy worker on disposable donor pair; all real-target writes remain disabled" :
-                      "donorcopy: FAIL CLOSED; do not call the lower worker on a real target");
         }
 
         using CreateNpc = RE::TESNPC* (*)(void*, bool);
@@ -3426,72 +2208,6 @@ namespace NpcAppearance
             return applied && donorsUnregistered;
         }
 
-        void RunCopyRef(const LineSink& a_out, const std::vector<std::string>& a_args)
-        {
-            if (!RequireMutationOperational(a_out, "copyref")) {
-                return;
-            }
-            if (a_args.size() < 4) {
-                a_out("usage: npcapp copyref <targetRefID> <sourceRefID> [sourceIsPlayer=0|1]");
-                return;
-            }
-            const auto targetID = ParseFormID(a_args[2]);
-            const auto sourceID = ParseFormID(a_args[3]);
-            if (!targetID || !sourceID) {
-                a_out("copyref: invalid hexadecimal form ID");
-                return;
-            }
-            bool sourceIsPlayer = *sourceID == 0x14;
-            if (a_args.size() >= 5) {
-                if (a_args[4] != "0" && a_args[4] != "1") {
-                    a_out("copyref: sourceIsPlayer must be 0 or 1");
-                    return;
-                }
-                sourceIsPlayer = a_args[4] == "1";
-            }
-
-            auto* target = RE::TESForm::LookupByID<RE::Actor>(*targetID);
-            auto* source = RE::TESForm::LookupByID<RE::Actor>(*sourceID);
-            if (!target || !source) {
-                a_out(std::format("copyref: actor lookup failed target={} source={}",
-                                  static_cast<void*>(target), static_cast<void*>(source)));
-                return;
-            }
-            auto* targetBase = target->GetNPC();
-            auto* sourceBase = source->GetNPC();
-            if (!targetBase || !sourceBase || !targetBase->IsUnique()) {
-                a_out(std::format("copyref: ineligible target/source base target={} source={} targetUnique={}",
-                                  static_cast<void*>(targetBase), static_cast<void*>(sourceBase),
-                                  targetBase && targetBase->IsUnique()));
-                return;
-            }
-            if (targetBase->pronoun.underlying() != sourceBase->pronoun.underlying()) {
-                a_out(std::format(
-                    "copyref: rejected before mutation because TESNPC::CopyAppearance would copy pronoun (target={} source={})",
-                    targetBase->pronoun.underlying(), sourceBase->pronoun.underlying()));
-                return;
-            }
-
-            using Worker = void (*)(RE::Actor*, RE::TESNPC*, bool);
-            REL::Relocation<Worker> worker{ kActorCopyAppearanceWorkerID };
-            if (!HasExpectedGate(worker.address())) {
-                a_out(std::format("copyref: ID 97401 contract mismatch at img+0x{:X}; FAIL CLOSED",
-                                  Util::ToRva(worker.address())));
-                return;
-            }
-
-            const auto before = Snapshot(targetBase);
-            ReportSnapshot(a_out, "before", before);
-            a_out(std::format("copyref: calling vanilla worker targetRef=0x{:08X} sourceBase=0x{:08X} sourceIsPlayer={}",
-                              *targetID, sourceBase->GetFormID(), sourceIsPlayer));
-            worker(target, sourceBase, sourceIsPlayer);
-            const auto after = Snapshot(targetBase);
-            ReportSnapshot(a_out, "after ", after);
-            a_out(before == after
-                      ? "copyref: PASS nonvisual snapshot unchanged; vanilla refresh invoked"
-                      : "copyref: FAIL nonvisual snapshot changed; do not use this path");
-        }
-
         [[nodiscard]] bool ExactOriginalState(
             RE::TESNPC* a_target,
             const AppliedBaseState& a_state)
@@ -3565,102 +2281,6 @@ namespace NpcAppearance
         }
 
         // ==================================================================
-        // Overlay feasibility probes (npcapp overlay|probe*)
-        // Dev-only instrumentation for the render-time overlay migration:
-        // measure whether engine worker 97401 writes the target base, whether
-        // its effect serializes, whether a single-drain transient window
-        // renders, and whether ReferenceSet3d is a usable trigger. Probes
-        // restore (or loudly refuse to restore) within the same drain task.
-        // ==================================================================
-        // Default ON since the 2026-08-07 soak (all trigger paths green);
-        // `npcapp overlay off` is a diagnostic killswitch that stops new
-        // windows and leaves tracked NPCs vanilla as their 3D rebuilds.
-        std::atomic<bool> g_overlayModeEnabled{ true };
-
-        struct ProbeBaseline
-        {
-            OwnedVisualSnapshot visual;
-            NonVisualSnapshot   nonVisual;
-            RE::TESNPC*         faceNPC{ nullptr };
-            std::uint32_t       actorFlags{ 0 };
-        };
-
-        std::mutex                                        g_probeBaselineMutex;
-        std::unordered_map<RE::TESFormID, ProbeBaseline>  g_probeBaselines;
-
-        // Runs the probe body inside the verified drain: inline when already
-        // draining, otherwise posted with output redirected to the SFSE log
-        // because the interactive sink does not outlive the command.
-        [[nodiscard]] bool RunProbeOnDrain(
-            const LineSink& a_out,
-            const std::string_view a_label,
-            std::function<void(const LineSink&)> a_body)
-        {
-            const auto diagnostics =
-                Util::NativeMainThreadQueue::GetDiagnostics();
-            if (diagnostics.insideDrain) {
-                a_body(a_out);
-                return true;
-            }
-            const LineSink logSink =
-                [label = std::string{ a_label }](const std::string& a_text) {
-                    REX::INFO("[NpcAppearance] {}: {}", label, a_text);
-                };
-            const bool queued = QueueOrRunNativeTask(
-                [body = std::move(a_body), logSink]() { body(logSink); },
-                a_label,
-                [label = std::string{ a_label }]() {
-                    REX::WARN(
-                        "[NpcAppearance] {} dropped by the native queue; probe did not run",
-                        label);
-                });
-            a_out(std::format(
-                "{}: {} the verified native drain; output continues in the SFSE log",
-                a_label, queued ? "posted to" : "FAILED to post to"));
-            return queued;
-        }
-
-        // Group-wise live-vs-baseline report. Vector comparisons here are
-        // order-sensitive and therefore stricter than SameExactVisualValues
-        // (which matches boneRegions/shapeBlends by membership); the verdict
-        // always comes from SameExactVisualValues, this only localizes diffs.
-        void ReportOwnedVisualDifference(
-            const LineSink& a_out,
-            RE::TESNPC* a_npc,
-            const OwnedVisualSnapshot& a_expected)
-        {
-            const auto live = CaptureOwnedVisualSnapshot(a_npc);
-            a_out(std::format(
-                "visual diff vs baseline: morph={} skinTone={} pronoun={} headParts={} bodyRegions={} boneValues={} boneRegions={} avms={} shapeBlends={}",
-                live.thin == a_expected.thin &&
-                    live.muscular == a_expected.muscular &&
-                    live.fat == a_expected.fat,
-                live.skinToneIndex == a_expected.skinToneIndex,
-                live.pronoun == a_expected.pronoun,
-                live.headPartFormIDs == a_expected.headPartFormIDs,
-                live.hasBodyMorphRegions == a_expected.hasBodyMorphRegions &&
-                    live.bodyMorphRegions == a_expected.bodyMorphRegions,
-                live.hasBoneValues == a_expected.hasBoneValues &&
-                    live.boneValues == a_expected.boneValues,
-                live.hasBoneRegions == a_expected.hasBoneRegions &&
-                    live.boneRegions == a_expected.boneRegions,
-                live.avms == a_expected.avms,
-                live.hasShapeBlends == a_expected.hasShapeBlends &&
-                    live.shapeBlends == a_expected.shapeBlends));
-            a_out(std::format(
-                "visual diff strings: teeth={} jewelry={} eye={} hair={} facial={} eyebrow={} live/baseline morph=({:.6g},{:.6g},{:.6g})/({:.6g},{:.6g},{:.6g}) skin={}/{}",
-                live.teeth == a_expected.teeth,
-                live.jewelryColor == a_expected.jewelryColor,
-                live.eyeColor == a_expected.eyeColor,
-                live.hairColor == a_expected.hairColor,
-                live.facialColor == a_expected.facialColor,
-                live.eyebrowColor == a_expected.eyebrowColor,
-                live.thin, live.muscular, live.fat,
-                a_expected.thin, a_expected.muscular, a_expected.fat,
-                live.skinToneIndex, a_expected.skinToneIndex));
-        }
-
-        // ==================================================================
         // Overlay runtime (Mechanism B, probe-proven 2026-08-07; see
         // docs/OVERLAY_PROBE_FINDINGS.md). Per 3D build of a tracked actor:
         // apply preset to base -> notify -> refresh -> restore byte-exactly,
@@ -3680,15 +2300,6 @@ namespace NpcAppearance
             std::unordered_map<RE::TESFormID,
                                std::chrono::steady_clock::time_point>
                           lastAppliedByRef;
-            std::uint64_t set3dMatches{ 0 };
-            std::uint64_t postedApplies{ 0 };
-            std::uint64_t droppedPosts{ 0 };
-            std::uint64_t applies{ 0 };
-            std::uint64_t failures{ 0 };
-            std::uint64_t escalations{ 0 };
-            std::uint64_t sweeps{ 0 };
-            std::uint64_t skippedCooldown{ 0 };
-            std::uint64_t skippedNo3D{ 0 };
         };
         std::mutex          g_overlayRuntimeMutex;
         OverlayRuntimeState g_overlayRuntime;
@@ -3731,11 +2342,6 @@ namespace NpcAppearance
                 std::chrono::steady_clock::now() - started).count();
 
             if (!restoredExact) {
-                {
-                    const std::scoped_lock lock{ g_overlayRuntimeMutex };
-                    ++g_overlayRuntime.escalations;
-                    ++g_overlayRuntime.failures;
-                }
                 KillMutation(
                     "overlay window restore failed; base left non-original");
                 REX::CRITICAL(
@@ -3747,7 +2353,6 @@ namespace NpcAppearance
                 {
                     const std::scoped_lock lock{ g_overlayRuntimeMutex };
                     g_overlayRuntime.disabledBases.insert(baseID);
-                    ++g_overlayRuntime.failures;
                 }
                 REX::WARN(
                     "[NpcAppearance] overlay base=0x{:08X} actor=0x{:08X} applied={} notifiedKicked={}; rendering vanilla and disabling this base for the session",
@@ -3756,7 +2361,6 @@ namespace NpcAppearance
             }
             {
                 const std::scoped_lock lock{ g_overlayRuntimeMutex };
-                ++g_overlayRuntime.applies;
                 g_overlayRuntime.lastAppliedByRef[a_actorRefID] =
                     std::chrono::steady_clock::now();
             }
@@ -3782,8 +2386,7 @@ namespace NpcAppearance
                 }
             } guard{ a_refID };
 
-            if (!g_overlayModeEnabled.load(std::memory_order_acquire) ||
-                !MutationOperational()) {
+            if (!MutationOperational()) {
                 return;
             }
             {
@@ -3801,8 +2404,6 @@ namespace NpcAppearance
                 return;
             }
             if (!HasLoaded3D(actor)) {
-                const std::scoped_lock lock{ g_overlayRuntimeMutex };
-                ++g_overlayRuntime.skippedNo3D;
                 return;
             }
             static_cast<void>(
@@ -3816,8 +2417,7 @@ namespace NpcAppearance
         void OnOverlaySet3d(RE::TESObjectREFR* a_ref) noexcept
         {
             try {
-                if (!g_overlayModeEnabled.load(std::memory_order_acquire) ||
-                    !MutationOperational()) {
+                if (!MutationOperational()) {
                     return;
                 }
                 auto* actor = a_ref ? a_ref->As<RE::Actor>() : nullptr;
@@ -3838,7 +2438,6 @@ namespace NpcAppearance
                 const auto refID = actor->GetFormID();
                 {
                     const std::scoped_lock lock{ g_overlayRuntimeMutex };
-                    ++g_overlayRuntime.set3dMatches;
                     if (g_overlayRuntime.disabledBases.contains(baseID)) {
                         return;
                     }
@@ -3847,13 +2446,11 @@ namespace NpcAppearance
                         g_overlayRuntime.lastAppliedByRef.find(refID);
                     if (last != g_overlayRuntime.lastAppliedByRef.end() &&
                         now - last->second < kOverlayReapplyCooldown) {
-                        ++g_overlayRuntime.skippedCooldown;
                         return;
                     }
                     if (!g_overlayRuntime.inFlightRefs.insert(refID).second) {
                         return;
                     }
-                    ++g_overlayRuntime.postedApplies;
                 }
                 const bool queued = QueueOrRunNativeTask(
                     [refID, baseID, assignment = std::move(assignment)]() {
@@ -3864,7 +2461,6 @@ namespace NpcAppearance
                         {
                             const std::scoped_lock lock{ g_overlayRuntimeMutex };
                             g_overlayRuntime.inFlightRefs.erase(refID);
-                            ++g_overlayRuntime.droppedPosts;
                         }
                         REX::WARN(
                             "[NpcAppearance] overlay apply for ref=0x{:08X} dropped by the native queue; will retry at the next 3D build",
@@ -3906,8 +2502,7 @@ namespace NpcAppearance
         // the verified drain.
         void RunOverlaySweep(const std::string_view a_reason)
         {
-            if (!g_overlayModeEnabled.load(std::memory_order_acquire) ||
-                !MutationOperational()) {
+            if (!MutationOperational()) {
                 return;
             }
             std::vector<std::pair<RE::TESFormID, SelectedAssignment>> winners;
@@ -3953,603 +2548,17 @@ namespace NpcAppearance
                     break;
                 }
             }
-            {
-                const std::scoped_lock lock{ g_overlayRuntimeMutex };
-                ++g_overlayRuntime.sweeps;
-            }
             REX::INFO(
                 "[NpcAppearance] overlay sweep reason={} winners={} applied={} skipped={}",
                 a_reason, winners.size(), appliedCount, skippedCount);
         }
 
-        void RunOverlayMode(
-            const LineSink& a_out, const std::vector<std::string>& a_args)
-        {
-            const std::string_view mode =
-                a_args.size() >= 3 ? std::string_view{ a_args[2] } : "status";
-            if (mode == "on" || mode == "off") {
-                g_overlayModeEnabled.store(
-                    mode == "on", std::memory_order_release);
-                if (mode == "on") {
-                    static_cast<void>(QueueOrRunNativeTask(
-                        []() { RunOverlaySweep("overlay-on"); },
-                        "NpcAppearance.OverlaySweep"));
-                    a_out("overlay: ON; sweep posted for already-loaded actors, new 3D builds apply via ReferenceSet3d");
-                } else {
-                    a_out("overlay: OFF; no new windows will open and tracked NPCs render vanilla as their 3D rebuilds");
-                }
-                return;
-            }
-            if (mode == "sweep") {
-                const bool queued = QueueOrRunNativeTask(
-                    []() { RunOverlaySweep("manual"); },
-                    "NpcAppearance.OverlaySweep");
-                a_out(std::format(
-                    "overlay: sweep {}",
-                    queued ? "posted to the verified native drain"
-                           : "FAILED to post"));
-                return;
-            }
-            if (mode != "status") {
-                a_out("usage: npcapp overlay [status|on|off|sweep]");
-                return;
-            }
-            OverlayRuntimeState snapshot;
-            std::size_t disabledCount = 0;
-            std::size_t inFlightCount = 0;
-            {
-                const std::scoped_lock lock{ g_overlayRuntimeMutex };
-                snapshot.set3dMatches = g_overlayRuntime.set3dMatches;
-                snapshot.postedApplies = g_overlayRuntime.postedApplies;
-                snapshot.droppedPosts = g_overlayRuntime.droppedPosts;
-                snapshot.applies = g_overlayRuntime.applies;
-                snapshot.failures = g_overlayRuntime.failures;
-                snapshot.escalations = g_overlayRuntime.escalations;
-                snapshot.sweeps = g_overlayRuntime.sweeps;
-                snapshot.skippedCooldown = g_overlayRuntime.skippedCooldown;
-                snapshot.skippedNo3D = g_overlayRuntime.skippedNo3D;
-                disabledCount = g_overlayRuntime.disabledBases.size();
-                inFlightCount = g_overlayRuntime.inFlightRefs.size();
-            }
-            a_out(std::format(
-                "overlay: mode={} sinkRegistered={} mutationOperational={} set3dMatches={} postedApplies={} droppedPosts={} applies={} failures={} escalations={} sweeps={} skippedCooldown={} skippedNo3D={} disabledBases={} inFlight={}",
-                g_overlayModeEnabled.load(std::memory_order_relaxed)
-                    ? "on" : "off",
-                g_overlaySinkRegistered.load(std::memory_order_relaxed),
-                MutationOperational(),
-                snapshot.set3dMatches, snapshot.postedApplies,
-                snapshot.droppedPosts, snapshot.applies, snapshot.failures,
-                snapshot.escalations, snapshot.sweeps,
-                snapshot.skippedCooldown, snapshot.skippedNo3D,
-                disabledCount, inFlightCount));
-        }
+        void PumpDeferredLoadSweep() noexcept;
 
-        void RunProbeBaseline(
-            const LineSink& a_out, const std::vector<std::string>& a_args)
-        {
-            if (a_args.size() < 3) {
-                a_out("usage: npcapp probebaseline <plugin:localFormID>");
-                return;
-            }
-            const auto targetIdentity = ParseTargetToken(a_args[2]);
-            if (!targetIdentity) {
-                a_out("probebaseline: invalid target token");
-                return;
-            }
-            (void)RunProbeOnDrain(
-                a_out, "probebaseline",
-                [identity = *targetIdentity](const LineSink& a_sink) {
-                    auto* target = ResolveEligibleTarget(a_sink, identity);
-                    if (!target) {
-                        return;
-                    }
-                    ProbeBaseline baseline;
-                    baseline.visual = CaptureOwnedVisualSnapshot(target);
-                    baseline.nonVisual = Snapshot(target);
-                    baseline.faceNPC = target->faceNPC;
-                    baseline.actorFlags =
-                        target->actorData.actorBaseFlags.underlying();
-                    const auto baseID = target->GetFormID();
-                    a_sink(std::format(
-                        "probebaseline: base=0x{:08X} captured headParts={} bodyRegions={} boneValues={} boneRegions={} avms={} shapeBlends={} morphWeight=({:.6g},{:.6g},{:.6g}) skinTone={} faceNPC=0x{:08X} flags=0x{:08X}",
-                        baseID,
-                        baseline.visual.headPartFormIDs.size(),
-                        baseline.visual.bodyMorphRegions.size(),
-                        baseline.visual.boneValues.size(),
-                        baseline.visual.boneRegions.size(),
-                        baseline.visual.avms.size(),
-                        baseline.visual.shapeBlends.size(),
-                        baseline.visual.thin, baseline.visual.muscular,
-                        baseline.visual.fat, baseline.visual.skinToneIndex,
-                        baseline.faceNPC ? baseline.faceNPC->GetFormID() : 0,
-                        baseline.actorFlags));
-                    const std::scoped_lock lock{ g_probeBaselineMutex };
-                    g_probeBaselines.insert_or_assign(
-                        baseID, std::move(baseline));
-                });
-        }
-
-        void RunProbeCompare(
-            const LineSink& a_out, const std::vector<std::string>& a_args)
-        {
-            if (a_args.size() < 3) {
-                a_out("usage: npcapp probecompare <plugin:localFormID>");
-                return;
-            }
-            const auto targetIdentity = ParseTargetToken(a_args[2]);
-            if (!targetIdentity) {
-                a_out("probecompare: invalid target token");
-                return;
-            }
-            (void)RunProbeOnDrain(
-                a_out, "probecompare",
-                [identity = *targetIdentity](const LineSink& a_sink) {
-                    auto* target = ResolveEligibleTarget(a_sink, identity);
-                    if (!target) {
-                        return;
-                    }
-                    std::optional<ProbeBaseline> baseline;
-                    {
-                        const std::scoped_lock lock{ g_probeBaselineMutex };
-                        const auto found =
-                            g_probeBaselines.find(target->GetFormID());
-                        if (found != g_probeBaselines.end()) {
-                            baseline = found->second;
-                        }
-                    }
-                    if (!baseline) {
-                        a_sink(std::format(
-                            "probecompare: base=0x{:08X} has no stored baseline; run probebaseline first",
-                            target->GetFormID()));
-                        return;
-                    }
-                    const bool visualExact =
-                        SameExactVisualValues(target, baseline->visual);
-                    const auto liveNonVisual = Snapshot(target);
-                    const bool nonVisualExact =
-                        baseline->nonVisual == liveNonVisual;
-                    const bool nonVisualExactIgnoringDirty =
-                        SameNonVisualIgnoringRefreshDirtyFlag(
-                            baseline->nonVisual, liveNonVisual);
-                    const bool faceNPCSame =
-                        target->faceNPC == baseline->faceNPC;
-                    const auto liveFlags =
-                        target->actorData.actorBaseFlags.underlying();
-                    a_sink(std::format(
-                        "probecompare: base=0x{:08X} visualExact={} nonVisualExact={} nonVisualExactIgnoringDirtyFlag={} faceNPCSame={} flagsSame={} flags=0x{:08X}/0x{:08X}",
-                        target->GetFormID(), visualExact, nonVisualExact,
-                        nonVisualExactIgnoringDirty, faceNPCSame,
-                        liveFlags == baseline->actorFlags,
-                        liveFlags, baseline->actorFlags));
-                    if (!visualExact) {
-                        ReportOwnedVisualDifference(
-                            a_sink, target, baseline->visual);
-                    }
-                });
-        }
-
-        void RunProbe97401(
-            const LineSink& a_out, const std::vector<std::string>& a_args)
-        {
-            if (!RequireMutationOperational(a_out, "probe97401")) {
-                return;
-            }
-            if (a_args.size() < 4) {
-                a_out("usage: npcapp probe97401 <targetRefID> <sourceRefID> [restore=0|1]");
-                return;
-            }
-            const auto targetID = ParseFormID(a_args[2]);
-            const auto sourceID = ParseFormID(a_args[3]);
-            if (!targetID || !sourceID) {
-                a_out("probe97401: invalid hexadecimal form ID");
-                return;
-            }
-            bool restore = true;
-            if (a_args.size() >= 5) {
-                if (a_args[4] != "0" && a_args[4] != "1") {
-                    a_out("probe97401: restore must be 0 or 1");
-                    return;
-                }
-                restore = a_args[4] == "1";
-            }
-            (void)RunProbeOnDrain(
-                a_out, "probe97401",
-                [targetID = *targetID, sourceID = *sourceID,
-                 restore](const LineSink& a_sink) {
-                    auto* target =
-                        RE::TESForm::LookupByID<RE::Actor>(targetID);
-                    auto* source =
-                        RE::TESForm::LookupByID<RE::Actor>(sourceID);
-                    if (!target || !source) {
-                        a_sink(std::format(
-                            "probe97401: actor lookup failed target={} source={}",
-                            static_cast<void*>(target),
-                            static_cast<void*>(source)));
-                        return;
-                    }
-                    auto* targetBase = target->GetNPC();
-                    auto* sourceBase = source->GetNPC();
-                    if (!targetBase || !sourceBase || !targetBase->IsUnique()) {
-                        a_sink(std::format(
-                            "probe97401: ineligible target/source base target={} source={} targetUnique={}",
-                            static_cast<void*>(targetBase),
-                            static_cast<void*>(sourceBase),
-                            targetBase && targetBase->IsUnique()));
-                        return;
-                    }
-                    if (targetBase->pronoun.underlying() !=
-                        sourceBase->pronoun.underlying()) {
-                        a_sink(std::format(
-                            "probe97401: rejected before mutation because the worker would copy pronoun (target={} source={})",
-                            targetBase->pronoun.underlying(),
-                            sourceBase->pronoun.underlying()));
-                        return;
-                    }
-
-                    using Worker = void (*)(RE::Actor*, RE::TESNPC*, bool);
-                    REL::Relocation<Worker> worker{
-                        kActorCopyAppearanceWorkerID
-                    };
-                    if (!HasExpectedGate(worker.address())) {
-                        a_sink(std::format(
-                            "probe97401: ID 97401 contract mismatch at img+0x{:X}; FAIL CLOSED",
-                            Util::ToRva(worker.address())));
-                        return;
-                    }
-
-                    const bool sourceIsPlayer = sourceID == 0x14;
-                    AppliedBaseState insurance;
-                    insurance.baseID = targetBase->GetFormID();
-                    insurance.originalVisual =
-                        CaptureOwnedVisualSnapshot(targetBase);
-                    insurance.originalNonVisual = Snapshot(targetBase);
-                    insurance.originalFaceNPC = targetBase->faceNPC;
-                    insurance.originalActorFlags =
-                        targetBase->actorData.actorBaseFlags.underlying();
-                    const auto sourceVisualBefore =
-                        CaptureOwnedVisualSnapshot(sourceBase);
-
-                    const auto started = std::chrono::steady_clock::now();
-                    worker(target, sourceBase, sourceIsPlayer);
-                    const auto elapsedMs =
-                        std::chrono::duration<double, std::milli>(
-                            std::chrono::steady_clock::now() - started)
-                            .count();
-
-                    const bool baseVisualMutated = !SameExactVisualValues(
-                        targetBase, insurance.originalVisual);
-                    const auto nonVisualAfter = Snapshot(targetBase);
-                    const bool baseNonVisualMutated =
-                        !(insurance.originalNonVisual == nonVisualAfter);
-                    const bool baseNonVisualMutatedIgnoringDirty =
-                        !SameNonVisualIgnoringRefreshDirtyFlag(
-                            insurance.originalNonVisual, nonVisualAfter);
-                    const bool faceNPCChanged =
-                        targetBase->faceNPC != insurance.originalFaceNPC;
-                    const bool flagsChanged =
-                        targetBase->actorData.actorBaseFlags.underlying() !=
-                        insurance.originalActorFlags;
-                    const bool sourceVisualUntouched = SameExactVisualValues(
-                        sourceBase, sourceVisualBefore);
-                    a_sink(std::format(
-                        "probe97401: RESULT targetRef=0x{:08X} base=0x{:08X} sourceIsPlayer={} baseVisualMutated={} baseNonVisualMutated={} baseNonVisualMutatedIgnoringDirtyFlag={} faceNPCChanged={} flagsChanged={} sourceVisualUntouched={} ms={:.3f}",
-                        targetID, insurance.baseID, sourceIsPlayer,
-                        baseVisualMutated, baseNonVisualMutated,
-                        baseNonVisualMutatedIgnoringDirty, faceNPCChanged,
-                        flagsChanged, sourceVisualUntouched, elapsedMs));
-                    if (baseVisualMutated) {
-                        ReportOwnedVisualDifference(
-                            a_sink, targetBase, insurance.originalVisual);
-                    }
-
-                    const bool baseDirty =
-                        baseVisualMutated || faceNPCChanged || flagsChanged;
-                    if (!baseDirty) {
-                        a_sink("probe97401: target base untouched; nothing to restore");
-                        return;
-                    }
-                    if (!restore) {
-                        a_sink("probe97401: base left mutated BY DESIGN for the save-persistence procedure; save, reload, run probecompare, and do not continue normal play on this session");
-                        return;
-                    }
-                    const bool restoredExact = RestoreAppliedBaseState(
-                        a_sink, targetBase, insurance);
-                    a_sink(std::format(
-                        "probe97401: restored exact={}", restoredExact));
-                    if (!restoredExact) {
-                        KillMutation(
-                            "probe97401 exact restoration failed; base left non-original");
-                        a_sink("probe97401: CRITICAL restore failed; do not save this session, reload immediately");
-                    }
-                });
-        }
-
-        void ScheduleProbeTransientRecheck(const AppliedBaseState& a_insurance)
-        {
-            std::thread{ [insurance = a_insurance]() mutable {
-                std::this_thread::sleep_for(std::chrono::seconds{ 2 });
-                const auto baseID = insurance.baseID;
-                (void)QueueOrRunNativeTask(
-                    [insurance = std::move(insurance)]() {
-                        auto* target = RE::TESForm::LookupByID<RE::TESNPC>(
-                            insurance.baseID);
-                        const bool stillExact =
-                            ExactOriginalState(target, insurance);
-                        REX::INFO(
-                            "[NpcAppearance] probetransient: RECHECK base=0x{:08X} baseStillExact={}; visually confirm the actor's rendered appearance",
-                            insurance.baseID, stillExact);
-                    },
-                    "NpcAppearance.ProbeTransientRecheck",
-                    [baseID]() {
-                        REX::WARN(
-                            "[NpcAppearance] probetransient: RECHECK base=0x{:08X} dropped by the native queue",
-                            baseID);
-                    });
-            } }.detach();
-        }
-
-        void RunProbeTransient(
-            const LineSink& a_out, const std::vector<std::string>& a_args)
-        {
-            if (!RequireMutationOperational(a_out, "probetransient")) {
-                return;
-            }
-            if (a_args.size() < 5) {
-                a_out("usage: npcapp probetransient <plugin:localFormID> <actorRefID> <preset.npc>");
-                return;
-            }
-            const auto targetIdentity = ParseTargetToken(a_args[2]);
-            const auto actorRefID = ParseFormID(a_args[3]);
-            if (!targetIdentity || !actorRefID) {
-                a_out("probetransient: invalid target token or actorRefID");
-                return;
-            }
-            const std::filesystem::path presetPath{ JoinArguments(a_args, 4) };
-
-            // Accepts an arbitrary preset: the mutation never persists past
-            // this drain task.
-            (void)RunProbeOnDrain(
-                a_out, "probetransient",
-                [identity = *targetIdentity, actorRefID = *actorRefID,
-                 presetPath](const LineSink& a_sink) {
-                    auto* target = ResolveEligibleTarget(a_sink, identity);
-                    auto* actor =
-                        RE::TESForm::LookupByID<RE::Actor>(actorRefID);
-                    if (!target || !actor || actor->GetNPC() != target) {
-                        a_sink(std::format(
-                            "probetransient: actor ref 0x{:08X} is absent or bound to a different base; no mutation",
-                            actorRefID));
-                        return;
-                    }
-                    if (!HasLoaded3D(actor)) {
-                        a_sink(std::format(
-                            "probetransient: actor ref 0x{:08X} has no loaded 3D; the transient-window question needs a rendered actor; no mutation",
-                            actorRefID));
-                        return;
-                    }
-
-                    AppliedBaseState insurance;
-                    insurance.baseID = target->GetFormID();
-                    insurance.originalVisual =
-                        CaptureOwnedVisualSnapshot(target);
-                    insurance.originalNonVisual = Snapshot(target);
-                    insurance.originalFaceNPC = target->faceNPC;
-                    insurance.originalActorFlags =
-                        target->actorData.actorBaseFlags.underlying();
-
-                    const auto started = std::chrono::steady_clock::now();
-                    const bool applied = SilentApplyPresetToBase(
-                        a_sink, target, presetPath);
-                    bool notifiedKicked = false;
-                    if (applied) {
-                        notifiedKicked =
-                            NotifyAndKick(target, actor, actorRefID);
-                    }
-                    const bool restoredExact = RestoreAppliedBaseState(
-                        a_sink, target, insurance);
-                    const auto elapsedMs =
-                        std::chrono::duration<double, std::milli>(
-                            std::chrono::steady_clock::now() - started)
-                            .count();
-                    a_sink(std::format(
-                        "probetransient: window CLOSED base=0x{:08X} actor=0x{:08X} applied={} notifiedKicked={} restoredExact={} ms={:.3f}; visually confirm whether the actor renders the preset or vanilla",
-                        insurance.baseID, actorRefID, applied,
-                        notifiedKicked, restoredExact, elapsedMs));
-                    if (!restoredExact) {
-                        KillMutation(
-                            "probetransient exact restoration failed; base left non-original");
-                        a_sink("probetransient: CRITICAL restore failed; do not save this session, reload immediately");
-                        return;
-                    }
-                    ScheduleProbeTransientRecheck(insurance);
-                });
-        }
-
-        struct ProbeSet3dState
-        {
-            std::atomic<bool>          enabled{ false };
-            std::atomic<bool>          registered{ false };
-            std::atomic<std::uint64_t> set3dEvents{ 0 };
-            std::atomic<std::uint64_t> detachEvents{ 0 };
-            std::atomic<std::uint64_t> actorSet3dEvents{ 0 };
-            std::atomic<std::uint64_t> trackedSet3dEvents{ 0 };
-            std::atomic<std::uint64_t> trackedDetachEvents{ 0 };
-            std::atomic<std::uint64_t> untrackedLogged{ 0 };
-            std::atomic<std::uint64_t> latencyProbes{ 0 };
-        };
-        ProbeSet3dState g_probeSet3d;
-
-        constexpr std::uint64_t kProbeSet3dUntrackedLogCap = 25;
-        constexpr std::uint64_t kProbeSet3dLatencyProbeCap = 50;
-
-        // Log-only observer; may run on any engine thread, so it never
-        // writes game objects and keeps reads to SEH-guarded probes.
-        void OnProbeReferenceEvent(
-            RE::TESObjectREFR* a_ref, const bool a_set3d) noexcept
-        {
-            try {
-                if (!g_probeSet3d.enabled.load(std::memory_order_acquire)) {
-                    return;
-                }
-                (a_set3d ? g_probeSet3d.set3dEvents
-                         : g_probeSet3d.detachEvents)
-                    .fetch_add(1, std::memory_order_relaxed);
-                auto* actor = a_ref ? a_ref->As<RE::Actor>() : nullptr;
-                if (!actor) {
-                    return;
-                }
-                if (a_set3d) {
-                    g_probeSet3d.actorSet3dEvents.fetch_add(
-                        1, std::memory_order_relaxed);
-                }
-                auto* base = actor->GetNPC();
-                const RE::TESFormID baseID = base ? base->GetFormID() : 0;
-                bool tracked = false;
-                {
-                    const std::scoped_lock lock{ g_eventMutex };
-                    tracked = baseID != 0 && g_targetBaseIDs.contains(baseID);
-                }
-                if (tracked) {
-                    (a_set3d ? g_probeSet3d.trackedSet3dEvents
-                             : g_probeSet3d.trackedDetachEvents)
-                        .fetch_add(1, std::memory_order_relaxed);
-                }
-                if (!a_set3d) {
-                    if (tracked) {
-                        REX::INFO(
-                            "[NpcAppearance] probeset3d: DETACH ref=0x{:08X} base=0x{:08X} tid={}",
-                            actor->GetFormID(), baseID,
-                            ::GetCurrentThreadId());
-                    }
-                    return;
-                }
-                const bool logUntracked =
-                    !tracked &&
-                    g_probeSet3d.untrackedLogged.fetch_add(
-                        1, std::memory_order_relaxed) <
-                        kProbeSet3dUntrackedLogCap;
-                if (tracked || logUntracked) {
-                    const auto diagnostics =
-                        Util::NativeMainThreadQueue::GetDiagnostics();
-                    REX::INFO(
-                        "[NpcAppearance] probeset3d: SET3D ref=0x{:08X} base=0x{:08X} tracked={} tid={} insideDrain={} queueEnabled={} hasLoaded3D={}",
-                        actor->GetFormID(), baseID, tracked,
-                        diagnostics.currentThreadID, diagnostics.insideDrain,
-                        diagnostics.queueEnabled, HasLoaded3D(actor));
-                }
-                if (tracked &&
-                    g_probeSet3d.latencyProbes.fetch_add(
-                        1, std::memory_order_relaxed) <
-                        kProbeSet3dLatencyProbeCap) {
-                    const auto posted = std::chrono::steady_clock::now();
-                    const auto refID = actor->GetFormID();
-                    (void)QueueOrRunNativeTask(
-                        [refID, posted]() {
-                            const auto latencyMs =
-                                std::chrono::duration<double, std::milli>(
-                                    std::chrono::steady_clock::now() - posted)
-                                    .count();
-                            REX::INFO(
-                                "[NpcAppearance] probeset3d: drain latency ref=0x{:08X} ms={:.3f}",
-                                refID, latencyMs);
-                        },
-                        "NpcAppearance.ProbeSet3dLatency");
-                }
-            } catch (...) {
-            }
-        }
-
-        class ProbeReferenceEventSink final :
-            public RE::BSTEventSink<
-                RE::RuntimeComponentDBFactory::ReferenceSet3d>,
-            public RE::BSTEventSink<
-                RE::RuntimeComponentDBFactory::ReferenceDetach>
-        {
-        public:
-            static ProbeReferenceEventSink& GetSingleton() noexcept
-            {
-                static ProbeReferenceEventSink singleton;
-                return singleton;
-            }
-
-            RE::BSEventNotifyControl ProcessEvent(
-                const RE::RuntimeComponentDBFactory::ReferenceSet3d& a_event,
-                RE::BSTEventSource<
-                    RE::RuntimeComponentDBFactory::ReferenceSet3d>*) noexcept
-                override
-            {
-                OnProbeReferenceEvent(a_event.ref.get(), true);
-                return RE::BSEventNotifyControl::kContinue;
-            }
-
-            RE::BSEventNotifyControl ProcessEvent(
-                const RE::RuntimeComponentDBFactory::ReferenceDetach& a_event,
-                RE::BSTEventSource<
-                    RE::RuntimeComponentDBFactory::ReferenceDetach>*) noexcept
-                override
-            {
-                OnProbeReferenceEvent(a_event.ref.get(), false);
-                return RE::BSEventNotifyControl::kContinue;
-            }
-        };
-
-        void RunProbeSet3d(
-            const LineSink& a_out, const std::vector<std::string>& a_args)
-        {
-            const std::string_view mode =
-                a_args.size() >= 3 ? std::string_view{ a_args[2] } : "status";
-            if (mode == "on") {
-                if (!g_probeSet3d.registered.load(std::memory_order_acquire)) {
-                    auto* set3dSource = RE::RuntimeComponentDBFactory::
-                        ReferenceSet3d::GetEventSource();
-                    auto* detachSource = RE::RuntimeComponentDBFactory::
-                        ReferenceDetach::GetEventSource();
-                    if (!set3dSource || !detachSource) {
-                        a_out(std::format(
-                            "probeset3d: event source unavailable set3d={} detach={}; sink not registered",
-                            static_cast<void*>(set3dSource),
-                            static_cast<void*>(detachSource)));
-                        return;
-                    }
-                    set3dSource->RegisterSink(
-                        &ProbeReferenceEventSink::GetSingleton());
-                    detachSource->RegisterSink(
-                        &ProbeReferenceEventSink::GetSingleton());
-                    g_probeSet3d.registered.store(
-                        true, std::memory_order_release);
-                }
-                g_probeSet3d.enabled.store(true, std::memory_order_release);
-                a_out("probeset3d: ON; now load a save, fast-travel, and let late spawns build 3D, then read the SFSE log");
-                return;
-            }
-            if (mode == "off") {
-                g_probeSet3d.enabled.store(false, std::memory_order_release);
-                a_out("probeset3d: OFF (sink stays registered; logging disabled)");
-                return;
-            }
-            if (mode != "status") {
-                a_out("usage: npcapp probeset3d [on|off|status]");
-                return;
-            }
-            a_out(std::format(
-                "probeset3d: enabled={} registered={} set3dEvents={} detachEvents={} actorSet3d={} trackedSet3d={} trackedDetach={} untrackedLogged={} latencyProbes={}",
-                g_probeSet3d.enabled.load(std::memory_order_relaxed),
-                g_probeSet3d.registered.load(std::memory_order_relaxed),
-                g_probeSet3d.set3dEvents.load(std::memory_order_relaxed),
-                g_probeSet3d.detachEvents.load(std::memory_order_relaxed),
-                g_probeSet3d.actorSet3dEvents.load(std::memory_order_relaxed),
-                g_probeSet3d.trackedSet3dEvents.load(std::memory_order_relaxed),
-                g_probeSet3d.trackedDetachEvents.load(std::memory_order_relaxed),
-                g_probeSet3d.untrackedLogged.load(std::memory_order_relaxed),
-                g_probeSet3d.latencyProbes.load(std::memory_order_relaxed)));
-        }
-
-        void PumpDeferredC2LoadTask() noexcept;
-
-        void ScheduleDeferredC2Retry() noexcept
+        void ScheduleDeferredLoadSweepRetry() noexcept
         {
             bool expected = false;
-            if (!g_deferredC2RetryScheduled.compare_exchange_strong(
+            if (!g_deferredLoadSweepRetryScheduled.compare_exchange_strong(
                     expected, true, std::memory_order_acq_rel)) {
                 return;
             }
@@ -4564,9 +2573,9 @@ namespace NpcAppearance
                 std::thread([] {
                     try {
                         for (std::uint32_t wait = 1;
-                             wait <= kDeferredC2RetryMaxWaits;
+                             wait <= kLoadSweepRetryMaxWaits;
                              ++wait) {
-                            std::this_thread::sleep_for(kDeferredC2RetryDelay);
+                            std::this_thread::sleep_for(kLoadSweepRetryDelay);
                             const auto diagnostics =
                                 Util::NativeMainThreadQueue::GetDiagnostics();
                             if (!diagnostics.queueEnabled ||
@@ -4576,7 +2585,7 @@ namespace NpcAppearance
 
                             const auto* tasks = SFSE::GetTaskInterface();
                             if (!tasks) {
-                                g_deferredC2RetryScheduled.store(
+                                g_deferredLoadSweepRetryScheduled.store(
                                     false, std::memory_order_release);
                                 KillMutation(
                                     "SFSE task interface unavailable for deferred load retry");
@@ -4585,30 +2594,30 @@ namespace NpcAppearance
                                 return;
                             }
                             tasks->AddTask([] {
-                                g_deferredC2RetryScheduled.store(
+                                g_deferredLoadSweepRetryScheduled.store(
                                     false, std::memory_order_release);
-                                PumpDeferredC2LoadTask();
+                                PumpDeferredLoadSweep();
                             });
                             return;
                         }
 
-                        g_deferredC2RetryScheduled.store(
+                        g_deferredLoadSweepRetryScheduled.store(
                             false, std::memory_order_release);
                         KillMutation(
                             "native queue unavailable for deferred load retry");
                         REX::CRITICAL(
                             "[NpcAppearance] deferred load retry timed out after {} ms waiting for the native queue; pending work remains fail-closed",
-                            kDeferredC2RetryMaxWaits *
-                                static_cast<std::uint32_t>(kDeferredC2RetryDelay.count()));
+                            kLoadSweepRetryMaxWaits *
+                                static_cast<std::uint32_t>(kLoadSweepRetryDelay.count()));
                     } catch (const std::exception& e) {
-                        g_deferredC2RetryScheduled.store(
+                        g_deferredLoadSweepRetryScheduled.store(
                             false, std::memory_order_release);
                         KillMutation("deferred load retry worker threw");
                         REX::CRITICAL(
                             "[NpcAppearance] deferred load retry worker threw '{}'; pending work remains fail-closed",
                             e.what());
                     } catch (...) {
-                        g_deferredC2RetryScheduled.store(
+                        g_deferredLoadSweepRetryScheduled.store(
                             false, std::memory_order_release);
                         KillMutation("deferred load retry worker threw");
                         REX::CRITICAL(
@@ -4616,14 +2625,14 @@ namespace NpcAppearance
                     }
                 }).detach();
             } catch (const std::exception& e) {
-                g_deferredC2RetryScheduled.store(
+                g_deferredLoadSweepRetryScheduled.store(
                     false, std::memory_order_release);
                 KillMutation("deferred load retry scheduling threw");
                 REX::CRITICAL(
                     "[NpcAppearance] deferred load retry scheduling threw '{}'; pending work remains fail-closed",
                     e.what());
             } catch (...) {
-                g_deferredC2RetryScheduled.store(
+                g_deferredLoadSweepRetryScheduled.store(
                     false, std::memory_order_release);
                 KillMutation("deferred load retry scheduling threw");
                 REX::CRITICAL(
@@ -4631,17 +2640,17 @@ namespace NpcAppearance
             }
         }
 
-        void PumpDeferredC2LoadTask() noexcept
+        void PumpDeferredLoadSweep() noexcept
         {
-            std::shared_ptr<DeferredC2LoadTask> pending;
+            std::shared_ptr<DeferredLoadSweepTask> pending;
             try {
                 {
-                    const std::scoped_lock lock{ g_deferredC2LoadMutex };
-                    if (!g_deferredC2LoadTask || g_deferredC2LoadInFlight) {
+                    const std::scoped_lock lock{ g_deferredLoadSweepMutex };
+                    if (!g_deferredLoadSweepTask || g_deferredLoadSweepInFlight) {
                         return;
                     }
-                    pending = g_deferredC2LoadTask;
-                    g_deferredC2LoadInFlight = pending;
+                    pending = g_deferredLoadSweepTask;
+                    g_deferredLoadSweepInFlight = pending;
                 }
 
                 auto execute = [pending] {
@@ -4649,15 +2658,15 @@ namespace NpcAppearance
                     std::uint32_t attempt = 0;
                     try {
                         {
-                            const std::scoped_lock lock{ g_deferredC2LoadMutex };
+                            const std::scoped_lock lock{ g_deferredLoadSweepMutex };
                             attempt = ++pending->attempts;
                         }
                         complete = pending->run(attempt);
                         if (!complete &&
-                            attempt >= kC2LoadReadyMaxNativeFrames) {
+                            attempt >= kLoadSweepReadyMaxNativeFrames) {
                             KillMutation("load-return actor readiness timed out");
                             REX::CRITICAL(
-                                "[NpcAppearance] C2 LOAD-RETURN generation={} readiness TIMEOUT after {} verified native frames; no mutation",
+                                "[NpcAppearance] LOAD-RETURN generation={} readiness TIMEOUT after {} verified native frames; no mutation",
                                 pending->generation, attempt);
                             complete = true;
                         }
@@ -4665,7 +2674,7 @@ namespace NpcAppearance
                         KillMutation("deferred load-return native task threw");
                         try {
                             REX::CRITICAL(
-                                "[NpcAppearance] deferred C2 LOAD-RETURN generation={} threw '{}' inside the verified drain",
+                                "[NpcAppearance] deferred LOAD-RETURN generation={} threw '{}' inside the verified drain",
                                 pending->generation, e.what());
                         } catch (...) {
                         }
@@ -4673,24 +2682,24 @@ namespace NpcAppearance
                         KillMutation("deferred load-return native task threw");
                         try {
                             REX::CRITICAL(
-                                "[NpcAppearance] deferred C2 LOAD-RETURN generation={} threw inside the verified drain",
+                                "[NpcAppearance] deferred LOAD-RETURN generation={} threw inside the verified drain",
                                 pending->generation);
                         } catch (...) {
                         }
                     }
                     bool retry = false;
                     {
-                        const std::scoped_lock lock{ g_deferredC2LoadMutex };
-                        if (complete && g_deferredC2LoadTask == pending) {
-                            g_deferredC2LoadTask.reset();
+                        const std::scoped_lock lock{ g_deferredLoadSweepMutex };
+                        if (complete && g_deferredLoadSweepTask == pending) {
+                            g_deferredLoadSweepTask.reset();
                         }
-                        retry = g_deferredC2LoadTask != nullptr;
-                        if (g_deferredC2LoadInFlight == pending) {
-                            g_deferredC2LoadInFlight.reset();
+                        retry = g_deferredLoadSweepTask != nullptr;
+                        if (g_deferredLoadSweepInFlight == pending) {
+                            g_deferredLoadSweepInFlight.reset();
                         }
                     }
                     if (retry) {
-                        ScheduleDeferredC2Retry();
+                        ScheduleDeferredLoadSweepRetry();
                     }
                 };
 
@@ -4702,25 +2711,25 @@ namespace NpcAppearance
                 }
 
                 const auto postResult = Util::NativeMainThreadQueue::Post(
-                    std::move(execute), "NpcAppearance.C2.LoadApply",
+                    std::move(execute), "NpcAppearance.LoadSweep",
                     [pending] {
                         bool retry = false;
                         {
-                            const std::scoped_lock lock{ g_deferredC2LoadMutex };
-                            if (g_deferredC2LoadInFlight == pending) {
-                                g_deferredC2LoadInFlight.reset();
+                            const std::scoped_lock lock{ g_deferredLoadSweepMutex };
+                            if (g_deferredLoadSweepInFlight == pending) {
+                                g_deferredLoadSweepInFlight.reset();
                             }
-                            retry = g_deferredC2LoadTask != nullptr;
+                            retry = g_deferredLoadSweepTask != nullptr;
                         }
                         if (retry) {
-                            ScheduleDeferredC2Retry();
+                            ScheduleDeferredLoadSweepRetry();
                         }
                     });
                 if (postResult ==
                     Util::NativeMainThreadQueue::PostResult::kQueued) {
                     if (pending->attempts == 0) {
                         REX::INFO(
-                            "[NpcAppearance] C2 LOAD-RETURN generation={} queued for verified native drain after queueDeferral={}",
+                            "[NpcAppearance] LOAD-RETURN generation={} queued for verified native drain after queueDeferral={}",
                             pending->generation, pending->deferralLogged);
                     }
                     return;
@@ -4728,11 +2737,11 @@ namespace NpcAppearance
 
                 bool logDeferral = false;
                 {
-                    const std::scoped_lock lock{ g_deferredC2LoadMutex };
-                    if (g_deferredC2LoadInFlight == pending) {
-                        g_deferredC2LoadInFlight.reset();
+                    const std::scoped_lock lock{ g_deferredLoadSweepMutex };
+                    if (g_deferredLoadSweepInFlight == pending) {
+                        g_deferredLoadSweepInFlight.reset();
                     }
-                    if (g_deferredC2LoadTask == pending &&
+                    if (g_deferredLoadSweepTask == pending &&
                         !pending->deferralLogged) {
                         pending->deferralLogged = true;
                         logDeferral = true;
@@ -4740,34 +2749,34 @@ namespace NpcAppearance
                 }
                 if (logDeferral) {
                     REX::INFO(
-                        "[NpcAppearance] C2 LOAD-RETURN generation={} deferred until native queue is available result={} tid={} queueEnabled={} singleton=0x{:X}",
+                        "[NpcAppearance] LOAD-RETURN generation={} deferred until native queue is available result={} tid={} queueEnabled={} singleton=0x{:X}",
                         pending->generation,
                         Util::NativeMainThreadQueue::ToString(postResult),
                         diagnostics.currentThreadID, diagnostics.queueEnabled,
                         diagnostics.singleton);
                 }
-                ScheduleDeferredC2Retry();
+                ScheduleDeferredLoadSweepRetry();
             } catch (const std::exception& e) {
                 {
-                    const std::scoped_lock lock{ g_deferredC2LoadMutex };
-                    if (g_deferredC2LoadInFlight == pending) {
-                        g_deferredC2LoadInFlight.reset();
+                    const std::scoped_lock lock{ g_deferredLoadSweepMutex };
+                    if (g_deferredLoadSweepInFlight == pending) {
+                        g_deferredLoadSweepInFlight.reset();
                     }
                 }
                 KillMutation("deferred load-return scheduling threw");
                 REX::CRITICAL(
-                    "[NpcAppearance] deferred C2 LOAD-RETURN scheduling threw '{}'; no mutation",
+                    "[NpcAppearance] deferred LOAD-RETURN scheduling threw '{}'; no mutation",
                     e.what());
             } catch (...) {
                 {
-                    const std::scoped_lock lock{ g_deferredC2LoadMutex };
-                    if (g_deferredC2LoadInFlight == pending) {
-                        g_deferredC2LoadInFlight.reset();
+                    const std::scoped_lock lock{ g_deferredLoadSweepMutex };
+                    if (g_deferredLoadSweepInFlight == pending) {
+                        g_deferredLoadSweepInFlight.reset();
                     }
                 }
                 KillMutation("deferred load-return scheduling threw");
                 REX::CRITICAL(
-                    "[NpcAppearance] deferred C2 LOAD-RETURN scheduling threw; no mutation");
+                    "[NpcAppearance] deferred LOAD-RETURN scheduling threw; no mutation");
             }
         }
 
@@ -4785,7 +2794,7 @@ namespace NpcAppearance
                 const auto loadReturn =
                     g_loadReturnCount.fetch_add(1, std::memory_order_relaxed) + 1;
 
-                auto pending = std::make_shared<DeferredC2LoadTask>();
+                auto pending = std::make_shared<DeferredLoadSweepTask>();
                 pending->generation = loadGeneration;
                 pending->run = [loadReturn, loadGeneration](
                                    const std::uint32_t attempt) {
@@ -4793,7 +2802,7 @@ namespace NpcAppearance
                         if (g_loadGeneration.load(std::memory_order_acquire) !=
                             loadGeneration) {
                             REX::WARN(
-                                "[NpcAppearance] C2 LOAD-RETURN return={} generation={} superseded before native execution",
+                                "[NpcAppearance] LOAD-RETURN return={} generation={} superseded before native execution",
                                 loadReturn, loadGeneration);
                             return true;
                         }
@@ -4804,57 +2813,57 @@ namespace NpcAppearance
                         if (menusBlockMutation) {
                             if (attempt == 1 || (attempt % 60) == 0) {
                                 REX::INFO(
-                                    "[NpcAppearance] C2 LOAD-RETURN return={} generation={} readiness WAIT attempt={} reason=blocking-menu",
+                                    "[NpcAppearance] LOAD-RETURN return={} generation={} readiness WAIT attempt={} reason=blocking-menu",
                                     loadReturn, loadGeneration, attempt);
                             }
                             return false;
                         }
                         if (!MutationOperational()) {
                             REX::WARN(
-                                "[NpcAppearance] C2 LOAD-RETURN return={} generation={} mutation not operational; no overlay sweep",
+                                "[NpcAppearance] LOAD-RETURN return={} generation={} mutation not operational; no overlay sweep",
                                 loadReturn, loadGeneration);
                             return true;
                         }
                         RunOverlaySweep("load-return");
                         REX::INFO(
-                            "[NpcAppearance] C2 LOAD-RETURN done return={} generation={} tid={}",
+                            "[NpcAppearance] LOAD-RETURN done return={} generation={} tid={}",
                             loadReturn, loadGeneration, ::GetCurrentThreadId());
                         return true;
                     } catch (const std::exception& e) {
                         KillMutation("load-return native task threw");
                         REX::CRITICAL(
-                            "[NpcAppearance] C2 LOAD-RETURN native task threw '{}'; swallowed inside verified drain",
+                            "[NpcAppearance] LOAD-RETURN native task threw '{}'; swallowed inside verified drain",
                             e.what());
                     } catch (...) {
                         KillMutation("load-return native task threw");
                         REX::CRITICAL(
-                            "[NpcAppearance] C2 LOAD-RETURN native task threw; swallowed inside verified drain");
+                            "[NpcAppearance] LOAD-RETURN native task threw; swallowed inside verified drain");
                     }
                     return true;
                 };
                 std::optional<std::uint64_t> supersededGeneration;
                 {
-                    const std::scoped_lock lock{ g_deferredC2LoadMutex };
-                    if (g_deferredC2LoadTask) {
-                        supersededGeneration = g_deferredC2LoadTask->generation;
+                    const std::scoped_lock lock{ g_deferredLoadSweepMutex };
+                    if (g_deferredLoadSweepTask) {
+                        supersededGeneration = g_deferredLoadSweepTask->generation;
                     }
-                    g_deferredC2LoadTask = std::move(pending);
+                    g_deferredLoadSweepTask = std::move(pending);
                 }
                 if (supersededGeneration) {
                     REX::WARN(
-                        "[NpcAppearance] C2 LOAD-RETURN generation={} superseded pending generation={}; successor will run after the in-flight identity retires",
+                        "[NpcAppearance] LOAD-RETURN generation={} superseded pending generation={}; successor will run after the in-flight identity retires",
                         loadGeneration, *supersededGeneration);
                 }
-                PumpDeferredC2LoadTask();
+                PumpDeferredLoadSweep();
             } catch (const std::exception& e) {
                 KillMutation("load-return callback scheduling threw");
                 REX::CRITICAL(
-                    "[NpcAppearance] C2 LOAD-RETURN scheduling threw '{}'; no mutation",
+                    "[NpcAppearance] LOAD-RETURN scheduling threw '{}'; no mutation",
                     e.what());
             } catch (...) {
                 KillMutation("load-return callback scheduling threw");
                 REX::CRITICAL(
-                    "[NpcAppearance] C2 LOAD-RETURN scheduling threw; no mutation");
+                    "[NpcAppearance] LOAD-RETURN scheduling threw; no mutation");
             }
         }
 
@@ -4913,7 +2922,7 @@ namespace NpcAppearance
             const LineSink startupOut = [](const std::string& a_text) {
                 REX::INFO("[NpcAppearance] startup: {}", a_text);
             };
-            RunScan(startupOut, { "npcapp", "scan" });
+            RunScan(startupOut, packsRoot);
 
             std::size_t assignments = 0;
             {
@@ -4926,9 +2935,8 @@ namespace NpcAppearance
             }
 
             // The Set3d trigger registers unconditionally; the handler
-            // no-ops while `npcapp overlay off` clears the mode atomic,
-            // which keeps the toggle safe from any thread. Without the
-            // source, only the post-load sweep can style actors.
+            // no-ops once mutation is killed. Without the source, only the
+            // post-load sweep can style actors.
             if (!g_overlaySinkRegistered.load(std::memory_order_acquire)) {
                 auto* set3dSource = RE::RuntimeComponentDBFactory::
                     ReferenceSet3d::GetEventSource();
@@ -4998,53 +3006,4 @@ namespace NpcAppearance
         }
     }
 
-    void FailClosed(const std::string_view a_reason) noexcept
-    {
-        KillMutation(a_reason);
-    }
-
-    void RunCommand(const LineSink& a_out, const std::vector<std::string>& a_args)
-    {
-        if (a_args.size() < 2 || a_args[1] == "status") {
-            RunStatus(a_out);
-        } else if (a_args[1] == "selftest") {
-            RunSelfTest(a_out);
-        } else if (a_args[1] == "scan") {
-            RunScan(a_out, a_args);
-        } else if (a_args[1] == "inspect") {
-            RunInspect(a_out, a_args);
-        } else if (a_args[1] == "resolve") {
-            RunResolve(a_out, a_args);
-        } else if (a_args[1] == "refs") {
-            RunRefs(a_out, a_args);
-        } else if (a_args[1] == "avm") {
-            RunAvmInspect(a_out, a_args);
-        } else if (a_args[1] == "donor") {
-            RunDonor(a_out, a_args);
-        } else if (a_args[1] == "donorseed") {
-            RunDonorSeed(a_out, a_args);
-        } else if (a_args[1] == "donormorph") {
-            RunDonorMorph(a_out, a_args);
-        } else if (a_args[1] == "donorvisual") {
-            RunDonorVisual(a_out, a_args);
-        } else if (a_args[1] == "donorcopy") {
-            RunDonorCopy(a_out, a_args);
-        } else if (a_args[1] == "copyref") {
-            RunCopyRef(a_out, a_args);
-        } else if (a_args[1] == "overlay") {
-            RunOverlayMode(a_out, a_args);
-        } else if (a_args[1] == "probebaseline") {
-            RunProbeBaseline(a_out, a_args);
-        } else if (a_args[1] == "probecompare") {
-            RunProbeCompare(a_out, a_args);
-        } else if (a_args[1] == "probe97401") {
-            RunProbe97401(a_out, a_args);
-        } else if (a_args[1] == "probetransient") {
-            RunProbeTransient(a_out, a_args);
-        } else if (a_args[1] == "probeset3d") {
-            RunProbeSet3d(a_out, a_args);
-        } else {
-            a_out("npcapp: status|selftest|scan [packsRoot]|inspect <npc>|resolve <plugin:localFormID>|refs <plugin:localFormID> <npc>|avm <plugin:localFormID> <npc>|donor [count]|donorseed <plugin:localFormID> <npc>|donormorph <plugin:localFormID> <npc>|donorvisual <plugin:localFormID> <npc>|donorcopy <plugin:localFormID> <npc>|copyref <targetRefID> <sourceRefID> [0|1]|overlay [status|on|off|sweep]|probebaseline <plugin:localFormID>|probecompare <plugin:localFormID>|probe97401 <targetRefID> <sourceRefID> [restore=0|1]|probetransient <plugin:localFormID> <actorRefID> <npc>|probeset3d [on|off|status]");
-        }
-    }
 }

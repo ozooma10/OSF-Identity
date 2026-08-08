@@ -1,5 +1,9 @@
 # Overlay Feasibility Probe Findings — 2026-08-07
 
+> Historical record. The `npcapp` probe/diagnostic commands and the `idnpcapp` bridge described
+> here were deleted from the runtime after these findings were locked in (2026-08-08); this
+> document is the record of what they proved.
+
 In-game probe session for the render-time overlay migration (plan: mutate→restore→veto bracket
 replaced by an overlay whose invariant is "the serializable TESNPC is never preset-mutated at
 rest; every failure renders vanilla; saves always reach the engine gateway"). Game 1.16.244,
