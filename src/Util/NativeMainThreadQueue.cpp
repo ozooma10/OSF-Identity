@@ -54,6 +54,13 @@ namespace Util::NativeMainThreadQueue
             }
             return reinterpret_cast<RE::BSService::TaskQueue*>(value);
         }
+
+        // Both drop-signal flags share one lifetime; one control block.
+        struct PostFlags
+        {
+            std::atomic<bool> returned{ false };
+            std::atomic<bool> droppedInline{ false };
+        };
     }
 
     State SnapshotState() noexcept
@@ -68,34 +75,50 @@ namespace Util::NativeMainThreadQueue
         return result;
     }
 
-    PostResult Post(std::function<void()> a_task, const std::string_view a_label, std::function<void()> a_onDrop)
+    PostResult PostOrRunInline(std::function<void()> a_task, const std::string_view a_label, std::function<void()> a_onDrop)
     {
         if (!a_task) {
             return PostResult::kEmptyTask;
         }
 
         const auto before = SnapshotState();
-        if (!before.queueEnabled) {
-            return PostResult::kQueueDisabled;
-        }
-        if (before.singleton == 0) {
-            return PostResult::kSingletonUnavailable;
-        }
         if (before.insideDrain) {
-            // AddTask executes inline from the drain owner. Reject that path so every accepted post retains the same verified dispatch contract.
-            return PostResult::kAlreadyInsideDrain;
+            // Already on the verified drain (AddTask would execute inline
+            // anyway): run now, ahead of the availability checks — inline
+            // dispatch needs neither the enable byte nor the singleton.
+            try {
+                a_task();
+                return PostResult::kRanInline;
+            } catch (const std::exception& e) {
+                try {
+                    REX::CRITICAL(
+                        "[NativeMainThreadQueue] '{}' threw '{}' inside the verified drain",
+                        a_label, e.what());
+                } catch (...) {
+                }
+                return PostResult::kInlineThrew;
+            } catch (...) {
+                try {
+                    REX::CRITICAL(
+                        "[NativeMainThreadQueue] '{}' threw inside the verified drain",
+                        a_label);
+                } catch (...) {
+                }
+                return PostResult::kInlineThrew;
+            }
+        }
+        if (!IsQueueUsable(before)) {
+            return before.queueEnabled ? PostResult::kSingletonUnavailable
+                                       : PostResult::kQueueDisabled;
         }
 
         auto* queue = reinterpret_cast<RE::BSService::TaskQueue*>(before.singleton);
-        const std::string label{ a_label };
-        const auto returned = std::make_shared<std::atomic<bool>>(false);
-        const auto droppedInline = std::make_shared<std::atomic<bool>>(false);
+        const auto flags = std::make_shared<PostFlags>();
         queue->AddTask([
             task = std::move(a_task),
-            label,
+            label = std::string{ a_label },
             onDrop = std::move(a_onDrop),
-            returned,
-            droppedInline
+            flags
         ]() mutable noexcept {
             bool taskStarted = false;
             bool dropSignaled = false;
@@ -104,8 +127,8 @@ namespace Util::NativeMainThreadQueue
                     return;
                 }
                 dropSignaled = true;
-                if (!returned->load(std::memory_order_acquire)) {
-                    droppedInline->store(true, std::memory_order_release);
+                if (!flags->returned.load(std::memory_order_acquire)) {
+                    flags->droppedInline.store(true, std::memory_order_release);
                 }
                 if (onDrop) {
                     try {
@@ -115,13 +138,20 @@ namespace Util::NativeMainThreadQueue
                 }
             };
             try {
-                const auto during = SnapshotState();
-                if (!during.insideDrain) {
+                const auto currentTid = ::GetCurrentThreadId();
+                const auto drainOwnerTid = ReadDrainOwnerThreadID();
+                if (drainOwnerTid == 0 || currentTid != drainOwnerTid) {
                     signalDrop();
-                    REX::CRITICAL(
-                        "[NativeMainThreadQueue] DROP '{}' tid={} drainOwnerTid={} enabled={} singleton=0x{:X}; payload not run",
-                        label, during.currentThreadID, during.drainOwnerThreadID,
-                        during.queueEnabled, during.singleton);
+                    // Full snapshot only on the drop path, where the extra
+                    // fields are actually printed.
+                    const auto during = SnapshotState();
+                    try {
+                        REX::CRITICAL(
+                            "[NativeMainThreadQueue] DROP '{}' tid={} drainOwnerTid={} enabled={} singleton=0x{:X}; payload not run",
+                            label, currentTid, drainOwnerTid,
+                            during.queueEnabled, during.singleton);
+                    } catch (...) {
+                    }
                     return;
                 }
 
@@ -145,8 +175,8 @@ namespace Util::NativeMainThreadQueue
                 }
             }
         });
-        returned->store(true, std::memory_order_release);
-        if (droppedInline->load(std::memory_order_acquire)) {
+        flags->returned.store(true, std::memory_order_release);
+        if (flags->droppedInline.load(std::memory_order_acquire)) {
             return PostResult::kDroppedInline;
         }
         return PostResult::kQueued;
@@ -157,12 +187,14 @@ namespace Util::NativeMainThreadQueue
         switch (a_result) {
         case PostResult::kQueued:
             return "queued";
+        case PostResult::kRanInline:
+            return "ran-inline";
+        case PostResult::kInlineThrew:
+            return "inline-threw";
         case PostResult::kQueueDisabled:
             return "queue-disabled";
         case PostResult::kSingletonUnavailable:
             return "singleton-unavailable";
-        case PostResult::kAlreadyInsideDrain:
-            return "already-inside-drain";
         case PostResult::kDroppedInline:
             return "dropped-inline";
         case PostResult::kEmptyTask:

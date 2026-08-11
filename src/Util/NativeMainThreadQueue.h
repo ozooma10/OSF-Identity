@@ -19,15 +19,28 @@ namespace Util::NativeMainThreadQueue
     enum class PostResult
     {
         kQueued,
+        kRanInline,
+        kInlineThrew,
         kQueueDisabled,
         kSingletonUnavailable,
-        kAlreadyInsideDrain,
         kDroppedInline,
         kEmptyTask
     };
 
-    // Posts through Starfield's BSService command stream. Payloads are guarded again at execution and are dropped unless the callback runs while the current thread owns the native queue's drain lock.
-    [[nodiscard]] PostResult Post(
+    // The single readiness definition shared by dispatch and retry polling.
+    [[nodiscard]] constexpr bool IsQueueUsable(const State& a_state) noexcept
+    {
+        return a_state.queueEnabled && a_state.singleton != 0;
+    }
+
+    // Dispatches through Starfield's BSService command stream. A caller
+    // already inside the verified drain runs the task immediately
+    // (kRanInline / kInlineThrew; a_onDrop is not invoked — the caller's
+    // failure path owns that cleanup). Everyone else posts: payloads are
+    // guarded again at execution and are dropped unless the callback runs
+    // while the current thread owns the native queue's drain lock, with
+    // a_onDrop as the cancellation signal.
+    [[nodiscard]] PostResult PostOrRunInline(
         std::function<void()> a_task,
         std::string_view a_label,
         std::function<void()> a_onDrop = {});
