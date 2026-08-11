@@ -42,13 +42,5 @@ namespace Config
         std::vector<ConfigIssue> issues;
     };
 
-    // Runtime handoff type. Selection and engine FormID resolution populate this later.
-    struct SelectedAssignment
-    {
-        Target target;
-        std::filesystem::path presetPath;
-        std::string packID;
-    };
-
     [[nodiscard]] DiscoveryResult DiscoverPacks(const std::filesystem::path& a_packsRoot);
 }

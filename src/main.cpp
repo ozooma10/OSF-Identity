@@ -6,7 +6,7 @@ namespace
 {
     void OnDataLoaded() noexcept
     {
-        Config::PackScanner::ScanPacks();
+        Config::ScanPacks();
         auto isArmed = Runtime::GetOverlayRuntime().IsArmed();
         REX::INFO("[PackScanner] startup scan complete; overlay runtime armed={}", isArmed);
 

@@ -28,14 +28,14 @@ namespace Runtime
         return true;
     }
 
-    std::optional<Config::SelectedAssignment> Runtime::OverlayRuntime::FindAssignment(RE::TESFormID baseID) const
+    std::shared_ptr<const Config::PreparedAssignment> Runtime::OverlayRuntime::FindAssignment(RE::TESFormID baseID) const
     {
         if (!m_armed.load()) {
-            return std::nullopt;
+            return {};
         }
         const auto found = m_assignments.find(baseID);
         if (found == m_assignments.end()) {
-            return std::nullopt;
+            return {};
         }
         return found->second;
     }
@@ -60,12 +60,12 @@ namespace Runtime
         }
 
         const auto result = Util::NativeMainThreadQueue::Post(
-            [this, refID, baseID, assignment = std::move(*assignment)] {
+            [this, refID, baseID, assignment = std::move(assignment)] {
                 try {
                     auto* actor = RE::TESForm::LookupByID<RE::Actor>(refID);
                     auto* target = RE::TESForm::LookupByID<RE::TESNPC>(baseID);
                     if (actor && target && actor->GetNPC() == target) {
-                        static_cast<void>(ApplyTransientOverlay(target, actor, refID, assignment));
+                        static_cast<void>(ApplyTransientOverlay(target, actor, refID, *assignment));
                     }
                 } catch (const std::exception& error) {
                     REX::CRITICAL("[OverlayRuntime] overlay apply for ref=0x{:08X} threw: {}", refID, error.what());
@@ -112,7 +112,7 @@ namespace Runtime
         m_inFlightRefs.erase(refID);
     }
 
-    bool OverlayRuntime::ApplyTransientOverlay(RE::TESNPC *target, RE::Actor *actor, RE::TESFormID actorRefID, const Config::SelectedAssignment &assignment)
+    bool OverlayRuntime::ApplyTransientOverlay(RE::TESNPC *target, RE::Actor *actor, RE::TESFormID actorRefID, const Config::PreparedAssignment &assignment)
     {
         if(!target || !actor || actor->GetNPC() != target || actor->GetFormID() != actorRefID) {
             return false;

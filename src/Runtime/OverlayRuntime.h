@@ -1,17 +1,17 @@
 #pragma once
 
-#include "Config/Config.h"
+#include "Config/PreparedAssignment.h"
 
 namespace Runtime
 {
-    using AssignmentMap = std::unordered_map<RE::TESFormID, Config::SelectedAssignment>;
+    using AssignmentMap = Config::PreparedAssignmentMap;
     
     class OverlayRuntime
     {
     public:
         bool Arm(AssignmentMap assignments);
 
-        std::optional<Config::SelectedAssignment> FindAssignment(RE::TESFormID baseID) const;
+        std::shared_ptr<const Config::PreparedAssignment> FindAssignment(RE::TESFormID baseID) const;
 
         void OnReferenceSet3d(RE::TESObjectREFR* a_ref);
 
@@ -29,7 +29,7 @@ namespace Runtime
         bool TryReserveApply(RE::TESFormID baseID, RE::TESFormID refID);
         void ReleaseInFlight(RE::TESFormID refID);
 
-        bool ApplyTransientOverlay(RE::TESNPC* target, RE::Actor* actor, RE::TESFormID actorRefID, const Config::SelectedAssignment& assignment);
+        bool ApplyTransientOverlay(RE::TESNPC* target, RE::Actor* actor, RE::TESFormID actorRefID, const Config::PreparedAssignment& assignment);
         void DisableBase(RE::TESFormID baseID);
         void RecordSuccessfulApply(RE::TESFormID actorRefId);
 

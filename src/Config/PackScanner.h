@@ -1,6 +1,8 @@
 #pragma once
 
-namespace Config::PackScanner
+#include "PreparedAssignment.h"
+
+namespace Config
 {
     void ScanPacks();
 }
