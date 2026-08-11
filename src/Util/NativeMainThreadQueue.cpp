@@ -2,18 +2,6 @@
 
 #include "pch.h"
 
-#include <Windows.h>
-
-#include <atomic>
-#include <cstring>
-#include <memory>
-#include <string>
-
-// <wingdi.h> defines ERROR as a bare macro, which would mangle REX::ERROR below.
-#ifdef ERROR
-#    undef ERROR
-#endif
-
 namespace Util::NativeMainThreadQueue
 {
     namespace {
@@ -28,8 +16,8 @@ namespace Util::NativeMainThreadQueue
                 void Run() override
                 {
                     const auto owningTid = RE::BSService::TaskQueue::GetDrainOwnerThreadID();
-                    const auto currentTid = ::GetCurrentThreadId();
-                    if(::GetCurrentThreadId() != owningTid) {
+                    const auto currentTid = REX::W32::GetCurrentThreadId();
+                    if(currentTid != owningTid) {
                         if(_onDrop) {
                             try {
                                 _onDrop();
@@ -61,7 +49,7 @@ namespace Util::NativeMainThreadQueue
         [[nodiscard]] bool InsideDrain() noexcept
         {
             const auto owner = RE::BSService::TaskQueue::GetDrainOwnerThreadID();
-            return owner != 0 && owner == ::GetCurrentThreadId();
+            return owner != 0 && owner == REX::W32::GetCurrentThreadId();
         }
     }
 
