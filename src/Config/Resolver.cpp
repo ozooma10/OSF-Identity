@@ -1,5 +1,7 @@
 #include "Resolver.h"
 
+#include <cmath>
+
 namespace Config
 {
     namespace
@@ -162,7 +164,13 @@ namespace Config
 
         void ResolveAvmReferences(ResolvedAppearanceDependencies& a_result, const AppearancePreset& a_preset)
         {
+            if (a_preset.postBlendLayers.empty()) {
+                a_result.avmReferencesComplete = true;
+                return;
+            }
+
             bool ok = true;
+            a_result.avmLayers.reserve(a_preset.postBlendLayers.size());
             for (const auto& layer : a_preset.postBlendLayers) {
                 RE::BSFixedString category{ layer.name };
                 RE::BSScrapArray<RE::BSFixedString> values;
@@ -184,8 +192,50 @@ namespace Config
                 if (!ResolveAvmModulation(a_result, layer, category)) {
                     ok = false;
                 }
+
+                RE::AVMData materialized{};
+                materialized.category = category;
+                const RE::BSFixedString value{ layer.value };
+                std::uint32_t matchedStore = 0;
+                bool ambiguous = false;
+                for (std::uint32_t store = 1; store <= 2; ++store) {
+                    RE::AVMData::Entry candidate{};
+                    if (!RE::BSFaceDB::ResolveEntry(store, category, value, candidate)) {
+                        continue;
+                    }
+                    if (matchedStore != 0) {
+                        ok = false;
+                        ambiguous = true;
+                        AddIssue(a_result, "PostBlendFaceCustomization.LayersA.Value", layer.value, "avm_value_ambiguous", std::format("value resolves in multiple FaceDB stores for layer '{}'", layer.name));
+                        break;
+                    }
+                    matchedStore = store;
+                    materialized.unk10 = candidate;
+                }
+                if (matchedStore == 0) {
+                    ok = false;
+                    AddIssue(a_result, "PostBlendFaceCustomization.LayersA.Value", layer.value, "avm_value_materialization_failed", std::format("value could not be materialized for layer '{}'", layer.name));
+                    continue;
+                }
+                if (ambiguous) {
+                    continue;
+                }
+                materialized.type = static_cast<RE::AVMData::Type>(matchedStore);
+
+                if (!layer.modulationValue.empty()) {
+                    const RE::BSFixedString modulationValue{ layer.modulationValue };
+                    RE::AVMData::Entry modulation{};
+                    if (!RE::BSFaceDB::ResolveEntry(3, category, modulationValue, modulation)) {
+                        ok = false;
+                        AddIssue(a_result, "PostBlendFaceCustomization.LayersA.ModulationValue", layer.modulationValue, "avm_modulation_materialization_failed", std::format("modulation could not be materialized for layer '{}'", layer.name));
+                        continue;
+                    }
+                    materialized.unk10.color = modulation.color;
+                }
+                materialized.unk10.intensity = static_cast<std::uint32_t>(std::floor(std::clamp(layer.intensity, 0.0, 1.0) * 64.0));
+                a_result.avmLayers.push_back(std::move(materialized));
             }
-            a_result.avmReferencesComplete = ok;
+            a_result.avmReferencesComplete = ok && a_result.avmLayers.size() == a_preset.postBlendLayers.size();
         }
 
         void ResolveColorReferences(ResolvedAppearanceDependencies& a_result, const AppearancePreset& a_preset)

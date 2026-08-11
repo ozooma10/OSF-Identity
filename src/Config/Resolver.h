@@ -17,6 +17,7 @@ namespace Config
         RE::TESRace* race{ nullptr };
         std::vector<RE::BGSHeadPart*> miscHeadParts;
         std::vector<RE::BGSHeadPart*> uniqueHeadParts;
+        std::vector<RE::AVMData> avmLayers;
         bool formReferencesComplete{ false };
         bool boneReferencesComplete{ false };
         bool shapeReferencesComplete{ false };

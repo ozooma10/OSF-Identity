@@ -1,7 +1,6 @@
 #include "Config/PackScanner.h"
 #include "Runtime/OverlayRuntime.h"
 #include "Events/ReferenceSet3dEvent.h"
-#include "Util/NativeMainThreadQueue.h"
 
 namespace
 {

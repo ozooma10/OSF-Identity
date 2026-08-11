@@ -366,13 +366,13 @@ namespace NpcAppearance
             check(a_donor->morphWeight.fat == static_cast<float>(a_preset.morphWeights.z),
                   "MorphWeight.z/fat");
 
-            check(a_donor->unk3D8 &&
-                      a_donor->unk3D8->size() == a_preset.bodyMorphRegionValues.size(),
+            check(a_donor->bodyMorphValues &&
+                      a_donor->bodyMorphValues->size() == a_preset.bodyMorphRegionValues.size(),
                   "BodyMorphRegionValuesA size");
-            if (a_donor->unk3D8 &&
-                a_donor->unk3D8->size() == a_preset.bodyMorphRegionValues.size()) {
+            if (a_donor->bodyMorphValues &&
+                a_donor->bodyMorphValues->size() == a_preset.bodyMorphRegionValues.size()) {
                 for (std::size_t i = 0; i < a_preset.bodyMorphRegionValues.size(); ++i) {
-                    check((*a_donor->unk3D8)[static_cast<std::uint32_t>(i)] ==
+                    check((*a_donor->bodyMorphValues)[static_cast<std::uint32_t>(i)] ==
                               static_cast<float>(a_preset.bodyMorphRegionValues[i]),
                           std::format("BodyMorphRegionValuesA[{}]", i));
                 }
@@ -404,9 +404,9 @@ namespace NpcAppearance
                 for (const auto& slider : region.sliders) {
                     float actual = 0.0F;
                     bool found = false;
-                    if (slider.id != 0 && a_donor->unk3E0) {
-                        const auto it = a_donor->unk3E0->find(slider.id);
-                        if (it != a_donor->unk3E0->end()) {
+                    if (slider.id != 0 && a_donor->facialBoneValues) {
+                        const auto it = a_donor->facialBoneValues->find(slider.id);
+                        if (it != a_donor->facialBoneValues->end()) {
                             actual = it->value;
                             found = true;
                         }
@@ -577,7 +577,7 @@ namespace NpcAppearance
                 RE::TESForm::LookupByID<RE::TESNPC>(donorFormID) == donor &&
                 donor->QRefCount() == 0 && donor->GetRace() == nullptr &&
                 donor->faceNPC == nullptr && headPartCount == 0 &&
-                donor->unk3D8 == nullptr && donor->unk3E0 == nullptr &&
+                donor->bodyMorphValues == nullptr && donor->facialBoneValues == nullptr &&
                 donor->unk3E8 == nullptr && donor->tintAVMData.empty() &&
                 donor->shapeBlendData == nullptr && donor->pronoun.underlying() == 0;
             if (!initialized) {
@@ -853,8 +853,8 @@ namespace NpcAppearance
                 return *reinterpret_cast<const std::uintptr_t*>(a_donor) == npcVtable &&
                     a_formID != 0 &&
                     RE::TESForm::LookupByID<RE::TESNPC>(a_formID) == a_donor &&
-                    a_donor->QRefCount() == 0 && a_donor->unk3D8 == nullptr &&
-                    a_donor->unk3E0 == nullptr && a_donor->unk3E8 == nullptr &&
+                    a_donor->QRefCount() == 0 && a_donor->bodyMorphValues == nullptr &&
+                    a_donor->facialBoneValues == nullptr && a_donor->unk3E8 == nullptr &&
                     a_donor->shapeBlendData == nullptr && a_donor->tintAVMData.empty();
             };
             if (!initialized(backupDonor.get(), backupFormID) ||
@@ -880,8 +880,8 @@ namespace NpcAppearance
                 a_out, presetDonor.get(), *decoded.preset);
             const bool presetVisualsValid = ValidateDonorVisualPopulation(
                 a_out, presetDonor.get(), *decoded.preset, resolved, expectedAvms);
-            const bool bodyCompatible = backupDonor->unk3D8 &&
-                backupDonor->unk3D8->size() ==
+            const bool bodyCompatible = backupDonor->bodyMorphValues &&
+                backupDonor->bodyMorphValues->size() ==
                     decoded.preset->bodyMorphRegionValues.size();
             if (!backupExact || !backupIndependent || !presetMorphsValid ||
                 !presetVisualsValid || !bodyCompatible ||
@@ -927,8 +927,8 @@ namespace NpcAppearance
 
             if (!applied) {
                 a_target->morphWeight = backupDonor->morphWeight;
-                for (std::uint32_t i = 0; i < backupDonor->unk3D8->size(); ++i) {
-                    setBody(a_target, i, (*backupDonor->unk3D8)[i]);
+                for (std::uint32_t i = 0; i < backupDonor->bodyMorphValues->size(); ++i) {
+                    setBody(a_target, i, (*backupDonor->bodyMorphValues)[i]);
                 }
                 a_target->skinToneIndex = backupDonor->skinToneIndex;
                 ownedCopy(a_target, backupDonor.get(), false);

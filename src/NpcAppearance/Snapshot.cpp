@@ -51,13 +51,13 @@ namespace NpcAppearance::Detail
             snap.headParts.assign((*headParts).begin(), (*headParts).end());
             snap.headPartStorage = (*headParts).data();
         }
-        if (a_npc->unk3D8) {
-            snap.morphRegionCount = a_npc->unk3D8->size();
-            snap.morphRegionStorage = a_npc->unk3D8;
+        if (a_npc->bodyMorphValues) {
+            snap.morphRegionCount = a_npc->bodyMorphValues->size();
+            snap.morphRegionStorage = a_npc->bodyMorphValues;
         }
-        if (a_npc->unk3E0) {
-            snap.boneValueCount = a_npc->unk3E0->size();
-            snap.boneValueStorage = a_npc->unk3E0;
+        if (a_npc->facialBoneValues) {
+            snap.boneValueCount = a_npc->facialBoneValues->size();
+            snap.boneValueStorage = a_npc->facialBoneValues;
         }
         if (a_npc->unk3E8) {
             snap.boneGroupCount = a_npc->unk3E8->size();
@@ -142,30 +142,30 @@ namespace NpcAppearance::Detail
             return false;
         }
 
-        if ((a_left->unk3D8 == nullptr) != (a_right->unk3D8 == nullptr)) {
+        if ((a_left->bodyMorphValues == nullptr) != (a_right->bodyMorphValues == nullptr)) {
             return false;
         }
-        if (a_left->unk3D8) {
-            if (a_left->unk3D8->size() != a_right->unk3D8->size()) {
+        if (a_left->bodyMorphValues) {
+            if (a_left->bodyMorphValues->size() != a_right->bodyMorphValues->size()) {
                 return false;
             }
-            for (std::uint32_t i = 0; i < a_left->unk3D8->size(); ++i) {
-                if ((*a_left->unk3D8)[i] != (*a_right->unk3D8)[i]) {
+            for (std::uint32_t i = 0; i < a_left->bodyMorphValues->size(); ++i) {
+                if ((*a_left->bodyMorphValues)[i] != (*a_right->bodyMorphValues)[i]) {
                     return false;
                 }
             }
         }
 
-        if ((a_left->unk3E0 == nullptr) != (a_right->unk3E0 == nullptr)) {
+        if ((a_left->facialBoneValues == nullptr) != (a_right->facialBoneValues == nullptr)) {
             return false;
         }
-        if (a_left->unk3E0) {
-            if (a_left->unk3E0->size() != a_right->unk3E0->size()) {
+        if (a_left->facialBoneValues) {
+            if (a_left->facialBoneValues->size() != a_right->facialBoneValues->size()) {
                 return false;
             }
-            for (const auto& entry : *a_left->unk3E0) {
-                const auto other = a_right->unk3E0->find(entry.key);
-                if (other == a_right->unk3E0->end() || other->value != entry.value) {
+            for (const auto& entry : *a_left->facialBoneValues) {
+                const auto other = a_right->facialBoneValues->find(entry.key);
+                if (other == a_right->facialBoneValues->end() || other->value != entry.value) {
                     return false;
                 }
             }
@@ -277,15 +277,15 @@ namespace NpcAppearance::Detail
             }
         }
 
-        snapshot.hasBodyMorphRegions = a_npc->unk3D8 != nullptr;
-        if (a_npc->unk3D8) {
-            snapshot.bodyMorphRegions.assign(a_npc->unk3D8->begin(), a_npc->unk3D8->end());
+        snapshot.hasBodyMorphRegions = a_npc->bodyMorphValues != nullptr;
+        if (a_npc->bodyMorphValues) {
+            snapshot.bodyMorphRegions.assign(a_npc->bodyMorphValues->begin(), a_npc->bodyMorphValues->end());
         }
 
-        snapshot.hasBoneValues = a_npc->unk3E0 != nullptr;
-        if (a_npc->unk3E0) {
-            snapshot.boneValues.reserve(a_npc->unk3E0->size());
-            for (const auto& entry : *a_npc->unk3E0) {
+        snapshot.hasBoneValues = a_npc->facialBoneValues != nullptr;
+        if (a_npc->facialBoneValues) {
+            snapshot.boneValues.reserve(a_npc->facialBoneValues->size());
+            for (const auto& entry : *a_npc->facialBoneValues) {
                 snapshot.boneValues.emplace_back(entry.key, entry.value);
             }
         }
@@ -360,30 +360,30 @@ namespace NpcAppearance::Detail
             }
         }
 
-        if ((a_npc->unk3D8 != nullptr) != a_snapshot.hasBodyMorphRegions) {
+        if ((a_npc->bodyMorphValues != nullptr) != a_snapshot.hasBodyMorphRegions) {
             return false;
         }
-        if (a_npc->unk3D8) {
-            if (a_npc->unk3D8->size() != a_snapshot.bodyMorphRegions.size()) {
+        if (a_npc->bodyMorphValues) {
+            if (a_npc->bodyMorphValues->size() != a_snapshot.bodyMorphRegions.size()) {
                 return false;
             }
-            for (std::uint32_t i = 0; i < a_npc->unk3D8->size(); ++i) {
-                if ((*a_npc->unk3D8)[i] != a_snapshot.bodyMorphRegions[i]) {
+            for (std::uint32_t i = 0; i < a_npc->bodyMorphValues->size(); ++i) {
+                if ((*a_npc->bodyMorphValues)[i] != a_snapshot.bodyMorphRegions[i]) {
                     return false;
                 }
             }
         }
 
-        if ((a_npc->unk3E0 != nullptr) != a_snapshot.hasBoneValues) {
+        if ((a_npc->facialBoneValues != nullptr) != a_snapshot.hasBoneValues) {
             return false;
         }
-        if (a_npc->unk3E0) {
-            if (a_npc->unk3E0->size() != a_snapshot.boneValues.size()) {
+        if (a_npc->facialBoneValues) {
+            if (a_npc->facialBoneValues->size() != a_snapshot.boneValues.size()) {
                 return false;
             }
             for (const auto& [key, value] : a_snapshot.boneValues) {
-                const auto other = a_npc->unk3E0->find(key);
-                if (other == a_npc->unk3E0->end() || other->value != value) {
+                const auto other = a_npc->facialBoneValues->find(key);
+                if (other == a_npc->facialBoneValues->end() || other->value != value) {
                     return false;
                 }
             }

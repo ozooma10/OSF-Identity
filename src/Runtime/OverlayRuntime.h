@@ -17,12 +17,13 @@ namespace Runtime
 
         bool IsArmed() const
         {
-            return m_armed.load();
+            return m_armed.load(std::memory_order_acquire) && !m_mutationKilled.load(std::memory_order_acquire);
         }
 
     private:
         AssignmentMap m_assignments;
         std::atomic<bool> m_armed{ false };
+        std::atomic<bool> m_mutationKilled{ false }; //Returns true if a transient mutation could not be cleaned up. Kind of an e-brake/"ABORT ABORT ABORT SOMETHINGS F'd"
 
 
     private:
@@ -31,6 +32,7 @@ namespace Runtime
 
         bool ApplyTransientOverlay(RE::TESNPC* target, RE::Actor* actor, RE::TESFormID actorRefID, const Config::PreparedAssignment& assignment);
         void DisableBase(RE::TESFormID baseID);
+        void KillMutation(std::string_view reason);
         void RecordSuccessfulApply(RE::TESFormID actorRefId);
 
 

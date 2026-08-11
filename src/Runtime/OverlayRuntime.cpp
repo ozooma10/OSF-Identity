@@ -1,5 +1,7 @@
 #include "OverlayRuntime.h"
 #include "NPCRestorePoint.h"
+#include "NPCPresetApplicator.h"
+
 #include <Util/NativeMainThreadQueue.h>
 
 namespace Runtime
@@ -30,7 +32,7 @@ namespace Runtime
 
     std::shared_ptr<const Config::PreparedAssignment> Runtime::OverlayRuntime::FindAssignment(RE::TESFormID baseID) const
     {
-        if (!m_armed.load()) {
+        if (!IsArmed()) {
             return {};
         }
         const auto found = m_assignments.find(baseID);
@@ -90,6 +92,10 @@ namespace Runtime
 
     bool Runtime::OverlayRuntime::TryReserveApply(RE::TESFormID baseID, RE::TESFormID refID)
     {
+        if (m_mutationKilled.load()) {
+            return false;
+        }
+
         const std::scoped_lock lock{ m_stateMutex };
 
         if(m_disabledBases.contains(baseID)) {
@@ -114,19 +120,97 @@ namespace Runtime
 
     bool OverlayRuntime::ApplyTransientOverlay(RE::TESNPC *target, RE::Actor *actor, RE::TESFormID actorRefID, const Config::PreparedAssignment &assignment)
     {
-        if(!target || !actor || actor->GetNPC() != target || actor->GetFormID() != actorRefID) {
+        if (m_mutationKilled.load() || !target || !actor || actor->GetNPC() != target || actor->GetFormID() != actorRefID) {
             return false;
         }
 
         const auto baseID = target->GetFormID();
+        if (assignment.baseFormID != baseID || !assignment.dependencies.Complete()) {
+            DisableBase(baseID);
+            REX::WARN( "[OverlayRuntime] prepared assignment no longer matches base=0x{:08X}; overlay disabled for that base", baseID);
+            return false;
+        }
+        if (!target->bodyMorphValues || target->bodyMorphValues->size() != assignment.preset.bodyMorphRegionValues.size()) {
+            DisableBase(baseID);
+            REX::WARN("[OverlayRuntime] base=0x{:08X} does not have canonical body-morph storage; overlay disabled before mutation", baseID);
+            return false;
+        }
 
-        return false;
+        const auto started = std::chrono::steady_clock::now();
+        const auto originalState = CaptureOriginalNPCState(target);
+        auto restorePoint = NPCRestorePoint::Capture(target);
+        if (!restorePoint) {
+            DisableBase(baseID);
+            REX::WARN("[OverlayRuntime] could not capture an exact restore point for base=0x{:08X}; overlay disabled for that base", baseID);
+            return false;
+        }
+
+        bool appearanceApplied = false;
+        bool presetDonorReleased = true;
+        bool actorRefreshed = false;
+        try {
+            const auto applyResult = ApplyPreparedAppearance(target, assignment.preset, assignment.dependencies);
+            appearanceApplied = applyResult.applied;
+            presetDonorReleased = applyResult.donorReleased;
+            if (appearanceApplied && (CaptureNonVisualState(target) != originalState.nonVisual || target->actorData.actorBaseFlags.underlying() != originalState.actorFlags)) {
+                appearanceApplied = false;
+                REX::ERROR("[OverlayRuntime] preset apply crossed the visual-only boundary for base=0x{:08X} ref=0x{:08X}; skipping refresh", baseID, actorRefID);
+            }
+            if (appearanceApplied) {
+                actorRefreshed = NotifyAndRefreshAppearance(target, actor, actorRefID);
+            }
+        } catch (const std::exception& error) {
+            REX::ERROR("[OverlayRuntime] transient apply for base=0x{:08X} ref=0x{:08X} threw before restore: {}", baseID, actorRefID, error.what());
+        } catch (...) {
+            REX::ERROR("[OverlayRuntime] transient apply for base=0x{:08X} ref=0x{:08X} threw an unknown exception before restore", baseID, actorRefID);
+        }
+
+        bool restored = false;
+        try {
+            restored = restorePoint->RestoreExact(target);
+        } catch (const std::exception& error) {
+            REX::CRITICAL("[OverlayRuntime] exact restore for base=0x{:08X} ref=0x{:08X} threw: {}", baseID, actorRefID, error.what());
+        } catch (...) {
+            REX::CRITICAL("[OverlayRuntime] exact restore for base=0x{:08X} ref=0x{:08X} threw an unknown exception", baseID, actorRefID);
+        }
+
+        bool restorePointReleased = false;
+        try {
+            restorePointReleased = restorePoint->ReleaseAndVerify();
+        } catch (const std::exception& error) {
+            REX::CRITICAL("[OverlayRuntime] restore-point teardown for base=0x{:08X} ref=0x{:08X} threw: {}", baseID, actorRefID, error.what());
+        } catch (...) {
+            REX::CRITICAL("[OverlayRuntime] restore-point teardown for base=0x{:08X} ref=0x{:08X} threw an unknown exception", baseID, actorRefID);
+        }
+
+        if (!restored || !restorePointReleased || !presetDonorReleased) {
+            KillMutation(!restored ? "an in-window restore failed" : !restorePointReleased ? "a restore donor did not unregister" : "a preset donor did not unregister");
+            return false;
+        }
+
+        if (!appearanceApplied || !actorRefreshed) {
+            DisableBase(baseID);
+            REX::WARN("[OverlayRuntime] transient overlay failed safely for base=0x{:08X} ref=0x{:08X} applied={} refreshed={}; rendering vanilla and disabling that base", baseID, actorRefID, appearanceApplied, actorRefreshed);
+            return false;
+        }
+
+        RecordSuccessfulApply(actorRefID);
+        REX::DEBUG("[OverlayRuntime] transient overlay completed for base=0x{:08X} ref=0x{:08X} pack='{}' in {} us", baseID, actorRefID, assignment.packID, std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count());
+        return true;
     }
 
     void OverlayRuntime::DisableBase(RE::TESFormID baseID)
     {
         const std::scoped_lock lock{ m_stateMutex };
         m_disabledBases.insert(baseID);
+    }
+
+    void OverlayRuntime::KillMutation(const std::string_view reason)
+    {
+        bool expected = false;
+        if (m_mutationKilled.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+            REX::CRITICAL("[OverlayRuntime] mutation disabled for the process: {}", reason);
+        }
     }
 
     void OverlayRuntime::RecordSuccessfulApply(RE::TESFormID actorRefId)

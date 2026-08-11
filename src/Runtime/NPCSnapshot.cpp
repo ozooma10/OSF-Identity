@@ -56,13 +56,13 @@ namespace Runtime
             state.headPartCount = (*headParts).size();
             state.headPartStorage = (*headParts).data();
         }
-        if (a_npc->unk3D8) {
-            state.morphRegionCount = a_npc->unk3D8->size();
-            state.morphRegionStorage = a_npc->unk3D8;
+        if (a_npc->bodyMorphValues) {
+            state.morphRegionCount = a_npc->bodyMorphValues->size();
+            state.morphRegionStorage = a_npc->bodyMorphValues;
         }
-        if (a_npc->unk3E0) {
-            state.boneValueCount = a_npc->unk3E0->size();
-            state.boneValueStorage = a_npc->unk3E0;
+        if (a_npc->facialBoneValues) {
+            state.boneValueCount = a_npc->facialBoneValues->size();
+            state.boneValueStorage = a_npc->facialBoneValues;
         }
         if (a_npc->unk3E8) {
             state.boneGroupCount = a_npc->unk3E8->size();
@@ -129,30 +129,30 @@ namespace Runtime
             return false;
         }
 
-        if ((a_left->unk3D8 == nullptr) != (a_right->unk3D8 == nullptr)) {
+        if ((a_left->bodyMorphValues == nullptr) != (a_right->bodyMorphValues == nullptr)) {
             return false;
         }
-        if (a_left->unk3D8) {
-            if (a_left->unk3D8->size() != a_right->unk3D8->size()) {
+        if (a_left->bodyMorphValues) {
+            if (a_left->bodyMorphValues->size() != a_right->bodyMorphValues->size()) {
                 return false;
             }
-            for (std::uint32_t i = 0; i < a_left->unk3D8->size(); ++i) {
-                if ((*a_left->unk3D8)[i] != (*a_right->unk3D8)[i]) {
+            for (std::uint32_t i = 0; i < a_left->bodyMorphValues->size(); ++i) {
+                if ((*a_left->bodyMorphValues)[i] != (*a_right->bodyMorphValues)[i]) {
                     return false;
                 }
             }
         }
 
-        if ((a_left->unk3E0 == nullptr) != (a_right->unk3E0 == nullptr)) {
+        if ((a_left->facialBoneValues == nullptr) != (a_right->facialBoneValues == nullptr)) {
             return false;
         }
-        if (a_left->unk3E0) {
-            if (a_left->unk3E0->size() != a_right->unk3E0->size()) {
+        if (a_left->facialBoneValues) {
+            if (a_left->facialBoneValues->size() != a_right->facialBoneValues->size()) {
                 return false;
             }
-            for (const auto& entry : *a_left->unk3E0) {
-                const auto other = a_right->unk3E0->find(entry.key);
-                if (other == a_right->unk3E0->end() || other->value != entry.value) {
+            for (const auto& entry : *a_left->facialBoneValues) {
+                const auto other = a_right->facialBoneValues->find(entry.key);
+                if (other == a_right->facialBoneValues->end() || other->value != entry.value) {
                     return false;
                 }
             }

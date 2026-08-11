@@ -30,8 +30,8 @@ namespace Runtime
                 a_formID == 0 ||
                 RE::TESForm::LookupByID<RE::TESNPC>(a_formID) != a_donor ||
                 a_donor->QRefCount() != 0 || a_donor->GetRace() != nullptr ||
-                a_donor->faceNPC != nullptr || a_donor->unk3D8 != nullptr ||
-                a_donor->unk3E0 != nullptr || a_donor->unk3E8 != nullptr ||
+                a_donor->faceNPC != nullptr || a_donor->bodyMorphValues != nullptr ||
+                a_donor->facialBoneValues != nullptr || a_donor->unk3E8 != nullptr ||
                 !a_donor->tintAVMData.empty() ||
                 a_donor->shapeBlendData != nullptr ||
                 a_donor->pronoun.underlying() != 0) {
@@ -136,9 +136,9 @@ namespace Runtime
             return false;
         }
 
-        const auto* const originalBodyMorphs = m_impl->donor->unk3D8;
+        const auto* const originalBodyMorphs = m_impl->donor->bodyMorphValues;
         const bool originalBodyMorphsCanonical = !originalBodyMorphs || originalBodyMorphs->size() == kBodyMorphRegionCount;
-        const bool targetBodyMorphsCanonical = !a_target->unk3D8 || a_target->unk3D8->size() == kBodyMorphRegionCount;
+        const bool targetBodyMorphsCanonical = !a_target->bodyMorphValues || a_target->bodyMorphValues->size() == kBodyMorphRegionCount;
         if(!originalBodyMorphsCanonical || !targetBodyMorphsCanonical) {
             KillRestoreDonorMutation("body-morph storage is not canonical");
             return false;
