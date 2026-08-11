@@ -1,4 +1,5 @@
 #include <filesystem>
+#include "./AssignmentSelection.h"
 #include "./Config.h"
 #include "./PackScanner.h"
 #include "./RuntimeFormID.h"
@@ -67,15 +68,6 @@ namespace Config
             return npc;
         }
 
-        bool CandidateLess(const Candidate& a_left, const Candidate& a_right)
-        {
-            const auto left = Util::FoldASCII(a_left.assignment->packID);
-            const auto right = Util::FoldASCII(a_right.assignment->packID);
-            if(right != left) {
-                return left < right;
-            }
-            return a_left.assignment->packID < a_right.assignment->packID;
-        }
     }
 
     std::filesystem::path DefaultPacksDirectory()
@@ -138,15 +130,32 @@ namespace Config
             }
         }
 
-        std::ranges::sort(candidates, CandidateLess);
+        std::vector<ResolvedAssignmentIdentity> identities;
+        identities.reserve(candidates.size());
+        for (const auto& candidate : candidates) {
+            identities.push_back(ResolvedAssignmentIdentity{
+                .baseFormID = candidate.baseFormID,
+                .packID = candidate.assignment->packID,
+                .plugin = candidate.assignment->target.plugin,
+                .localFormID = candidate.assignment->target.localFormID
+            });
+        }
+
+        const auto selection = SelectAlphabeticalAssignments(identities);
 
         PreparedAssignmentMap selected;
-        for(auto& candidate : candidates)
-        {
-            const auto [winner, inserted] = selected.try_emplace(candidate.baseFormID, std::move(candidate.assignment));
-            if (!inserted) {
-                REX::WARN("[PackScanner] assignment skipped: target {}:{} already has a alphabet earlier assignment from pack {}", winner->second->target.plugin, winner->second->target.localFormID, winner->second->packID);
+        for (const auto winnerIndex : selection.winnerIndices) {
+            const auto& winner = candidates[winnerIndex];
+            selected.emplace(winner.baseFormID, winner.assignment);
+        }
+        for (std::size_t i = 0; i < candidates.size(); ++i) {
+            const auto winnerIndex = selection.winnerForCandidate[i];
+            if (i == winnerIndex) {
+                continue;
             }
+            const auto& loser = *candidates[i].assignment;
+            const auto& winner = *candidates[winnerIndex].assignment;
+            REX::WARN("[PackScanner] assignment skipped: base=0x{:08X} pack '{}' target {}:{:08X} is shadowed by alphabetically earlier pack '{}'", candidates[i].baseFormID, loser.packID, loser.target.plugin, loser.target.localFormID, winner.packID);
         }
 
         return selected;

@@ -77,6 +77,7 @@ target("npc-appearance-config-tests")
     set_rundir(os.projectdir())
     add_files(
         "tools/tests/npc_appearance_config_tests.cpp",
+        "src/Config/AssignmentSelection.cpp",
         "src/Config/ConfigDetail.cpp",
         "src/Config/PackDiscovery.cpp",
         "src/Config/RuntimeFormID.cpp"

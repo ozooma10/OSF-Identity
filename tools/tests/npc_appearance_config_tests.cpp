@@ -1,3 +1,4 @@
+#include "Config/AssignmentSelection.h"
 #include "Config/Config.h"
 #include "Config/RuntimeFormID.h"
 
@@ -74,6 +75,35 @@ namespace
 
 int main()
 {
+    const std::vector<Config::ResolvedAssignmentIdentity> collisionCandidates{
+        { 0x00005983u, "Zulu Pack", "Starfield.esm", 0x00005983u },
+        { 0x00005983u, "alpha pack", "Starfield.esm", 0x00005983u },
+        { 0x00001234u, "Middle Pack", "Example.esm", 0x00001234u }
+    };
+    const auto collisionSelection =
+        Config::SelectAlphabeticalAssignments(collisionCandidates);
+    Check(
+        collisionSelection.winnerIndices.size() == 2 &&
+            collisionSelection.winnerForCandidate.size() == 3 &&
+            collisionSelection.winnerForCandidate[0] == 1 &&
+            collisionSelection.winnerForCandidate[1] == 1 &&
+            collisionSelection.winnerForCandidate[2] == 2,
+        "alphabetically earliest pack wins a resolved target collision");
+
+    const std::vector<Config::ResolvedAssignmentIdentity> reversedCollision{
+        collisionCandidates[1],
+        collisionCandidates[0]
+    };
+    const auto reversedSelection =
+        Config::SelectAlphabeticalAssignments(reversedCollision);
+    Check(
+        reversedSelection.winnerForCandidate.size() == 2 &&
+            reversedCollision[reversedSelection.winnerForCandidate[0]].packID ==
+                "alpha pack" &&
+            reversedCollision[reversedSelection.winnerForCandidate[1]].packID ==
+                "alpha pack",
+        "alphabetical collision selection is independent of scan order");
+
     Check(
         Config::EncodeRuntimeFormID(
             0x00123456u, Config::PluginTier::kFull, 5u) ==
