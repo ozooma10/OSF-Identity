@@ -2,6 +2,7 @@
 #include "./Config.h"
 #include "./PackScanner.h"
 #include "../Runtime/OverlayRuntime.h"
+#include "../Util/String.h"
 
 namespace Config
 {
@@ -14,9 +15,63 @@ namespace Config
             std::shared_ptr<const PreparedAssignment> assignment;
         };
 
+        enum class PluginTier
+        {
+            kFull,
+            kMedium,
+            kSmall
+        };
+
+        std::optional<RE::TESFormID> EncodeRuntimeFormID(const std::uint32_t a_localFormID, const PluginTier a_tier, const std::uint32_t a_index)
+        {
+            switch (a_tier) {
+            case PluginTier::kSmall:
+                if (a_localFormID > 0xFFF || a_index > 0xFFF) {
+                    return std::nullopt;
+                }
+                return 0xFE000000u | (a_index << 12) | a_localFormID;
+            case PluginTier::kMedium:
+                if (a_localFormID > 0xFFFF || a_index > 0xFF) {
+                    return std::nullopt;
+                }
+                return 0xFD000000u | (a_index << 16) | a_localFormID;
+            case PluginTier::kFull:
+                if (a_localFormID > 0xFFFFFF || a_index > 0xFC) {
+                    return std::nullopt;
+                }
+                return (a_index << 24) | a_localFormID;
+            }
+            return std::nullopt;
+        }
+
         RE::TESNPC* ResolveTarget(const Target& a_target)
         {
-            return nullptr;
+            const auto* handler = RE::TESDataHandler::GetSingleton();
+            if (!handler) {
+                return nullptr;
+            }
+
+            const auto targetPlugin = Util::FoldASCII(a_target.plugin);
+            const auto find = [&](const auto& a_files, const PluginTier a_tier) -> RE::TESNPC* {
+                std::uint32_t tierIndex = 0;
+                for (const auto* file : a_files) {
+                    if (file && Util::FoldASCII(Util::SafeText(file->fileName)) == targetPlugin) {
+                        const auto index = a_tier == PluginTier::kFull ? file->compileIndex : tierIndex;
+                        const auto runtimeFormID = EncodeRuntimeFormID(a_target.localFormID, a_tier, index);
+                        return runtimeFormID ? RE::TESForm::LookupByID<RE::TESNPC>(*runtimeFormID) : nullptr;
+                    }
+                    tierIndex++;
+                }
+                return nullptr;
+            };
+
+            if (auto* target = find(handler->compiledFileCollection.files, PluginTier::kFull)) {
+                return target;
+            }
+            if (auto* target = find(handler->compiledFileCollection.mediumFiles, PluginTier::kMedium)) {
+                return target;
+            }
+            return find(handler->compiledFileCollection.smallFiles, PluginTier::kSmall);
         }
 
         bool CandidateLess(const Candidate& a_left, const Candidate& a_right)
@@ -48,7 +103,7 @@ namespace Config
 
             for (const auto& pack : discovery.packs) {
                 for (const auto& assignment : pack.assignments) {
-                    const auto* npc = ResolveTarget(assignment.target);
+                    auto* npc = ResolveTarget(assignment.target);
                     if (!npc) {
                         REX::WARN("[PackScanner] assignment skipped: target {}:{} did not resolve to TESNPC", assignment.target.plugin, assignment.target.localFormID);
                         continue;
