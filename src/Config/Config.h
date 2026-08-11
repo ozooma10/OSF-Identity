@@ -1,7 +1,14 @@
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
+#include <filesystem>
+#include <optional>
+#include <string>
+#include <vector>
+
 // Pack config pipeline: discover packs on disk, check their requirements, and pick a deterministic winner per resolved base form. 
-namespace NpcAppearance
+namespace Config
 {
     struct Target
     {

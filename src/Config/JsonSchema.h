@@ -4,7 +4,7 @@
 
 // schema for json files (package manifest, preset metadata, and CK preset)
 // member names match JSON keys exactly
-namespace NpcAppearance::Schema
+namespace Config::Schema
 {
     struct Requirements
     {
@@ -126,9 +126,9 @@ namespace NpcAppearance::Schema
 }
 
 template <>
-struct glz::meta<NpcAppearance::Schema::Assignment>
+struct glz::meta<Config::Schema::Assignment>
 {
-    using T = NpcAppearance::Schema::Assignment;
+    using T = Config::Schema::Assignment;
     static constexpr auto value = object(
         "target", &T::target,
         "preset", &T::preset,
@@ -136,9 +136,9 @@ struct glz::meta<NpcAppearance::Schema::Assignment>
 };
 
 template <>
-struct glz::meta<NpcAppearance::Schema::Manifest>
+struct glz::meta<Config::Schema::Manifest>
 {
-    using T = NpcAppearance::Schema::Manifest;
+    using T = Config::Schema::Manifest;
     static constexpr auto value = object(
         "$schema", &T::schemaHint,
         "schemaVersion", &T::schemaVersion,
@@ -148,9 +148,9 @@ struct glz::meta<NpcAppearance::Schema::Manifest>
 };
 
 template <>
-struct glz::meta<NpcAppearance::Schema::PresetMetadata>
+struct glz::meta<Config::Schema::PresetMetadata>
 {
-    using T = NpcAppearance::Schema::PresetMetadata;
+    using T = Config::Schema::PresetMetadata;
     static constexpr auto value = object(
         "$schema", &T::schemaHint,
         "schemaVersion", &T::schemaVersion,

@@ -908,7 +908,6 @@ namespace NpcAppearance
         // ==================================================================
         void OnNpcAppearanceDataLoaded()
         {
-
             if (!MutationOperational()) {
                 REX::CRITICAL(
                     "[NpcAppearance] startup mutation disabled; runtimeOperational={} mutationKilled={}",

@@ -1,26 +1,13 @@
-#include "NpcAppearance/ConfigDetail.h"
+#include "ConfigDetail.h"
 
-#include "NpcAppearance/Preset.h"
-#include "NpcAppearance/ResourceFile.h"
+#include "Preset.h"
+#include "Util/String.h"
 
-#include <algorithm>
-#include <charconv>
-#include <cwchar>
-#include <system_error>
-#include <unordered_set>
-#include <utility>
-
-namespace NpcAppearance::Detail
+namespace Config::Detail
 {
     namespace
     {
-        [[nodiscard]] char LowerASCII(const char a_ch) noexcept
-        {
-            return a_ch >= 'A' && a_ch <= 'Z' ? static_cast<char>(a_ch - 'A' + 'a') : a_ch;
-        }
-
-        [[nodiscard]] bool PathComponentEquals(const std::filesystem::path& a_left,
-                                               const std::filesystem::path& a_right)
+        [[nodiscard]] bool PathComponentEquals(const std::filesystem::path& a_left, const std::filesystem::path& a_right)
         {
 #ifdef _WIN32
             return _wcsicmp(a_left.c_str(), a_right.c_str()) == 0;
@@ -51,7 +38,7 @@ namespace NpcAppearance::Detail
                     AddIssue(a_result, a_path, 0, "invalid_plugin", "invalid required plugin name");
                     return false;
                 }
-                if (!seen.insert(FoldASCII(item)).second) {
+                if (!seen.insert(Util::FoldASCII(item)).second) {
                     AddIssue(a_result, a_path, 0, "duplicate_requirement", "duplicate required plugin");
                     return false;
                 }
@@ -70,7 +57,7 @@ namespace NpcAppearance::Detail
                     AddIssue(a_result, a_path, 0, "invalid_asset_path", error);
                     return false;
                 }
-                if (!seen.insert(FoldASCII(relative.generic_string())).second) {
+                if (!seen.insert(Util::FoldASCII(relative.generic_string())).second) {
                     AddIssue(a_result, a_path, 0, "duplicate_requirement", "duplicate required asset");
                     return false;
                 }
@@ -78,15 +65,6 @@ namespace NpcAppearance::Detail
             }
             return true;
         }
-    }
-
-    std::string FoldASCII(const std::string_view a_text)
-    {
-        std::string folded{ a_text };
-        for (char& ch : folded) {
-            ch = LowerASCII(ch);
-        }
-        return folded;
     }
 
     void AddIssue(ManifestResult& a_result, const std::filesystem::path& a_path, const std::size_t a_offset, std::string a_code, std::string a_message)
@@ -100,7 +78,7 @@ namespace NpcAppearance::Detail
             a_name.contains(':')) {
             return false;
         }
-        const auto folded = FoldASCII(a_name);
+        const auto folded = Util::FoldASCII(a_name);
         return folded.ends_with(".esm") || folded.ends_with(".esp") || folded.ends_with(".esl");
     }
 
@@ -160,7 +138,7 @@ namespace NpcAppearance::Detail
         if (!ValidateRelativePath(a_text, relative, a_error)) {
             return false;
         }
-        if (FoldASCII(relative.extension().string()) != ".npc") {
+        if (Util::FoldASCII(relative.extension().string()) != ".npc") {
             a_error = "preset path must use the .npc extension";
             return false;
         }
@@ -187,12 +165,12 @@ namespace NpcAppearance::Detail
                 a_error = "preset path resolves outside the pack directory";
                 return false;
             }
-            const auto size = ResourceFile::Size(canonicalCandidate);
-            if (!size) {
-                a_error = "preset file is missing from loose files and loaded archives";
+            const auto size = std::filesystem::file_size(canonicalCandidate, ec);
+            if (ec) {
+                a_error = "could not determine preset size: " + ec.message();
                 return false;
             }
-            if (*size == 0 || *size > kMaxPresetBytes) {
+            if (size == 0 || size > kMaxPresetBytes) {
                 a_error = "preset file size is outside the accepted range";
                 return false;
             }
@@ -217,7 +195,7 @@ namespace NpcAppearance::Detail
     {
         std::unordered_set<std::string> plugins;
         const auto addPlugin = [&](const std::string_view a_plugin) {
-            const auto folded = FoldASCII(a_plugin);
+            const auto folded = Util::FoldASCII(a_plugin);
             if (plugins.insert(folded).second) {
                 a_out.plugins.emplace_back(a_plugin);
             }
@@ -234,7 +212,7 @@ namespace NpcAppearance::Detail
         }
         std::unordered_set<std::string> assets;
         const auto addAsset = [&](const std::filesystem::path& a_asset) {
-            const auto folded = FoldASCII(a_asset.generic_string());
+            const auto folded = Util::FoldASCII(a_asset.generic_string());
             if (assets.insert(folded).second) {
                 a_out.assets.push_back(a_asset);
             }

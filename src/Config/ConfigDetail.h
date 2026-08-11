@@ -1,19 +1,12 @@
 #pragma once
 
-#include "NpcAppearance/Config.h"
-#include "NpcAppearance/JsonSchema.h"
+#include "./Config.h"
+#include "./JsonSchema.h"
 
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
-#include <optional>
-#include <string>
-#include <string_view>
-#include <vector>
 
 // Shared internals of the package-configuration pipeline
 // ConfigDetail.cpp (validation primitives), ManifestParser.cpp (JSON schema walks), PackageDiscovery.cpp (filesystem scanning), and Selection.cpp (conflict resolution).
-namespace NpcAppearance
+namespace Config
 {
     inline constexpr std::size_t kMaxManifestBytes = 1024 * 1024; // 1 MiB
     inline constexpr std::int32_t kMinPriority = -1'000'000;
@@ -25,10 +18,8 @@ namespace NpcAppearance
     [[nodiscard]] ManifestResult LoadPackageManifest(const std::filesystem::path& a_manifestPath, bool a_requirePresetFiles = true);
 }
 
-namespace NpcAppearance::Detail
+namespace Config::Detail
 {
-    [[nodiscard]] std::string FoldASCII(std::string_view a_text);
-
     void AddIssue(ManifestResult& a_result, const std::filesystem::path& a_path, std::size_t a_offset, std::string a_code, std::string a_message);
 
     [[nodiscard]] bool IsPluginName(std::string_view a_name);
@@ -41,7 +32,7 @@ namespace NpcAppearance::Detail
 
     [[nodiscard]] bool ResolvePresetPath(const std::filesystem::path& a_manifestPath, const std::string& a_text, bool a_requireFile, std::filesystem::path& a_out, std::string& a_error);
 
-    [[nodiscard]] bool ParseRequirements(const Schema::Requirements& a_node, Requirements& a_requirements, ManifestResult& a_result, const std::filesystem::path& a_path);
+    [[nodiscard]] bool ParseRequirements(const Config::Schema::Requirements& a_node, Requirements& a_requirements, ManifestResult& a_result, const std::filesystem::path& a_path);
 
     [[nodiscard]] bool MergeRequirements(const Requirements& a_package, const Requirements& a_assignment, Requirements& a_out, std::string_view a_implicitPlugin = {});
 

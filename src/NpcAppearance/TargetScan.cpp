@@ -4,6 +4,7 @@
 #include "NpcAppearance/Preset.h"
 #include "NpcAppearance/Resolver.h"
 #include "NpcAppearance/RuntimeFormID.h"
+#include "NpcAppearance/StarfieldResourceFile.h"
 #include "pch.h"
 
 #include <Windows.h>
@@ -25,16 +26,16 @@ namespace NpcAppearance
     {
         using namespace Detail;
 
-        [[nodiscard]] std::filesystem::path DefaultDataDirectory()
+        [[nodiscard]] AssetRequirementResult CheckStarfieldAssets(
+            const Requirements& a_requirements)
         {
-            std::wstring buffer(32768, L'\0');
-            const auto length =
-                ::GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
-            if (length == 0 || length >= buffer.size()) {
-                return {};
+            AssetRequirementResult result;
+            for (const auto& asset : a_requirements.assets) {
+                if (!StarfieldResourceExists(asset)) {
+                    result.missing.push_back(asset);
+                }
             }
-            buffer.resize(length);
-            return std::filesystem::path{ buffer }.parent_path() / L"Data";
+            return result;
         }
 
         struct LoadedPlugin
@@ -148,7 +149,7 @@ namespace NpcAppearance
             const LineSink& a_out, const std::filesystem::path& a_packsRoot)
         {
             a_out(std::format("scan packsRoot={}", a_packsRoot.string()));
-            auto discovery = DiscoverPackages(a_packsRoot, true);
+            auto discovery = DiscoverPackages(a_packsRoot, false);
             for (const auto& issue : discovery.issues) {
                 a_out(std::format("pack issue code={} path={} @{}: {}",
                                   issue.code, issue.path.string(), issue.offset, issue.message));
@@ -175,12 +176,11 @@ namespace NpcAppearance
                         packageRequirementsComplete = false;
                     }
                 }
-                const auto packageAssets =
-                    CheckRequiredAssets(package.requirements, DefaultDataDirectory());
+                const auto packageAssets = CheckStarfieldAssets(package.requirements);
                 if (!packageAssets.Complete()) {
                     packageRequirementsComplete = false;
                     for (const auto& asset : packageAssets.missing) {
-                        a_out(std::format("pack '{}' rejected: required Data asset '{}' is missing or is not a regular file",
+                        a_out(std::format("pack '{}' rejected: required Data asset '{}' is unavailable through loose files and loaded archives",
                                           package.packageID, asset.generic_string()));
                     }
                 }
@@ -228,12 +228,11 @@ namespace NpcAppearance
                             assignmentRequirementsComplete = false;
                         }
                     }
-                    const auto assignmentAssets =
-                        CheckRequiredAssets(assignment.requirements, DefaultDataDirectory());
+                    const auto assignmentAssets = CheckStarfieldAssets(assignment.requirements);
                     if (!assignmentAssets.Complete()) {
                         assignmentRequirementsComplete = false;
                         for (const auto& asset : assignmentAssets.missing) {
-                            a_out(std::format("candidate pack='{}' target={} rejected: required Data asset '{}' is missing or is not a regular file",
+                            a_out(std::format("candidate pack='{}' target={} rejected: required Data asset '{}' is unavailable through loose files and loaded archives",
                                               package.packageID,
                                               assignment.target.CanonicalKey(),
                                               asset.generic_string()));
@@ -251,7 +250,8 @@ namespace NpcAppearance
                         continue;
                     }
 
-                    const auto decoded = LoadCkPreset(assignment.presetPath);
+                    const auto decoded =
+                        LoadStarfieldCkPreset(a_packsRoot, assignment.presetPath);
                     if (!decoded.preset) {
                         a_out(std::format("candidate pack='{}' target={} rejected: preset '{}' does not satisfy a supported 1.16.244 producer contract",
                                           package.packageID,

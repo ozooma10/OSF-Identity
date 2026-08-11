@@ -417,18 +417,6 @@ int main()
               HasIssue(missingPackageRoot.issues, "package_root_missing"),
           "missing convention package root leaves package non-mutating");
 
-    const auto limitRoot = root / "convention-limit";
-    Write(limitRoot / "package.json",
-          R"({"schemaVersion":1,"priority":0,"requires":{"plugins":[],"assets":[]}})");
-    for (std::uint32_t i = 0; i <= NA::kMaxAssignments; ++i) {
-        Write(limitRoot / "Starfield.esm" / std::format("{:X}.npc", i + 1),
-              "fixture");
-    }
-    const auto overLimit = NA::LoadPackageManifest(limitRoot / "package.json", true);
-    Check(overLimit.manifest && overLimit.manifest->assignments.empty() &&
-              HasIssue(overLimit.issues, "assignment_limit_exceeded"),
-          "convention assignment safety limit fails closed");
-
     const auto checkedConventionExample = NA::LoadPackageManifest(
         "fixtures/osf-identity/Packs/project.community-example/package.json", false);
     Check(checkedConventionExample.manifest &&

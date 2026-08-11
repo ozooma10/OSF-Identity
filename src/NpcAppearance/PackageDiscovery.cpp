@@ -1,7 +1,6 @@
 #include "NpcAppearance/Config.h"
 
 #include "NpcAppearance/ConfigDetail.h"
-#include "NpcAppearance/ResourceFile.h"
 
 #include <algorithm>
 #include <optional>
@@ -352,7 +351,8 @@ namespace NpcAppearance
             return result;
         }
         for (const auto& relative : a_requirements.assets) {
-            if (!ResourceFile::Size(a_dataRoot / relative)) {
+            std::error_code ec;
+            if (!std::filesystem::is_regular_file(a_dataRoot / relative, ec) || ec) {
                 result.missing.push_back(relative);
             }
         }

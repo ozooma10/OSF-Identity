@@ -1,13 +1,20 @@
-#include "NpcAppearance/Runtime.h"
-#include "pch.h"
+#include "Config/PackScanner.h"
+#include "Runtime/OverlayRuntime.h"
+#include "Events/ReferenceSet3dEvent.h"
 
 namespace
 {
     void OnDataLoaded() noexcept
     {
-        REX::INFO("=== OSF Identity: data loaded ===");
-        NpcAppearance::Initialize();
-        REX::INFO("=== OSF Identity: ready ===");
+        Config::PackScanner::ScanPacks();
+        auto isArmed = Runtime::GetOverlayRuntime().IsArmed();
+        REX::INFO("[PackScanner] startup scan complete; overlay runtime armed={}", isArmed);
+
+        if(isArmed) {
+            if(auto set3dSource = RE::RuntimeComponentDBFactory::ReferenceSet3d::GetEventSource()) {
+                set3dSource->RegisterSink(Events::ReferenceSet3dEventHandler::GetSingleton());
+            }
+        }
     }
 
     void OnSFSEMessage(SFSE::MessagingInterface::Message* a_message) noexcept
@@ -21,13 +28,6 @@ namespace
 SFSE_PLUGIN_LOAD(const SFSE::LoadInterface* a_sfse)
 {
     SFSE::Init(a_sfse);
-
-    const auto* messaging = SFSE::GetMessagingInterface();
-    if (!messaging || !messaging->RegisterListener(OnSFSEMessage)) {
-        REX::CRITICAL("Could not register the SFSE message listener");
-        return false;
-    }
-
-    REX::INFO("OSF Identity loaded");
+    SFSE::GetMessagingInterface()->RegisterListener(OnSFSEMessage);
     return true;
 }

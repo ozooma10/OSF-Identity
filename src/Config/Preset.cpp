@@ -1,6 +1,5 @@
-#include "NpcAppearance/Preset.h"
-
-#include "NpcAppearance/JsonSchema.h"
+#include "Preset.h"
+#include "JsonSchema.h"
 
 #include <algorithm>
 #include <cctype>
@@ -12,18 +11,11 @@
 #include <unordered_set>
 #include <utility>
 
-namespace NpcAppearance
+namespace Config
 {
     namespace
     {
-        constexpr std::size_t kMaxSemanticStringBytes = 256;
         constexpr std::size_t kBodyMorphRegionCount = 5;
-        constexpr std::size_t kMaxHeadParts = 128;
-        constexpr std::size_t kMaxFacialMorphs = 512;
-        constexpr std::size_t kMaxBoneRegions = 256;
-        constexpr std::size_t kMaxBoneSlidersPerRegion = 256;
-        constexpr std::size_t kMaxTintLayers = 256;
-        constexpr std::int64_t kMaxRegionOrSliderID = 65535;
         constexpr double kCharGenMenuTintScale = 128.0;
         constexpr double kRuntimeTintScale = 64.0;
         constexpr double kTintQuantizationTolerance = 1.0e-6;
@@ -31,7 +23,7 @@ namespace NpcAppearance
         [[nodiscard]] bool IsSemanticString(const std::string_view a_value,
                                             const bool a_allowEmpty) noexcept
         {
-            if ((!a_allowEmpty && a_value.empty()) || a_value.size() > kMaxSemanticStringBytes) {
+            if ((!a_allowEmpty && a_value.empty())) {
                 return false;
             }
             return std::ranges::all_of(a_value, [](const unsigned char a_ch) {
@@ -39,9 +31,6 @@ namespace NpcAppearance
             });
         }
 
-        // Domain rules that survive a successful Glaze read: value ranges, the
-        // semantic uniqueness the schema cannot express, and the collection
-        // bounds that keep a runaway preset from reaching the engine.
         struct Validator
         {
             PresetResult& result;
@@ -93,13 +82,8 @@ namespace NpcAppearance
             }
         };
 
-        [[nodiscard]] bool ReadStringArray(const std::vector<std::string>& a_items,
-                                           std::vector<std::string>& a_out, Validator& a_validator,
-                                           const std::string_view a_context)
+        bool ReadStringArray(const std::vector<std::string>& a_items, std::vector<std::string>& a_out, Validator& a_validator, const std::string_view a_context)
         {
-            if (!a_validator.Count(a_items.size(), kMaxHeadParts, a_context)) {
-                return false;
-            }
             for (const auto& item : a_items) {
                 if (!a_validator.Str(item, a_context)) {
                     return false;
@@ -109,20 +93,12 @@ namespace NpcAppearance
             return true;
         }
 
-        [[nodiscard]] bool ReadNamedMorphs(const std::vector<Schema::NamedMorph>& a_items,
-                                           std::vector<PresetNamedMorph>& a_out,
-                                           Validator& a_validator)
+        bool ReadNamedMorphs(const std::vector<Schema::NamedMorph>& a_items, std::vector<PresetNamedMorph>& a_out, Validator& a_validator)
         {
-            if (!a_validator.Count(a_items.size(), kMaxFacialMorphs, "FacialMorphSliderDataA")) {
-                return false;
-            }
             std::unordered_set<std::string> names;
             a_out.reserve(a_items.size());
             for (const auto& item : a_items) {
-                if (!a_validator.Str(item.Name, "facial morph name", false) ||
-                    !a_validator.Unique(names, item.Name,
-                                        "duplicate facial morph name '" + item.Name + "'") ||
-                    !a_validator.Bounded(item.Value, 0.0, 1.0, "facial morph value")) {
+                if (!a_validator.Str(item.Name, "facial morph name", false) || !a_validator.Unique(names, item.Name, "duplicate facial morph name '" + item.Name + "'") || !a_validator.Bounded(item.Value, 0.0, 1.0, "facial morph value")) {
                     return false;
                 }
                 a_out.push_back(PresetNamedMorph{ .name = item.Name, .value = item.Value });
@@ -130,33 +106,19 @@ namespace NpcAppearance
             return true;
         }
 
-        [[nodiscard]] bool ReadBoneRegions(const std::vector<Schema::BoneRegion>& a_items,
-                                           std::vector<PresetBoneRegion>& a_out,
-                                           Validator& a_validator)
+        bool ReadBoneRegions(const std::vector<Schema::BoneRegion>& a_items, std::vector<PresetBoneRegion>& a_out, Validator& a_validator)
         {
-            if (!a_validator.Count(a_items.size(), kMaxBoneRegions, "FacialBoneRegionDataA")) {
-                return false;
-            }
             std::unordered_set<std::string> regionIDs;
             a_out.reserve(a_items.size());
             for (const auto& item : a_items) {
-                if (!a_validator.Index(item.RegionID, kMaxRegionOrSliderID, "RegionID") ||
-                    !a_validator.Unique(regionIDs, std::to_string(item.RegionID),
-                                        "duplicate facial bone RegionID") ||
-                    !a_validator.Count(item.SlidersA.size(), kMaxBoneSlidersPerRegion, "SlidersA")) {
-                    return false;
-                }
                 PresetBoneRegion decoded;
                 decoded.regionID = static_cast<std::uint32_t>(item.RegionID);
                 std::unordered_set<std::string> sliderKeys;
                 decoded.sliders.reserve(item.SlidersA.size());
                 for (const auto& slider : item.SlidersA) {
                     if (!a_validator.Str(slider.GroupName, "slider group") ||
-                        !a_validator.Index(slider.ID, kMaxRegionOrSliderID, "slider ID") ||
                         !a_validator.Bounded(slider.Value, -1.0, 1.0, "bone slider value") ||
-                        !a_validator.Unique(
-                            sliderKeys, slider.GroupName + '\x1F' + std::to_string(slider.ID),
-                            "duplicate slider group/ID within facial bone region")) {
+                        !a_validator.Unique(sliderKeys, slider.GroupName + '\x1F' + std::to_string(slider.ID), "duplicate slider group/ID within facial bone region")) {
                         return false;
                     }
                     decoded.sliders.push_back(PresetBoneSlider{
@@ -169,24 +131,16 @@ namespace NpcAppearance
             return true;
         }
 
-        [[nodiscard]] bool ReadTintLayers(const std::vector<Schema::TintLayer>& a_items,
-                                          std::vector<PresetTintLayer>& a_out,
-                                          Validator& a_validator, const bool a_charGenMenu)
+        bool ReadTintLayers(const std::vector<Schema::TintLayer>& a_items, std::vector<PresetTintLayer>& a_out, Validator& a_validator, const bool a_charGenMenu)
         {
-            if (!a_validator.Count(a_items.size(), kMaxTintLayers,
-                                   "PostBlendFaceCustomization.LayersA")) {
-                return false;
-            }
             std::unordered_set<std::string> names;
             a_out.reserve(a_items.size());
             for (const auto& item : a_items) {
                 if (!a_validator.Str(item.Name, "tint layer name", false) ||
-                    !a_validator.Unique(names, item.Name,
-                                        "duplicate tint layer name '" + item.Name + "'") ||
+                    !a_validator.Unique(names, item.Name, "duplicate tint layer name '" + item.Name + "'") ||
                     !a_validator.Str(item.ModulationValue.Value, "tint layer ModulationValue") ||
                     !a_validator.Str(item.Value.Value, "tint layer Value") ||
-                    !a_validator.Bounded(item.Intensity, 0.0, a_charGenMenu ? 0.5 : 1.0,
-                                         "tint layer intensity")) {
+                    !a_validator.Bounded(item.Intensity, 0.0, a_charGenMenu ? 0.5 : 1.0, "tint layer intensity")) {
                     return false;
                 }
                 PresetTintLayer decoded{
@@ -195,15 +149,12 @@ namespace NpcAppearance
                     .modulationValue = item.ModulationValue.Value,
                     .intensity = item.Intensity };
                 if (a_charGenMenu) {
-                    // CharGenMenu writes 1/128-quantized intensities that the
-                    // runtime consumes on a 1/64 scale; this is a conversion, not
-                    // just a check, so it has to happen here.
+                    // CharGenMenu writes 1/128-quantized intensities that the runtime consumes on a 1/64 scale; 
+                    // this is a conversion, not just a check, so it has to happen here.
                     const auto scaled = decoded.intensity * kCharGenMenuTintScale;
                     const auto packed = std::round(scaled);
                     if (std::abs(scaled - packed) > kTintQuantizationTolerance) {
-                        return a_validator.Fail(
-                            "invalid_char_gen_tint_intensity",
-                            "CharGenMenu tint intensity must be a 1/128-quantized value from 0 to 0.5");
+                        return a_validator.Fail("invalid_char_gen_tint_intensity", "CharGenMenu tint intensity must be a 1/128-quantized value from 0 to 0.5");
                     }
                     decoded.intensity = packed / kRuntimeTintScale;
                 }
@@ -217,15 +168,13 @@ namespace NpcAppearance
     {
         PresetResult result;
         if (a_json.empty() || a_json.size() > kMaxPresetBytes) {
-            result.issues.push_back({ a_path, 0, "invalid_size",
-                                      "preset is empty or exceeds the 32 MiB safety limit" });
+            result.issues.push_back({ a_path, 0, "invalid_size", "preset is empty or exceeds the 32 MiB safety limit" });
             return result;
         }
 
         Schema::CkPreset document;
         if (const auto ec = glz::read<Schema::kParseOpts>(document, a_json); ec) {
-            result.issues.push_back({ a_path, ec.count, "invalid_json",
-                                      glz::format_error(ec, a_json) });
+            result.issues.push_back({ a_path, ec.count, "invalid_json", glz::format_error(ec, a_json) });
             return result;
         }
 
@@ -253,8 +202,7 @@ namespace NpcAppearance
         preset.teethCustomization = document.TeethCustomization;
         preset.skinTone = static_cast<std::uint32_t>(document.SkinTone);
 
-        // A CharGenMenu export carries no editor ID; that is what distinguishes
-        // it from a Creation Kit preset and it changes the tint contract below.
+        // A CharGenMenu export carries no editor ID; that is what distinguishes it from a Creation Kit preset and it changes the tint contract below.
         const bool isCharGenMenu = preset.npcFormEditorID.empty();
 
         if (document.Sex == "Female") {
@@ -267,8 +215,7 @@ namespace NpcAppearance
         }
 
         if (document.BodyMorphRegionValuesA.size() != kBodyMorphRegionCount) {
-            validator.Fail("count_out_of_range",
-                           "BodyMorphRegionValuesA must contain exactly five values for CK 1.16.244");
+            validator.Fail("count_out_of_range", "BodyMorphRegionValuesA must contain exactly five values for CK 1.16.244");
             return result;
         }
         preset.bodyMorphRegionValues.reserve(kBodyMorphRegionCount);
@@ -288,14 +235,11 @@ namespace NpcAppearance
                                                   .y = document.MorphWeights.y,
                                                   .z = document.MorphWeights.z };
 
-        if (!ReadStringArray(document.MiscHeadPartsA, preset.miscHeadParts, validator,
-                             "MiscHeadPartsA") ||
-            !ReadStringArray(document.UniqueHeadPartsA, preset.uniqueHeadParts, validator,
-                             "UniqueHeadPartsA") ||
+        if (!ReadStringArray(document.MiscHeadPartsA, preset.miscHeadParts, validator, "MiscHeadPartsA") ||
+            !ReadStringArray(document.UniqueHeadPartsA, preset.uniqueHeadParts, validator,  "UniqueHeadPartsA") ||
             !ReadNamedMorphs(document.FacialMorphSliderDataA, preset.facialMorphSliders, validator) ||
             !ReadBoneRegions(document.FacialBoneRegionDataA, preset.facialBoneRegions, validator) ||
-            !ReadTintLayers(document.PostBlendFaceCustomization.LayersA, preset.postBlendLayers,
-                            validator, isCharGenMenu)) {
+            !ReadTintLayers(document.PostBlendFaceCustomization.LayersA, preset.postBlendLayers, validator, isCharGenMenu)) {
             return result;
         }
 
@@ -306,8 +250,7 @@ namespace NpcAppearance
     {
         PresetResult result;
         try {
-            result.issues.push_back({ a_path, 0, "parser_exception",
-                                      "preset parser exception: " + std::string{ e.what() } });
+            result.issues.push_back({ a_path, 0, "parser_exception", "preset parser exception: " + std::string{ e.what() } });
         } catch (...) {
         }
         return result;
@@ -316,8 +259,7 @@ namespace NpcAppearance
     {
         PresetResult result;
         try {
-            result.issues.push_back({ a_path, 0, "parser_exception",
-                                      "preset parser unknown exception" });
+            result.issues.push_back({ a_path, 0, "parser_exception", "preset parser unknown exception" });
         } catch (...) {
         }
         return result;
@@ -331,25 +273,21 @@ namespace NpcAppearance
             return static_cast<char>(std::tolower(a_ch));
         });
         if (extension != ".npc") {
-            result.issues.push_back({ a_path, 0, "invalid_extension",
-                                      "preset path must use the .npc extension" });
+            result.issues.push_back({ a_path, 0, "invalid_extension", "preset path must use the .npc extension" });
             return result;
         }
 
         std::error_code ec;
         const auto size = std::filesystem::file_size(a_path, ec);
         if (ec || size == 0 || size > kMaxPresetBytes) {
-            result.issues.push_back({ a_path, 0, "invalid_size",
-                                      ec ? "could not determine preset size: " + ec.message()
-                                         : "preset is empty or exceeds the 32 MiB safety limit" });
+            result.issues.push_back({ a_path, 0, "invalid_size", ec ? "could not determine preset size: " + ec.message() : "preset is empty or exceeds the 32 MiB safety limit" });
             return result;
         }
 
         std::string bytes(static_cast<std::size_t>(size), '\0');
         std::ifstream stream{ a_path, std::ios::binary };
         if (!stream.is_open() || !stream.read(bytes.data(), static_cast<std::streamsize>(bytes.size()))) {
-            result.issues.push_back({ a_path, 0, "read_failed",
-                                      "could not read the complete preset file" });
+            result.issues.push_back({ a_path, 0, "read_failed", "could not read the complete preset file" });
             return result;
         }
         return ParseCkPreset(bytes, a_path);

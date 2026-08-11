@@ -74,7 +74,7 @@ a different priority, pack-wide `requires`, or explicit assignments:
 `priority` is optional and defaults to `0`. `requires` is also optional. If
 omitted, the pack has no declared package-wide requirements; runtime
 preset-reference validation still runs before conflict selection. Declare it
-only when the pack has plugin or loose-asset preconditions that cannot be
+only when the pack has plugin or Data-asset preconditions that cannot be
 inferred reliably from the preset.
 
 The folder name remains the pack ID even when a manifest is present. Renaming
@@ -87,7 +87,7 @@ the folder intentionally changes the ID.
   to ascending case-insensitive pack folder name. Mod-manager order is
   irrelevant. The `100` used in these examples outranks every manifest-less
   pack.
-- `requires` - optional plugins and loose Data-relative assets every preset needs.
+- `requires` - optional plugins and Data-relative assets every preset needs.
   `plugins` and `assets` are independently optional; omit either list when it is
   empty. A missing pack-wide requirement disables the whole pack. An explicit
   plugin-local target automatically adds its owning plugin to that assignment.
@@ -102,6 +102,12 @@ validation, field descriptions, defaults, and examples. A `$schema` property is
 an optional editor hint; `schemaVersion` is the required runtime format version.
 The runtime parser remains authoritative and rejects unknown properties,
 duplicate targets, path traversal, and absolute preset paths.
+
+Preset paths in explicit assignments and `requires.assets` are resolved through
+Starfield's resource system, so loose files and files in loaded BA2 archives
+both satisfy them. Package discovery itself remains folder-based: `package.json`
+and convention-discovered `<OwningPlugin>/<localFormId>.npc` entries must be
+loose. To archive a preset, keep a loose explicit `package.json` that names it.
 
 ## Per-preset dependencies
 

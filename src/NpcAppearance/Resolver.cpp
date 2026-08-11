@@ -13,6 +13,7 @@
 #include <format>
 #include <string_view>
 #include <unordered_set>
+#include "Resolver.h"
 
 namespace NpcAppearance
 {

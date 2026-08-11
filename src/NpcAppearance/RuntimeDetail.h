@@ -41,14 +41,19 @@ namespace NpcAppearance::Detail
     // native routine the runtime may call on 1.16.244. Each call site
     // re-verifies these at runtime; any mismatch fails the apply closed.
     // ==================================================================
-    inline constexpr REL::ID kNpcFactorySingletonID{ 824718 };
-    inline constexpr REL::ID kNpcFactoryVtableID{ 420871 };
-    inline constexpr REL::ID kNpcFactoryCreateID{ 68242 };
-    inline constexpr REL::ID kNpcPrimaryVtableID{ 420893 };
-    inline constexpr REL::ID kNpcScalarDeletingDestructorID{ 68093 };
-    inline constexpr REL::ID kNpcCopyAppearanceID{ 68122 };
+    inline constexpr REL::ID kNpcFactorySingletonID{
+        RE::ID::TESNPCFormFactory::Singleton };
+    inline constexpr REL::ID kNpcFactoryVtableID{
+        RE::VTABLE::ConcreteBoundObjectFormFactory_TESNPC_50_13_0_[0] };
+    inline constexpr REL::ID kNpcFactoryCreateID{
+        RE::ID::TESNPCFormFactory::Create };
+    inline constexpr REL::ID kNpcPrimaryVtableID{ RE::TESNPC::PRIMARY_VTABLE };
+    inline constexpr REL::ID kNpcScalarDeletingDestructorID{
+        RE::ID::TESNPC::ScalarDeletingDestructor };
+    inline constexpr REL::ID kNpcCopyAppearanceID{
+        RE::ID::TESNPC::CopyAppearance };
     inline constexpr REL::ID kNpcSetShapeBlendID{ 68207 };
-    inline constexpr REL::ID kNpcSetBodyMorphID{ 68208 };
+    inline constexpr REL::ID kNpcSetBodyMorphID{ RE::ID::TESNPC::SetBodyMorph };
     inline constexpr REL::ID kNpcSetBoneValueID{ 68210 };
     inline constexpr REL::ID kNpcSetBoneGroupValueID{ 68212 };
     inline constexpr REL::ID kNpcRemoveHeadPartID{ 68188 };
@@ -59,7 +64,8 @@ namespace NpcAppearance::Detail
     inline constexpr REL::ID kActorAppearanceRefreshID{ 101307 };
     inline constexpr std::uintptr_t kProcessListsVtableRva = 0x4CC01B0;
     inline constexpr std::uintptr_t kActorVtableRva = 0x4CB9248;
-    inline constexpr REL::Offset kNpcOwnedVisualCopyOffset{ 0xCD56E0 };
+    inline constexpr REL::ID kNpcOwnedVisualCopyID{
+        RE::ID::TESNPC::CopyOwnedAppearance };
     inline constexpr std::array<std::uint8_t, 16> kNpcFactoryCreateGate{
         0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48, 0x83,
         0xEC, 0x30, 0x8B, 0xDA, 0xB9, 0x58, 0x04, 0x00

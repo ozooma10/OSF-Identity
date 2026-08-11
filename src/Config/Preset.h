@@ -8,7 +8,7 @@
 #include <string_view>
 #include <vector>
 
-namespace NpcAppearance
+namespace Config
 {
     inline constexpr std::uintmax_t kMaxPresetBytes = 32 * 1024 * 1024; // 32 MiB
 

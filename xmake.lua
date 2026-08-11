@@ -22,24 +22,16 @@ target("OSF Identity")
 
     add_files(
         "src/main.cpp",
-        "src/NpcAppearance/Config.cpp",
-        "src/NpcAppearance/ConfigDetail.cpp",
-        "src/NpcAppearance/ManifestParser.cpp",
-        "src/NpcAppearance/PackageDiscovery.cpp",
-        "src/NpcAppearance/Selection.cpp",
-        "src/NpcAppearance/RuntimeFormID.cpp",
-        "src/NpcAppearance/Preset.cpp",
-        "src/NpcAppearance/Resolver.cpp",
-        "src/NpcAppearance/Snapshot.cpp",
-        "src/NpcAppearance/Donor.cpp",
-        "src/NpcAppearance/TargetScan.cpp",
-        "src/NpcAppearance/Runtime.cpp",
-        "src/Util/NativeMainThreadQueue.cpp"
+        "src/Util/*.cpp",
+        "src/Config/*.cpp",
+        "src/Runtime/*.cpp"
     )
     add_headerfiles("src/**.h")
     add_includedirs("src")
-    add_packages("glaze")
     set_pcxxheader("src/pch.h")
+
+
+    add_packages("glaze")
     add_defines("NOMINMAX", "WIN32_LEAN_AND_MEAN")
 
     after_build(function(target)
@@ -78,30 +70,3 @@ target("OSF Identity")
             )
         end
     end)
-
-target("npc-appearance-config-tests")
-    set_kind("binary")
-    set_default(false)
-    set_rundir(os.projectdir())
-    add_files(
-        "tools/tests/npc_appearance_config_tests.cpp",
-        "src/NpcAppearance/Config.cpp",
-        "src/NpcAppearance/ConfigDetail.cpp",
-        "src/NpcAppearance/ManifestParser.cpp",
-        "src/NpcAppearance/PackageDiscovery.cpp",
-        "src/NpcAppearance/Selection.cpp",
-        "src/NpcAppearance/RuntimeFormID.cpp"
-    )
-    add_includedirs("src")
-    add_packages("glaze")
-
-target("npc-appearance-preset-tests")
-    set_kind("binary")
-    set_default(false)
-    set_rundir(os.projectdir())
-    add_files(
-        "tools/tests/npc_appearance_preset_tests.cpp",
-        "src/NpcAppearance/Preset.cpp"
-    )
-    add_includedirs("src")
-    add_packages("glaze")

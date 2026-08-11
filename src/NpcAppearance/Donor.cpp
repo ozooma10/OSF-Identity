@@ -514,7 +514,7 @@ namespace NpcAppearance
                 REL::Relocation<std::uintptr_t>{ kNpcChangeHeadPartID }.address();
             const auto setAvmAddress =
                 REL::Relocation<std::uintptr_t>{ kNpcSetAvmDataID }.address();
-            const auto ownedCopyAddress = kNpcOwnedVisualCopyOffset.address();
+            const auto ownedCopyAddress = kNpcOwnedVisualCopyID.address();
 
             if (!Util::IsReadableRange(factoryAddress, sizeof(std::uintptr_t)) ||
                 *reinterpret_cast<const std::uintptr_t*>(factoryAddress) != factoryVtable ||
@@ -777,7 +777,7 @@ namespace NpcAppearance
                 REL::Relocation<std::uintptr_t>{ kNpcSetAvmDataID }.address();
             const auto removeAvmAddress =
                 REL::Relocation<std::uintptr_t>{ kNpcRemoveAvmDataID }.address();
-            const auto ownedCopyAddress = kNpcOwnedVisualCopyOffset.address();
+            const auto ownedCopyAddress = kNpcOwnedVisualCopyID.address();
 
             if (!Util::IsReadableRange(factoryAddress, sizeof(std::uintptr_t)) ||
                 *reinterpret_cast<const std::uintptr_t*>(factoryAddress) != factoryVtable ||
