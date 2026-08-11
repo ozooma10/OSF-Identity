@@ -31,16 +31,7 @@ namespace
     void OnDataLoaded() noexcept
     {
         try {
-            const auto result = Util::NativeMainThreadQueue::Post([] {
-                RunStartupScan();
-            },
-            "PackScanner.StartupScan",
-            [] {
-                REX::CRITICAL("[PackScanner] failed to queue startup scan on main thread");
-            });
-            if(result == Util::NativeMainThreadQueue::PostResult::kUnavailable) {
-                REX::CRITICAL("[PackScanner] failed to queue startup scan on main thread; queue unavailable");
-            }
+            RunStartupScan();
         } catch (const std::exception& e) {
             REX::ERROR("[PackScanner] exception during startup scan: {}", e.what());
         } catch (...) {
