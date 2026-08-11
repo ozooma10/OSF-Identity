@@ -2,13 +2,6 @@
 
 #include "./Preset.h"
 
-namespace RE
-{
-    class BGSHeadPart;
-    class TESNPC;
-    class TESRace;
-}
-
 namespace Config
 {
     struct DependencyIssue
@@ -31,13 +24,11 @@ namespace Config
         bool colorReferencesComplete{ false };
         std::vector<DependencyIssue> issues;
 
-        [[nodiscard]] bool Complete() const noexcept
+        bool Complete() const noexcept
         {
-            return formReferencesComplete && boneReferencesComplete && shapeReferencesComplete &&
-                   colorReferencesComplete && avmReferencesComplete && issues.empty();
+            return formReferencesComplete && boneReferencesComplete && shapeReferencesComplete && colorReferencesComplete && avmReferencesComplete && issues.empty();
         }
     };
 
-    // Attempt to resolve decoded CK references to engine objects, and report any issues
-    [[nodiscard]] ResolvedAppearanceDependencies ResolveAppearanceDependencies(const AppearancePreset& a_preset, RE::TESNPC* a_target);
+    ResolvedAppearanceDependencies ResolveAppearanceDependencies(const AppearancePreset& a_preset, RE::TESNPC* a_target);
 }

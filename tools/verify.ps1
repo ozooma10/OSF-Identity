@@ -38,7 +38,7 @@ try {
     & python .\tools\re\npc_appearance_fixture_check.py
     if ($LASTEXITCODE -ne 0) { throw "Fixture provenance gate failed with exit code $LASTEXITCODE" }
 
-    $resolverSourcePath = Join-Path $repoRoot 'src\NpcAppearance\Resolver.cpp'
+    $resolverSourcePath = Join-Path $repoRoot 'src\Config\Resolver.cpp'
     $resolverTargetLookup = Select-String -LiteralPath $resolverSourcePath -SimpleMatch -Pattern 'GetFormEditorID'
     if ($resolverTargetLookup) {
         throw "Preset NPCFormEditorID returned to target equality at ${resolverSourcePath}:$($resolverTargetLookup[0].LineNumber)"
