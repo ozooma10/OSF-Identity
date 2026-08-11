@@ -4,5 +4,6 @@
 
 namespace Config
 {
-    void ScanPacks();
+    std::filesystem::path DefaultPacksDirectory();
+    PreparedAssignmentMap RunScan(const std::filesystem::path& a_packsRoot);
 }

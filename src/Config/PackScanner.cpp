@@ -1,7 +1,6 @@
 #include <filesystem>
 #include "./Config.h"
 #include "./PackScanner.h"
-#include "../Runtime/OverlayRuntime.h"
 #include "../Util/String.h"
 
 namespace Config
@@ -105,99 +104,79 @@ namespace Config
             }
             return a_left.assignment->packID < a_right.assignment->packID;
         }
-
-        std::filesystem::path DefaultPacksDirectory()
-        {
-            return std::filesystem::path{ REX::FModule::GetCurrentModule().GetFileName() }.parent_path() / L"OSFIdentity" / L"Packs";
-        }
-
-
-        PreparedAssignmentMap RunScan(const std::filesystem::path& a_packsRoot)
-        {
-            const auto discovery = DiscoverPacks(a_packsRoot);
-
-            for(const auto& issue : discovery.issues)
-            {
-                REX::WARN("[PackScanner] discovery issue: {}:{}: {} ({})", issue.path.string(), issue.offset, issue.code, issue.message);
-            }
-
-            std::vector<Candidate> candidates;
-
-            const auto* handler = RE::TESDataHandler::GetSingleton();
-            auto* humanRace = RE::TESForm::LookupByEditorID<RE::TESRace>(RE::BSFixedString{"HumanRace"});
-            if(!handler || !humanRace) {
-                REX::WARN("[PackScanner] assignment skipped: TESDataHandler or HumanRace not available");
-                return {};
-            }
-
-            for (const auto& pack : discovery.packs) {
-                for (const auto& assignment : pack.assignments) {
-                    auto* npc = ResolveTarget(assignment.target, handler, humanRace);
-                    if (!npc) {
-                        REX::WARN("[PackScanner] assignment skipped: target {}:{} did not resolve to TESNPC", assignment.target.plugin, assignment.target.localFormID);
-                        continue;
-                    }
-
-                    auto loaded = LoadCkPreset(assignment.presetPath);
-                    if (!loaded.preset) {
-                        for (const auto& issue : loaded.issues) {
-                            REX::WARN("[PackScanner] preset issue: {}:{}: {} ({})", issue.path.string(), issue.offset, issue.code, issue.message);
-                        }
-                        continue;
-                    }
-
-                    auto resolvedDependencies = ResolveAppearanceDependencies(*loaded.preset, npc);
-                    if (!resolvedDependencies.Complete()) {
-                        for (const auto& issue : resolvedDependencies.issues) {
-                            REX::WARN("[PackScanner] dependency issue: {}:{}: {} ({})", assignment.presetPath.string(), 0, issue.code, issue.message);
-                        }
-                        continue;
-                    }
-
-                    const auto baseFormID = npc->GetFormID();
-                    std::shared_ptr<const PreparedAssignment> prepared = std::make_shared<const PreparedAssignment>(PreparedAssignment{
-                        .target = assignment.target,
-                        .baseFormID = baseFormID,
-                        .packID = pack.id,
-                        .presetPath = assignment.presetPath,
-                        .preset = std::move(*loaded.preset),
-                        .dependencies = std::move(resolvedDependencies)
-                    });
-                    candidates.push_back(Candidate{ baseFormID, prepared });
-                }
-            }
-
-            std::ranges::sort(candidates, CandidateLess);
-
-            PreparedAssignmentMap selected;
-            for(auto& candidate : candidates)
-            {
-                const auto [winner, inserted] = selected.try_emplace(candidate.baseFormID, std::move(candidate.assignment));
-                if (!inserted) {
-                    REX::WARN("[PackScanner] assignment skipped: target {}:{} already has a higher-priority assignment from pack {}", winner->second->target.plugin, winner->second->target.localFormID, winner->second->packID);
-                }
-            }
-
-            return selected;
-        }
     }
 
-    void ScanPacks()
+    std::filesystem::path DefaultPacksDirectory()
     {
-        const auto packsRoot = DefaultPacksDirectory();
-        std::error_code ec;
-        const bool packsPresent = std::filesystem::is_directory(packsRoot, ec) && !ec;
-        if (!packsPresent) {
-            REX::INFO("[PackScanner] startup disabled: packs directory is absent ({})", packsRoot.string());
-            return;
+        return std::filesystem::path{ REX::FModule::GetCurrentModule().GetFileName() }.parent_path() / L"OSFIdentity" / L"Packs";
+    }
+
+
+    PreparedAssignmentMap RunScan(const std::filesystem::path& a_packsRoot)
+    {
+        const auto discovery = DiscoverPacks(a_packsRoot);
+
+        for(const auto& issue : discovery.issues)
+        {
+            REX::WARN("[PackScanner] discovery issue: {}:{}: {} ({})", issue.path.string(), issue.offset, issue.code, issue.message);
         }
 
-        auto resolvedAssignments = RunScan(packsRoot);
-        if (resolvedAssignments.empty()) {
-            REX::WARN("[PackScanner] startup found no valid assignments;");
-            return;
+        std::vector<Candidate> candidates;
+
+        const auto* handler = RE::TESDataHandler::GetSingleton();
+        auto* humanRace = RE::TESForm::LookupByEditorID<RE::TESRace>(RE::BSFixedString{"HumanRace"});
+        if(!handler || !humanRace) {
+            REX::WARN("[PackScanner] assignment skipped: TESDataHandler or HumanRace not available");
+            return {};
         }
 
-        Runtime::GetOverlayRuntime().Arm(std::move(resolvedAssignments));
+        for (const auto& pack : discovery.packs) {
+            for (const auto& assignment : pack.assignments) {
+                auto* npc = ResolveTarget(assignment.target, handler, humanRace);
+                if (!npc) {
+                    continue;
+                }
+
+                auto loaded = LoadCkPreset(assignment.presetPath);
+                if (!loaded.preset) {
+                    for (const auto& issue : loaded.issues) {
+                        REX::WARN("[PackScanner] preset issue: {}:{}: {} ({})", issue.path.string(), issue.offset, issue.code, issue.message);
+                    }
+                    continue;
+                }
+
+                auto resolvedDependencies = ResolveAppearanceDependencies(*loaded.preset, npc);
+                if (!resolvedDependencies.Complete()) {
+                    for (const auto& issue : resolvedDependencies.issues) {
+                        REX::WARN("[PackScanner] dependency issue: {}:{}: {} ({})", assignment.presetPath.string(), 0, issue.code, issue.message);
+                    }
+                    continue;
+                }
+
+                const auto baseFormID = npc->GetFormID();
+                std::shared_ptr<const PreparedAssignment> prepared = std::make_shared<const PreparedAssignment>(PreparedAssignment{
+                    .target = assignment.target,
+                    .baseFormID = baseFormID,
+                    .packID = pack.id,
+                    .presetPath = assignment.presetPath,
+                    .preset = std::move(*loaded.preset),
+                    .dependencies = std::move(resolvedDependencies)
+                });
+                candidates.push_back(Candidate{ baseFormID, prepared });
+            }
+        }
+
+        std::ranges::sort(candidates, CandidateLess);
+
+        PreparedAssignmentMap selected;
+        for(auto& candidate : candidates)
+        {
+            const auto [winner, inserted] = selected.try_emplace(candidate.baseFormID, std::move(candidate.assignment));
+            if (!inserted) {
+                REX::WARN("[PackScanner] assignment skipped: target {}:{} already has a alphabet earlier assignment from pack {}", winner->second->target.plugin, winner->second->target.localFormID, winner->second->packID);
+            }
+        }
+
+        return selected;
     }
 }
