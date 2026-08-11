@@ -1,4 +1,5 @@
 #include "Config/Config.h"
+#include "Config/RuntimeFormID.h"
 
 #include <algorithm>
 #include <filesystem>
@@ -73,6 +74,27 @@ namespace
 
 int main()
 {
+    Check(
+        Config::EncodeRuntimeFormID(
+            0x00123456u, Config::PluginTier::kFull, 5u) ==
+                0x05123456u &&
+            Config::EncodeRuntimeFormID(
+                0x00001234u, Config::PluginTier::kMedium, 3u) ==
+                0xFD031234u &&
+            Config::EncodeRuntimeFormID(
+                0x00000234u, Config::PluginTier::kSmall, 2u) ==
+                0xFE002234u,
+        "runtime FormID encoding supports all plugin tiers");
+
+    Check(
+        !Config::EncodeRuntimeFormID(
+            0x01000000u, Config::PluginTier::kFull, 5u) &&
+            !Config::EncodeRuntimeFormID(
+                0x00010000u, Config::PluginTier::kMedium, 3u) &&
+            !Config::EncodeRuntimeFormID(
+                0x00001000u, Config::PluginTier::kSmall, 2u),
+        "runtime FormID encoding rejects tier-local overflow");
+
     const auto root = std::filesystem::absolute("tmp/config-tests");
     std::error_code ec;
     std::filesystem::remove_all(root, ec);

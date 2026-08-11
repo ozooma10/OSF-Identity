@@ -1,6 +1,7 @@
 #include <filesystem>
 #include "./Config.h"
 #include "./PackScanner.h"
+#include "./RuntimeFormID.h"
 #include "../Util/String.h"
 
 namespace Config
@@ -13,35 +14,6 @@ namespace Config
             RE::TESFormID baseFormID{ 0 };
             std::shared_ptr<const PreparedAssignment> assignment;
         };
-
-        enum class PluginTier
-        {
-            kFull,
-            kMedium,
-            kSmall
-        };
-
-        std::optional<RE::TESFormID> EncodeRuntimeFormID(const std::uint32_t a_localFormID, const PluginTier a_tier, const std::uint32_t a_index)
-        {
-            switch (a_tier) {
-            case PluginTier::kSmall:
-                if (a_localFormID > 0xFFF || a_index > 0xFFF) {
-                    return std::nullopt;
-                }
-                return 0xFE000000u | (a_index << 12) | a_localFormID;
-            case PluginTier::kMedium:
-                if (a_localFormID > 0xFFFF || a_index > 0xFF) {
-                    return std::nullopt;
-                }
-                return 0xFD000000u | (a_index << 16) | a_localFormID;
-            case PluginTier::kFull:
-                if (a_localFormID > 0xFFFFFF || a_index > 0xFC) {
-                    return std::nullopt;
-                }
-                return (a_index << 24) | a_localFormID;
-            }
-            return std::nullopt;
-        }
 
         struct LoadedPlugin
         {

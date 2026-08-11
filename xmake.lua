@@ -78,7 +78,8 @@ target("npc-appearance-config-tests")
     add_files(
         "tools/tests/npc_appearance_config_tests.cpp",
         "src/Config/ConfigDetail.cpp",
-        "src/Config/PackDiscovery.cpp"
+        "src/Config/PackDiscovery.cpp",
+        "src/Config/RuntimeFormID.cpp"
     )
     add_includedirs("src")
 
