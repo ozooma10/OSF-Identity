@@ -5,10 +5,10 @@
 #include <cctype>
 #include <cmath>
 #include <fstream>
+#include <limits>
 #include <ranges>
 #include <string>
 #include <system_error>
-#include <unordered_set>
 #include <utility>
 
 namespace Config
@@ -16,14 +16,14 @@ namespace Config
     namespace
     {
         constexpr std::size_t kBodyMorphRegionCount = 5;
+        constexpr std::int64_t kMaxRuntimeID = std::numeric_limits<std::uint32_t>::max();
         constexpr double kCharGenMenuTintScale = 128.0;
         constexpr double kRuntimeTintScale = 64.0;
         constexpr double kTintQuantizationTolerance = 1.0e-6;
 
-        [[nodiscard]] bool IsSemanticString(const std::string_view a_value,
-                                            const bool a_allowEmpty) noexcept
+        [[nodiscard]] bool IsSemanticString(const std::string_view a_value, const bool a_allowEmpty) noexcept
         {
-            if ((!a_allowEmpty && a_value.empty())) {
+            if (!a_allowEmpty && a_value.empty()) {
                 return false;
             }
             return std::ranges::all_of(a_value, [](const unsigned char a_ch) {
@@ -42,43 +42,19 @@ namespace Config
                 return false;
             }
 
-            bool Str(const std::string& a_value, const std::string_view a_context,
-                     const bool a_allowEmpty = true)
+            bool Str(const std::string& a_value, const std::string_view a_context, const bool a_allowEmpty = true)
             {
-                return IsSemanticString(a_value, a_allowEmpty) ||
-                       Fail("invalid_string",
-                            std::string(a_context) + " contains an invalid or oversized string");
+                return IsSemanticString(a_value, a_allowEmpty) || Fail("invalid_string", std::string(a_context) + " contains an invalid control character");
             }
 
-            bool Bounded(const double a_value, const double a_min, const double a_max,
-                         const std::string_view a_context)
+            bool Bounded(const double a_value, const double a_min, const double a_max, const std::string_view a_context)
             {
-                return (std::isfinite(a_value) && a_value >= a_min && a_value <= a_max) ||
-                       Fail("number_out_of_range",
-                            std::string(a_context) + " is outside the accepted range");
+                return (std::isfinite(a_value) && a_value >= a_min && a_value <= a_max) || Fail("number_out_of_range", std::string(a_context) + " is outside the accepted range");
             }
 
-            bool Index(const std::int64_t a_value, const std::int64_t a_max,
-                       const std::string_view a_context)
+            bool Index(const std::int64_t a_value, const std::int64_t a_max, const std::string_view a_context)
             {
-                return (a_value >= 0 && a_value <= a_max) ||
-                       Fail("invalid_integer",
-                            std::string(a_context) + " must be a bounded non-negative integer");
-            }
-
-            bool Count(const std::size_t a_size, const std::size_t a_max,
-                       const std::string_view a_context)
-            {
-                return a_size <= a_max ||
-                       Fail("count_out_of_range",
-                            std::string(a_context) + " exceeds its element limit");
-            }
-
-            bool Unique(std::unordered_set<std::string>& a_seen, const std::string& a_key,
-                        const std::string_view a_context)
-            {
-                return a_seen.insert(a_key).second ||
-                       Fail("duplicate_semantic_key", std::string(a_context));
+                return (a_value >= 0 && a_value <= a_max) || Fail("invalid_integer", std::string(a_context) + " must be a bounded non-negative integer");
             }
         };
 
@@ -95,10 +71,10 @@ namespace Config
 
         bool ReadNamedMorphs(const std::vector<Schema::NamedMorph>& a_items, std::vector<PresetNamedMorph>& a_out, Validator& a_validator)
         {
-            std::unordered_set<std::string> names;
             a_out.reserve(a_items.size());
             for (const auto& item : a_items) {
-                if (!a_validator.Str(item.Name, "facial morph name", false) || !a_validator.Unique(names, item.Name, "duplicate facial morph name '" + item.Name + "'") || !a_validator.Bounded(item.Value, 0.0, 1.0, "facial morph value")) {
+                if (!a_validator.Str(item.Name, "facial morph name", false) ||
+                    !a_validator.Bounded(item.Value, 0.0, 1.0, "facial morph value")) {
                     return false;
                 }
                 a_out.push_back(PresetNamedMorph{ .name = item.Name, .value = item.Value });
@@ -108,17 +84,16 @@ namespace Config
 
         bool ReadBoneRegions(const std::vector<Schema::BoneRegion>& a_items, std::vector<PresetBoneRegion>& a_out, Validator& a_validator)
         {
-            std::unordered_set<std::string> regionIDs;
             a_out.reserve(a_items.size());
             for (const auto& item : a_items) {
+                if (!a_validator.Index(item.RegionID, kMaxRuntimeID, "RegionID")) {
+                    return false;
+                }
                 PresetBoneRegion decoded;
                 decoded.regionID = static_cast<std::uint32_t>(item.RegionID);
-                std::unordered_set<std::string> sliderKeys;
                 decoded.sliders.reserve(item.SlidersA.size());
                 for (const auto& slider : item.SlidersA) {
-                    if (!a_validator.Str(slider.GroupName, "slider group") ||
-                        !a_validator.Bounded(slider.Value, -1.0, 1.0, "bone slider value") ||
-                        !a_validator.Unique(sliderKeys, slider.GroupName + '\x1F' + std::to_string(slider.ID), "duplicate slider group/ID within facial bone region")) {
+                    if (!a_validator.Str(slider.GroupName, "slider group") || !a_validator.Index(slider.ID, kMaxRuntimeID, "slider ID") || !a_validator.Bounded(slider.Value, -1.0, 1.0, "bone slider value")) {
                         return false;
                     }
                     decoded.sliders.push_back(PresetBoneSlider{
@@ -133,11 +108,9 @@ namespace Config
 
         bool ReadTintLayers(const std::vector<Schema::TintLayer>& a_items, std::vector<PresetTintLayer>& a_out, Validator& a_validator, const bool a_charGenMenu)
         {
-            std::unordered_set<std::string> names;
             a_out.reserve(a_items.size());
             for (const auto& item : a_items) {
                 if (!a_validator.Str(item.Name, "tint layer name", false) ||
-                    !a_validator.Unique(names, item.Name, "duplicate tint layer name '" + item.Name + "'") ||
                     !a_validator.Str(item.ModulationValue.Value, "tint layer ModulationValue") ||
                     !a_validator.Str(item.Value.Value, "tint layer Value") ||
                     !a_validator.Bounded(item.Intensity, 0.0, a_charGenMenu ? 0.5 : 1.0, "tint layer intensity")) {
@@ -150,7 +123,6 @@ namespace Config
                     .intensity = item.Intensity };
                 if (a_charGenMenu) {
                     // CharGenMenu writes 1/128-quantized intensities that the runtime consumes on a 1/64 scale; 
-                    // this is a conversion, not just a check, so it has to happen here.
                     const auto scaled = decoded.intensity * kCharGenMenuTintScale;
                     const auto packed = std::round(scaled);
                     if (std::abs(scaled - packed) > kTintQuantizationTolerance) {

@@ -82,6 +82,12 @@ namespace
         const auto result = NA::ParseCkPreset(a_json, "adversarial.npc");
         return result.HasFatalError() && !result.issues.empty();
     }
+
+    [[nodiscard]] bool Accepts(const std::string& a_json)
+    {
+        const auto result = NA::ParseCkPreset(a_json, "permissive.npc");
+        return result.preset.has_value() && result.issues.empty();
+    }
 }
 
 int main()
@@ -287,21 +293,29 @@ int main()
 
     modified = baselineJson;
     Check(ReplaceOnce(modified, R"("Name" : "female_af_md1_Forehead")",
-                      R"("Name" : "female_af_md1_Ears")") && Rejects(modified),
-          "duplicate facial morph name rejected");
+                      R"("Name" : "female_af_md1_Ears")") && Accepts(modified),
+          "duplicate facial morph name accepted");
 
     modified = baselineJson;
-    Check(ReplaceOnce(modified, R"("RegionID" : 3)", R"("RegionID" : 1)") && Rejects(modified),
-          "duplicate facial bone region rejected");
+    Check(ReplaceOnce(modified, R"("RegionID" : 3)", R"("RegionID" : 1)") && Accepts(modified),
+          "duplicate facial bone region accepted");
 
     modified = baselineJson;
     Check(ReplaceOnce(modified, R"("GroupName" : "Eyes")", R"("GroupName" : "Chin")") &&
-              Rejects(modified),
-          "duplicate facial bone slider group and ID rejected");
+              Accepts(modified),
+          "duplicate facial bone slider group and ID accepted");
 
     modified = baselineJson;
-    Check(ReplaceOnce(modified, R"("Name" : "Cheeks2")", R"("Name" : "Cheeks1")") && Rejects(modified),
-          "duplicate tint layer name rejected");
+    Check(ReplaceOnce(modified, R"("Name" : "Cheeks2")", R"("Name" : "Cheeks1")") && Accepts(modified),
+          "duplicate tint layer name accepted");
+
+    modified = baselineJson;
+    Check(ReplaceOnce(modified, R"("RegionID" : 1)", R"("RegionID" : 4294967295)") && Accepts(modified),
+          "full 32-bit facial bone region ID range accepted");
+
+    modified = baselineJson;
+    Check(ReplaceOnce(modified, R"("RegionID" : 1)", R"("RegionID" : 4294967296)") && Rejects(modified),
+          "facial bone region ID overflow rejected before conversion");
 
     modified = baselineJson;
     Check(ReplaceOnce(modified, R"("Intensity" : 1,)", R"("Intensity" : 1.01,)") && Rejects(modified),
@@ -335,8 +349,8 @@ int main()
     modified = baselineJson;
     Check(ReplaceOnce(modified, R"("EyeColor" : "Green")",
                       std::string{ R"("EyeColor" : ")" } + std::string(257, 'A') + R"(")") &&
-              Rejects(modified),
-          "oversized semantic string rejected");
+              Accepts(modified),
+          "long semantic string accepted");
 
     modified = baselineJson;
     Check(ReplaceOnce(modified, "[ 0, 0.20999999344348907, 0, 0, 0 ]",
