@@ -1,6 +1,7 @@
 #include "NpcAppearance/Config.h"
 
 #include "NpcAppearance/ConfigDetail.h"
+#include "NpcAppearance/ResourceFile.h"
 
 #include <algorithm>
 #include <optional>
@@ -249,18 +250,11 @@ namespace NpcAppearance
                         }
                         presetRequirements = std::move(*metadata.requirements);
                     }
-                    std::string requirementsError;
                     if (!MergeRequirements(a_manifest.requirements, presetRequirements,
-                                           assignment.requirements, requirementsError,
+                                           assignment.requirements,
                                            plugin)) {
-                        AddIssue(a_result, file, 0, "effective_requirements_invalid",
-                                 requirementsError);
+                        AddIssue(a_result, file, 0, "effective_requirements_invalid", "effective requirements are invalid");
                         continue;
-                    }
-                    if (candidates.size() >= kMaxAssignments) {
-                        AddIssue(a_result, file, 0, "assignment_limit_exceeded",
-                                 "convention preset count exceeds the 1024-assignment safety limit");
-                        return;
                     }
                     candidates.push_back({ std::move(assignment), file });
                 }
@@ -310,10 +304,6 @@ namespace NpcAppearance
         for (; !ec && it != end; it.increment(ec)) {
             if (it->is_directory(ec) && !ec) {
                 packageDirectories.push_back(it->path());
-                if (packageDirectories.size() > kMaxPackages) {
-                    result.issues.push_back({ a_packsRoot, 0, "package_limit_exceeded", "pack count exceeds safety limit" });
-                    return result;
-                }
             } else if (!ec) {
                 result.issues.push_back({ it->path(), 0, "stray_package_root_file",
                                           "files directly under the packs root are ignored; every pack must be its own folder" });
@@ -362,8 +352,7 @@ namespace NpcAppearance
             return result;
         }
         for (const auto& relative : a_requirements.assets) {
-            std::error_code ec;
-            if (!std::filesystem::is_regular_file(a_dataRoot / relative, ec) || ec) {
+            if (!ResourceFile::Size(a_dataRoot / relative)) {
                 result.missing.push_back(relative);
             }
         }

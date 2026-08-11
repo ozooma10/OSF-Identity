@@ -1,22 +1,9 @@
 #pragma once
 
-#include <cstdint>
-#include <optional>
-#include <string>
-#include <vector>
-
 #include <glaze/glaze.hpp>
 
-// Wire shapes of the package manifest, the preset-metadata sidecar, and the CK
-// preset. Glaze reflects these directly, so everything structural -- malformed
-// JSON, unknown keys, missing keys, wrong types, trailing data -- is the
-// library's job and surfaces as one formatted error naming the line, column and
-// offending token. Anything left over is a domain rule and lives in the parser.
-//
-// These types need external linkage: Glaze derives member names by reflection
-// and cannot see into an anonymous namespace. Member names match their JSON
-// keys exactly; the few keys that are not valid C++ identifiers ("$schema") or
-// are keywords ("requires") are mapped through glz::meta below.
+// schema for json files (package manifest, preset metadata, and CK preset)
+// member names match JSON keys exactly
 namespace NpcAppearance::Schema
 {
     struct Requirements
@@ -70,8 +57,7 @@ namespace NpcAppearance::Schema
     struct BoneSlider
     {
         std::string GroupName;
-        // Read as signed so an out-of-range value is caught by the range check
-        // instead of silently wrapping into an unsigned type.
+        // Read as signed so an out-of-range value is caught by the range check instead of silently wrapping into an unsigned type.
         std::int64_t ID{ 0 };
         double Value{ 0.0 };
     };
@@ -121,8 +107,7 @@ namespace NpcAppearance::Schema
         std::vector<std::string> UniqueHeadPartsA;
     };
 
-    // Reject unknown keys (Glaze's default), require every non-optional member,
-    // and refuse anything but whitespace after the root value.
+    // Reject unknown keys (Glaze's default), require every non-optional member, and refuse anything but whitespace after the root value.
     struct ParseOpts : glz::opts
     {
         bool validate_trailing_whitespace = true;
@@ -132,9 +117,7 @@ namespace NpcAppearance::Schema
     {
         ParseOpts opts{};
         opts.error_on_missing_keys = true;
-        // ParseCkPreset and ParsePackageManifest take a std::string_view, which
-        // carries no guarantee of a terminator, so Glaze must stay inside the
-        // view's bounds rather than scanning for a NUL.
+        // ParseCkPreset and ParsePackageManifest take a std::string_view, which may not be null-terminated.
         opts.null_terminated = false;
         return opts;
     }

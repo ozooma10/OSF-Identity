@@ -1,6 +1,7 @@
 #include "NpcAppearance/ConfigDetail.h"
 
 #include "NpcAppearance/Preset.h"
+#include "NpcAppearance/ResourceFile.h"
 
 #include <algorithm>
 #include <charconv>
@@ -28,30 +29,22 @@ namespace NpcAppearance::Detail
 #endif
         }
 
-        [[nodiscard]] bool ContainsParentTraversal(const std::string_view a_text) noexcept
+        [[nodiscard]] bool ContainsParentTraversal(std::string_view a_text) noexcept
         {
-            std::size_t componentStart = 0;
-            for (std::size_t i = 0; i <= a_text.size(); ++i) {
-                if (i != a_text.size() && a_text[i] != '/' && a_text[i] != '\\') {
-                    continue;
-                }
-                if (a_text.substr(componentStart, i - componentStart) == "..") {
+            while (true) {
+                const auto separator = a_text.find_first_of("/\\");
+                if (a_text.substr(0, separator) == "..") {
                     return true;
                 }
-                componentStart = i + 1;
+                if (separator == std::string_view::npos) {
+                    return false;
+                }
+                a_text.remove_prefix(separator + 1);
             }
-            return false;
         }
 
-        [[nodiscard]] bool ParsePluginRequirements(const std::vector<std::string>& a_items,
-                                                   std::vector<std::string>& a_out,
-                                                   ManifestResult& a_result,
-                                                   const std::filesystem::path& a_path)
+        [[nodiscard]] bool ParsePluginRequirements(const std::vector<std::string>& a_items, std::vector<std::string>& a_out, ManifestResult& a_result, const std::filesystem::path& a_path)
         {
-            if (a_items.size() > kMaxRequirements) {
-                AddIssue(a_result, a_path, 0, "limit_exceeded", "property 'plugins' exceeds the requirement limit");
-                return false;
-            }
             std::unordered_set<std::string> seen;
             for (const auto& item : a_items) {
                 if (!IsPluginName(item)) {
@@ -67,15 +60,8 @@ namespace NpcAppearance::Detail
             return true;
         }
 
-        [[nodiscard]] bool ParseAssetRequirements(const std::vector<std::string>& a_items,
-                                                  std::vector<std::filesystem::path>& a_out,
-                                                  ManifestResult& a_result,
-                                                  const std::filesystem::path& a_path)
+        [[nodiscard]] bool ParseAssetRequirements(const std::vector<std::string>& a_items, std::vector<std::filesystem::path>& a_out, ManifestResult& a_result, const std::filesystem::path& a_path)
         {
-            if (a_items.size() > kMaxRequirements) {
-                AddIssue(a_result, a_path, 0, "limit_exceeded", "property 'assets' exceeds the requirement limit");
-                return false;
-            }
             std::unordered_set<std::string> seen;
             for (const auto& item : a_items) {
                 std::filesystem::path relative;
@@ -96,16 +82,14 @@ namespace NpcAppearance::Detail
 
     std::string FoldASCII(const std::string_view a_text)
     {
-        std::string folded;
-        folded.reserve(a_text.size());
-        for (const char ch : a_text) {
-            folded.push_back(LowerASCII(ch));
+        std::string folded{ a_text };
+        for (char& ch : folded) {
+            ch = LowerASCII(ch);
         }
         return folded;
     }
 
-    void AddIssue(ManifestResult& a_result, const std::filesystem::path& a_path,
-                  const std::size_t a_offset, std::string a_code, std::string a_message)
+    void AddIssue(ManifestResult& a_result, const std::filesystem::path& a_path, const std::size_t a_offset, std::string a_code, std::string a_message)
     {
         a_result.issues.push_back({ a_path, a_offset, std::move(a_code), std::move(a_message) });
     }
@@ -126,10 +110,8 @@ namespace NpcAppearance::Detail
             return false;
         }
         std::uint32_t value = 0;
-        const auto [ptr, ec] = std::from_chars(
-            a_text.data(), a_text.data() + a_text.size(), value, 16);
-        if (ec != std::errc{} || ptr != a_text.data() + a_text.size() ||
-            value > 0x00FFFFFF) {
+        const auto [ptr, ec] = std::from_chars( a_text.data(), a_text.data() + a_text.size(), value, 16);
+        if (ec != std::errc{} || ptr != a_text.data() + a_text.size() || value > 0x00FFFFFF) {
             return false;
         }
         a_out = value;
@@ -148,18 +130,13 @@ namespace NpcAppearance::Detail
         return true;
     }
 
-    bool ValidateRelativePath(const std::string& a_text,
-                              std::filesystem::path& a_out,
-                              std::string& a_error)
+    bool ValidateRelativePath(const std::string& a_text, std::filesystem::path& a_out, std::string& a_error)
     {
         if (a_text.empty()) {
             a_error = "path is empty";
             return false;
         }
-        // Reject Windows-style roots (drive letters, leading separators)
-        // explicitly so validation behaves identically on every host and
-        // the host test suite is portable; std::filesystem only recognizes
-        // them on Windows.
+        // Reject Windows-style roots (drive letters, leading separators) explicitly so validation behaves identically on every host
         if (a_text.contains(':') || a_text.front() == '/' || a_text.front() == '\\') {
             a_error = "path must be relative";
             return false;
@@ -177,11 +154,7 @@ namespace NpcAppearance::Detail
         return true;
     }
 
-    bool ResolvePresetPath(const std::filesystem::path& a_manifestPath,
-                           const std::string& a_text,
-                           const bool a_requireFile,
-                           std::filesystem::path& a_out,
-                           std::string& a_error)
+    bool ResolvePresetPath(const std::filesystem::path& a_manifestPath, const std::string& a_text, const bool a_requireFile, std::filesystem::path& a_out, std::string& a_error)
     {
         std::filesystem::path relative;
         if (!ValidateRelativePath(a_text, relative, a_error)) {
@@ -214,12 +187,12 @@ namespace NpcAppearance::Detail
                 a_error = "preset path resolves outside the pack directory";
                 return false;
             }
-            if (!std::filesystem::is_regular_file(canonicalCandidate, ec) || ec) {
-                a_error = "preset file is missing or is not a regular file";
+            const auto size = ResourceFile::Size(canonicalCandidate);
+            if (!size) {
+                a_error = "preset file is missing from loose files and loaded archives";
                 return false;
             }
-            const auto size = std::filesystem::file_size(canonicalCandidate, ec);
-            if (ec || size == 0 || size > kMaxPresetBytes) {
+            if (*size == 0 || *size > kMaxPresetBytes) {
                 a_error = "preset file size is outside the accepted range";
                 return false;
             }
@@ -229,36 +202,23 @@ namespace NpcAppearance::Detail
         return true;
     }
 
-    bool ParseRequirements(const Schema::Requirements& a_node,
-                           Requirements& a_requirements,
-                           ManifestResult& a_result,
-                           const std::filesystem::path& a_path)
+    bool ParseRequirements(const Schema::Requirements& a_node, Requirements& a_requirements, ManifestResult& a_result, const std::filesystem::path& a_path)
     {
-        if (a_node.plugins &&
-            !ParsePluginRequirements(*a_node.plugins, a_requirements.plugins, a_result, a_path)) {
+        if (a_node.plugins && !ParsePluginRequirements(*a_node.plugins, a_requirements.plugins, a_result, a_path)) {
             return false;
         }
-        if (a_node.assets &&
-            !ParseAssetRequirements(*a_node.assets, a_requirements.assets, a_result, a_path)) {
+        if (a_node.assets &&  !ParseAssetRequirements(*a_node.assets, a_requirements.assets, a_result, a_path)) {
             return false;
         }
         return true;
     }
 
-    bool MergeRequirements(const Requirements& a_package,
-                           const Requirements& a_assignment,
-                           Requirements& a_out,
-                           std::string& a_error,
-                           const std::string_view a_implicitPlugin)
+    bool MergeRequirements(const Requirements& a_package, const Requirements& a_assignment, Requirements& a_out, const std::string_view a_implicitPlugin)
     {
         std::unordered_set<std::string> plugins;
         const auto addPlugin = [&](const std::string_view a_plugin) {
             const auto folded = FoldASCII(a_plugin);
             if (plugins.insert(folded).second) {
-                if (a_out.plugins.size() >= kMaxRequirements) {
-                    a_error = "effective plugin requirements exceed the safety limit";
-                    return false;
-                }
                 a_out.plugins.emplace_back(a_plugin);
             }
             return true;
@@ -276,10 +236,6 @@ namespace NpcAppearance::Detail
         const auto addAsset = [&](const std::filesystem::path& a_asset) {
             const auto folded = FoldASCII(a_asset.generic_string());
             if (assets.insert(folded).second) {
-                if (a_out.assets.size() >= kMaxRequirements) {
-                    a_error = "effective asset requirements exceed the safety limit";
-                    return false;
-                }
                 a_out.assets.push_back(a_asset);
             }
             return true;

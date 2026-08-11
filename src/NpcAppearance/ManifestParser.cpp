@@ -136,12 +136,6 @@ namespace NpcAppearance
                      "priority is outside the accepted range");
             return result;
         }
-        if (document.assignments &&
-            (document.assignments->empty() || document.assignments->size() > kMaxAssignments)) {
-            AddIssue(result, a_manifestPath, 0, "invalid_assignment_count",
-                     "assignments must contain 1-1024 entries");
-            return result;
-        }
         PackageManifest manifest;
         manifest.packageID = a_manifestPath.parent_path().filename().string();
         manifest.priority = static_cast<std::int32_t>(priority);
@@ -175,12 +169,10 @@ namespace NpcAppearance
                                        result, a_manifestPath)) {
                     return result;
                 }
-                std::string requirementsError;
                 if (!MergeRequirements(manifest.requirements, assignmentRequirements,
-                                       assignment.requirements, requirementsError,
+                                       assignment.requirements,
                                        rawAssignment.target.plugin)) {
-                    AddIssue(result, a_manifestPath, 0, "effective_requirements_invalid",
-                             requirementsError);
+                    AddIssue(result, a_manifestPath, 0, "effective_requirements_invalid", "effective requirements are invalid");
                     return result;
                 }
                 std::string presetError;
