@@ -33,6 +33,7 @@ echo "[verify-host] building host test suites with $cxx"
     src/NpcAppearance/ManifestParser.cpp \
     src/NpcAppearance/PackageDiscovery.cpp \
     src/NpcAppearance/Selection.cpp \
+    src/NpcAppearance/RuntimeFormID.cpp \
     -o "$build_dir/npc-appearance-config-tests"
 "$cxx" "${cxxflags[@]}" \
     tools/tests/npc_appearance_preset_tests.cpp \

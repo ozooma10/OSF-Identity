@@ -1,5 +1,6 @@
 #include "NpcAppearance/Config.h"
 #include "NpcAppearance/ConfigDetail.h"
+#include "NpcAppearance/RuntimeFormID.h"
 
 #include <algorithm>
 #include <filesystem>

@@ -3,6 +3,7 @@
 #include "NpcAppearance/Config.h"
 #include "NpcAppearance/Preset.h"
 #include "NpcAppearance/Resolver.h"
+#include "NpcAppearance/RuntimeFormID.h"
 #include "pch.h"
 
 #include <Windows.h>

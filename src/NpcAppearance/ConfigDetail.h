@@ -12,8 +12,7 @@
 #include <vector>
 
 // Shared internals of the package-configuration pipeline
-// ConfigDetail.cpp (validation primitives), ManifestParser.cpp (JSON schema walks),
-// PackageDiscovery.cpp (filesystem scanning), and Selection.cpp (conflict resolution).
+// ConfigDetail.cpp (validation primitives), ManifestParser.cpp (JSON schema walks), PackageDiscovery.cpp (filesystem scanning), and Selection.cpp (conflict resolution).
 namespace NpcAppearance
 {
     inline constexpr std::size_t kMaxManifestBytes = 1024 * 1024; // 1 MiB

@@ -1,11 +1,5 @@
 #pragma once
 
-#include <cstdint>
-#include <filesystem>
-#include <optional>
-#include <string>
-#include <vector>
-
 // Pack config pipeline: discover packs on disk, check their requirements, and pick a deterministic winner per resolved base form. 
 namespace NpcAppearance
 {
@@ -16,18 +10,6 @@ namespace NpcAppearance
 
         [[nodiscard]] std::string CanonicalKey() const;
     };
-
-    enum class PluginTier
-    {
-        kFull,
-        kMedium,
-        kSmall
-    };
-
-    [[nodiscard]] std::optional<std::uint32_t> EncodeRuntimeFormID(
-        std::uint32_t a_localFormID,
-        PluginTier a_tier,
-        std::uint32_t a_index) noexcept;
 
     struct Requirements
     {

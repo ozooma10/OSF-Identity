@@ -27,6 +27,7 @@ target("OSF Identity")
         "src/NpcAppearance/ManifestParser.cpp",
         "src/NpcAppearance/PackageDiscovery.cpp",
         "src/NpcAppearance/Selection.cpp",
+        "src/NpcAppearance/RuntimeFormID.cpp",
         "src/NpcAppearance/Preset.cpp",
         "src/NpcAppearance/Resolver.cpp",
         "src/NpcAppearance/Snapshot.cpp",
@@ -88,7 +89,8 @@ target("npc-appearance-config-tests")
         "src/NpcAppearance/ConfigDetail.cpp",
         "src/NpcAppearance/ManifestParser.cpp",
         "src/NpcAppearance/PackageDiscovery.cpp",
-        "src/NpcAppearance/Selection.cpp"
+        "src/NpcAppearance/Selection.cpp",
+        "src/NpcAppearance/RuntimeFormID.cpp"
     )
     add_includedirs("src")
     add_packages("glaze")
