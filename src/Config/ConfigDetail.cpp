@@ -3,6 +3,10 @@
 #include "Preset.h"
 #include "Util/String.h"
 
+#include <charconv>
+#include <system_error>
+#include <utility>
+
 namespace Config::Detail
 {
     namespace
@@ -29,45 +33,9 @@ namespace Config::Detail
                 a_text.remove_prefix(separator + 1);
             }
         }
-
-        [[nodiscard]] bool ParsePluginRequirements(const std::vector<std::string>& a_items, std::vector<std::string>& a_out, ManifestResult& a_result, const std::filesystem::path& a_path)
-        {
-            std::unordered_set<std::string> seen;
-            for (const auto& item : a_items) {
-                if (!IsPluginName(item)) {
-                    AddIssue(a_result, a_path, 0, "invalid_plugin", "invalid required plugin name");
-                    return false;
-                }
-                if (!seen.insert(Util::FoldASCII(item)).second) {
-                    AddIssue(a_result, a_path, 0, "duplicate_requirement", "duplicate required plugin");
-                    return false;
-                }
-                a_out.push_back(item);
-            }
-            return true;
-        }
-
-        [[nodiscard]] bool ParseAssetRequirements(const std::vector<std::string>& a_items, std::vector<std::filesystem::path>& a_out, ManifestResult& a_result, const std::filesystem::path& a_path)
-        {
-            std::unordered_set<std::string> seen;
-            for (const auto& item : a_items) {
-                std::filesystem::path relative;
-                std::string error;
-                if (!ValidateRelativePath(item, relative, error)) {
-                    AddIssue(a_result, a_path, 0, "invalid_asset_path", error);
-                    return false;
-                }
-                if (!seen.insert(Util::FoldASCII(relative.generic_string())).second) {
-                    AddIssue(a_result, a_path, 0, "duplicate_requirement", "duplicate required asset");
-                    return false;
-                }
-                a_out.push_back(std::move(relative));
-            }
-            return true;
-        }
     }
 
-    void AddIssue(ManifestResult& a_result, const std::filesystem::path& a_path, const std::size_t a_offset, std::string a_code, std::string a_message)
+    void AddIssue(DiscoveryResult& a_result, const std::filesystem::path& a_path, const std::size_t a_offset, std::string a_code, std::string a_message)
     {
         a_result.issues.push_back({ a_path, a_offset, std::move(a_code), std::move(a_message) });
     }
@@ -132,7 +100,7 @@ namespace Config::Detail
         return true;
     }
 
-    bool ResolvePresetPath(const std::filesystem::path& a_manifestPath, const std::string& a_text, const bool a_requireFile, std::filesystem::path& a_out, std::string& a_error)
+    bool ResolvePresetPath(const std::filesystem::path& a_packPath, const std::string& a_text, const bool a_requireFile, std::filesystem::path& a_out, std::string& a_error)
     {
         std::filesystem::path relative;
         if (!ValidateRelativePath(a_text, relative, a_error)) {
@@ -144,7 +112,7 @@ namespace Config::Detail
         }
 
         std::error_code ec;
-        const auto root = std::filesystem::absolute(a_manifestPath.parent_path(), ec).lexically_normal();
+        const auto root = std::filesystem::absolute(a_packPath, ec).lexically_normal();
         if (ec) {
             a_error = "could not resolve pack directory: " + ec.message();
             return false;
@@ -177,53 +145,6 @@ namespace Config::Detail
             candidate = canonicalCandidate;
         }
         a_out = std::move(candidate);
-        return true;
-    }
-
-    bool ParseRequirements(const Schema::Requirements& a_node, Requirements& a_requirements, ManifestResult& a_result, const std::filesystem::path& a_path)
-    {
-        if (a_node.plugins && !ParsePluginRequirements(*a_node.plugins, a_requirements.plugins, a_result, a_path)) {
-            return false;
-        }
-        if (a_node.assets &&  !ParseAssetRequirements(*a_node.assets, a_requirements.assets, a_result, a_path)) {
-            return false;
-        }
-        return true;
-    }
-
-    bool MergeRequirements(const Requirements& a_package, const Requirements& a_assignment, Requirements& a_out, const std::string_view a_implicitPlugin)
-    {
-        std::unordered_set<std::string> plugins;
-        const auto addPlugin = [&](const std::string_view a_plugin) {
-            const auto folded = Util::FoldASCII(a_plugin);
-            if (plugins.insert(folded).second) {
-                a_out.plugins.emplace_back(a_plugin);
-            }
-            return true;
-        };
-        for (const auto& plugin : a_package.plugins) {
-            if (!addPlugin(plugin)) return false;
-        }
-        for (const auto& plugin : a_assignment.plugins) {
-            if (!addPlugin(plugin)) return false;
-        }
-        if (!a_implicitPlugin.empty() && !addPlugin(a_implicitPlugin)) {
-            return false;
-        }
-        std::unordered_set<std::string> assets;
-        const auto addAsset = [&](const std::filesystem::path& a_asset) {
-            const auto folded = Util::FoldASCII(a_asset.generic_string());
-            if (assets.insert(folded).second) {
-                a_out.assets.push_back(a_asset);
-            }
-            return true;
-        };
-        for (const auto& asset : a_package.assets) {
-            if (!addAsset(asset)) return false;
-        }
-        for (const auto& asset : a_assignment.assets) {
-            if (!addAsset(asset)) return false;
-        }
         return true;
     }
 }

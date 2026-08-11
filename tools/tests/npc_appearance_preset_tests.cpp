@@ -1,4 +1,4 @@
-#include "NpcAppearance/Preset.h"
+#include "Config/Preset.h"
 
 #include <algorithm>
 #include <cmath>
@@ -14,7 +14,7 @@
 
 namespace
 {
-    namespace NA = NpcAppearance;
+    namespace NA = Config;
 
     std::size_t g_failed = 0;
 
@@ -86,7 +86,7 @@ namespace
 
 int main()
 {
-    namespace NA = NpcAppearance;
+    namespace NA = Config;
     const auto fixtures = std::filesystem::path{ "fixtures/osf-identity/Presets/CK" };
     auto baselineResult = NA::LoadCkPreset(fixtures / "Baseline.npc");
     auto headpartResult = NA::LoadCkPreset(fixtures / "HeadpartOnly.npc");

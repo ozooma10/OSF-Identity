@@ -28,16 +28,12 @@ cxxflags=(-std=c++23 -Wall -Wextra -Werror -Isrc -isystem "$glaze_dir/include")
 echo "[verify-host] building host test suites with $cxx"
 "$cxx" "${cxxflags[@]}" \
     tools/tests/npc_appearance_config_tests.cpp \
-    src/NpcAppearance/Config.cpp \
-    src/NpcAppearance/ConfigDetail.cpp \
-    src/NpcAppearance/ManifestParser.cpp \
-    src/NpcAppearance/PackageDiscovery.cpp \
-    src/NpcAppearance/Selection.cpp \
-    src/NpcAppearance/RuntimeFormID.cpp \
+    src/Config/ConfigDetail.cpp \
+    src/Config/PackDiscovery.cpp \
     -o "$build_dir/npc-appearance-config-tests"
 "$cxx" "${cxxflags[@]}" \
     tools/tests/npc_appearance_preset_tests.cpp \
-    src/NpcAppearance/Preset.cpp \
+    src/Config/Preset.cpp \
     -o "$build_dir/npc-appearance-preset-tests"
 
 echo "[verify-host] running host test suites"

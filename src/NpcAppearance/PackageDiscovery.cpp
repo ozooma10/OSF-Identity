@@ -54,71 +54,106 @@ namespace NpcAppearance
             }
             return false;
         }
-
-        [[nodiscard]] ManifestResult BuildImplicitPackage(
-            const std::filesystem::path& a_packageDirectory,
-            const bool a_requirePresetFiles)
+        Pack ScanPackDirectory(const std::filesystem::path& a_packDirectory)
         {
-            ManifestResult result;
+            DiscoveryResult result;
             const auto folderName = a_packageDirectory.filename().string();
+            Pack pack;
+            pack.id = folderName;
+            pack.rootPath = a_packDirectory;
 
-            PackageManifest manifest;
-            manifest.packageID = folderName;
-            manifest.priority = 0;
-            manifest.manifestPath = a_packageDirectory / "package.json";
-            manifest.implicitManifest = true;
-            DiscoverConventionAssignments(manifest, result, a_requirePresetFiles);
-            result.manifest = std::move(manifest);
-            return result;
-        }
+            std::vector<std::filesystem::path> pluginDirectories;
 
-        [[nodiscard]] ManifestResult LoadPackageDirectory(
-            const std::filesystem::path& a_packageDirectory,
-            const bool a_requirePresetFiles)
-        {
-            ManifestResult result;
-            std::optional<std::filesystem::path> manifestPath;
-            std::vector<std::filesystem::path> suspects;
-            std::error_code ec;
-            std::filesystem::directory_iterator it{
-                a_packageDirectory, std::filesystem::directory_options::skip_permission_denied, ec };
+            std::filesystem::directory_iterator rootIt{ a_packDirectory, std::filesystem::directory_options::skip_permission_denied, ec };
             const std::filesystem::directory_iterator end;
-            for (; !ec && it != end; it.increment(ec)) {
-                if (!it->is_regular_file(ec) || ec) {
-                    continue;
-                }
-                if (FoldASCII(it->path().filename().string()) == "package.json") {
-                    manifestPath = it->path();
-                } else if (IsSuspectRootFile(it->path())) {
-                    suspects.push_back(it->path());
+            for (; !ec && rootIt != end; rootIt.increment(ec)) {
+                if (rootIt->is_directory(ec) && !ec) {
+                    pluginDirectories.push_back(rootIt->path());
+                } else if (!ec && rootIt->is_regular_file(ec) && !ec) {
+                    const auto extension = FoldASCII(rootIt->path().extension().string());
+                    if (extension == ".npc") {
+                        AddIssue(result, rootIt->path(), 0, "invalid_convention_layout", "preset files must be inside <OwningPlugin>/");
+                    }
+                } else if (!ec) {
+                    AddIssue(result, rootIt->path(), 0, "invalid_convention_layout", "unsupported entry at the pack root");
                 }
             }
             if (ec) {
-                AddIssue(result, a_packageDirectory, 0, "package_scan_failed", ec.message());
-                return result;
+                AddIssue(result, packageRoot, 0, "preset_scan_failed", ec.message());
+                return;
+            }
+            std::ranges::sort(pluginDirectories, [](const auto& a_left, const auto& a_right) {
+                return FoldASCII(a_left.filename().string()) <
+                    FoldASCII(a_right.filename().string());
+            });
+
+            struct Candidate
+            {
+                Assignment assignment;
+                std::filesystem::path sourcePath;
+            };
+            std::vector<Candidate> candidates;
+            for (const auto& pluginDirectory : pluginDirectories) {
+                const auto plugin = pluginDirectory.filename().string();
+                if (!IsPluginName(plugin)) {
+                    AddIssue(a_result, pluginDirectory, 0, "invalid_convention_plugin", "preset directory name must be an ESM, ESP, or ESL plugin filename");
+                    continue;
+                }
+
+                std::vector<std::filesystem::path> files;
+                std::filesystem::directory_iterator pluginIt{pluginDirectory, std::filesystem::directory_options::skip_permission_denied, ec };
+                for (; !ec && pluginIt != end; pluginIt.increment(ec)) {
+                    if (pluginIt->is_regular_file(ec) && !ec) {
+                        files.push_back(pluginIt->path());
+                    } else if (!ec && pluginIt->is_directory(ec) && !ec) {
+                        AddIssue(a_result, pluginIt->path(), 0, "invalid_convention_layout", "nested preset directories are not supported");
+                    }
+                }
+                if (ec) {
+                    AddIssue(a_result, pluginDirectory, 0, "preset_scan_failed", ec.message());
+                    ec.clear();
+                    continue;
+                }
+                std::ranges::sort(files, [](const auto& a_left, const auto& a_right) {
+                    return FoldASCII(a_left.filename().string()) < FoldASCII(a_right.filename().string());
+                });
+                std::unordered_map<std::string, std::filesystem::path> filesByName;
+                for (const auto& file : files) {
+                    const auto folded = FoldASCII(file.filename().string());
+                    if (!filesByName.emplace(folded, file).second) {
+                        AddIssue(a_result, file, 0, "duplicate_convention_filename", "case-insensitive duplicate filename is not supported");
+                    }
+                }
+
+                for (const auto& file : files) {
+                    if (FoldASCII(file.extension().string()) != ".npc") {
+                        continue;
+                    }
+                    std::uint32_t localFormID = 0;
+                    if (!ParseLocalFormID(file.stem().string(), localFormID)) {
+                        AddIssue(a_result, file, 0, "invalid_convention_form_id", "preset filename must be a 1-8 digit plugin-local hexadecimal FormID no greater than 00FFFFFF and without a 0x prefix");
+                        continue;
+                    }
+
+                    Assignment assignment;
+                    assignment.target = Target{ plugin, localFormID };
+                    const auto relative = pluginDirectory.filename() / file.filename();
+                    std::string presetError;
+                    if (!ResolvePresetPath(a_manifest.manifestPath, relative.generic_string(), a_requirePresetFiles, assignment.presetPath, presetError)) {
+                        AddIssue(a_result, file, 0, "invalid_preset", presetError);
+                        continue;
+                    }
+                    candidates.push_back({ std::move(assignment), file });
+                }
             }
 
-            if (manifestPath) {
-                return LoadPackageManifest(*manifestPath, a_requirePresetFiles);
+            for (auto& candidate : candidates) {
+                pack.assignments.push_back(std::move(candidate.assignment));
             }
-            if (!suspects.empty()) {
-                std::ranges::sort(suspects, [](const auto& a_left, const auto& a_right) {
-                    return FoldASCII(a_left.filename().string()) <
-                        FoldASCII(a_right.filename().string());
-                });
-                AddIssue(result, suspects.front(), 0, "suspect_package_root_file",
-                         "pack has no package.json; rename '" +
-                             suspects.front().filename().string() +
-                             "' to 'package.json' or remove it; convention presets belong in <OwningPlugin>/ directories");
-                return result;
-            }
-            if (std::filesystem::path nested; FindNestedManifest(a_packageDirectory, nested)) {
-                AddIssue(result, nested, 0, "manifest_not_at_package_root",
-                         "package.json must sit at the pack root; move it to '" +
-                             (a_packageDirectory / "package.json").string() + "'");
-                return result;
-            }
-            return BuildImplicitPackage(a_packageDirectory, a_requirePresetFiles);
+
+            result.packs.push_back(std::move(pack));
+
+            return result;
         }
     }
 
@@ -129,15 +164,7 @@ namespace NpcAppearance
             ManifestResult& a_result,
             const bool a_requirePresetFiles)
         {
-            const auto packageRoot = a_manifest.manifestPath.parent_path();
-            std::error_code ec;
-            if (!std::filesystem::is_directory(packageRoot, ec) || ec) {
-                if (a_requirePresetFiles) {
-                    AddIssue(a_result, packageRoot, 0, "package_root_missing",
-                             "convention pack directory is missing");
-                }
-                return;
-            }
+            
 
             std::vector<std::filesystem::path> pluginDirectories;
             std::filesystem::directory_iterator rootIt{

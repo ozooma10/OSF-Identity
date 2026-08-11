@@ -70,3 +70,25 @@ target("OSF Identity")
             )
         end
     end)
+
+target("npc-appearance-config-tests")
+    set_kind("binary")
+    set_default(false)
+    set_rundir(os.projectdir())
+    add_files(
+        "tools/tests/npc_appearance_config_tests.cpp",
+        "src/Config/ConfigDetail.cpp",
+        "src/Config/PackDiscovery.cpp"
+    )
+    add_includedirs("src")
+
+target("npc-appearance-preset-tests")
+    set_kind("binary")
+    set_default(false)
+    set_rundir(os.projectdir())
+    add_files(
+        "tools/tests/npc_appearance_preset_tests.cpp",
+        "src/Config/Preset.cpp"
+    )
+    add_includedirs("src")
+    add_packages("glaze")
