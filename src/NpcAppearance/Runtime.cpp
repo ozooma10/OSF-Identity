@@ -270,33 +270,20 @@ namespace NpcAppearance
             std::function<void()> a_onDrop = {})
         {
             using Util::NativeMainThreadQueue::PostResult;
-            const auto result = Util::NativeMainThreadQueue::PostOrRunInline(
-                std::move(a_task), a_label, std::move(a_onDrop));
+                const auto result = Util::NativeMainThreadQueue::Post(
+                    std::move(a_task), a_label, std::move(a_onDrop));
             switch (result) {
             case PostResult::kQueued:
             case PostResult::kRanInline:
                 return true;
-            case PostResult::kInlineThrew:
-                // Already CRITICAL-logged by the queue; the caller's false
-                // path owns cleanup / fail-close.
-                return false;
-            case PostResult::kQueueDisabled:
-                // The engine disables the queue around LoadGame. The Set3d
-                // caller retries at the next 3D build; the startup caller
-                // intentionally fail-closes on any refusal.
+            case PostResult::kUnavailable:
+            default:
+                // The engine disables the queue around LoadGame.
+                // The Set3d caller retries at the next 3D build;
                 REX::WARN(
                     "[NpcAppearance] native task '{}' refused result=queue-disabled tid={}; caller falls back",
                     a_label, ::GetCurrentThreadId());
                 return false;
-            default: {
-                const auto state = Util::NativeMainThreadQueue::SnapshotState();
-                REX::CRITICAL(
-                    "[NpcAppearance] native task '{}' post failed result={} tid={} drainOwnerTid={} queueEnabled={}",
-                    a_label, Util::NativeMainThreadQueue::ToString(result),
-                    state.currentThreadID, state.drainOwnerThreadID,
-                    state.queueEnabled);
-                return false;
-            }
             }
         }
 
@@ -615,8 +602,7 @@ namespace NpcAppearance
                              wait <= kLoadSweepRetryMaxWaits;
                              ++wait) {
                             std::this_thread::sleep_for(kLoadSweepRetryDelay);
-                            if (!Util::NativeMainThreadQueue::IsQueueUsable(
-                                    Util::NativeMainThreadQueue::SnapshotState())) {
+                            if (!Util::NativeMainThreadQueue::IsAvailable()) {
                                 continue;
                             }
 
@@ -732,7 +718,7 @@ namespace NpcAppearance
                     }
                 };
 
-                const auto postResult = Util::NativeMainThreadQueue::PostOrRunInline(
+                const auto postResult = Util::NativeMainThreadQueue::Post(
                     std::move(execute), "NpcAppearance.LoadSweep",
                     [pending] {
                         bool retry = false;
@@ -747,27 +733,10 @@ namespace NpcAppearance
                             ScheduleDeferredLoadSweepRetry();
                         }
                     });
-                if (postResult ==
-                    Util::NativeMainThreadQueue::PostResult::kRanInline) {
+                if (postResult == Util::NativeMainThreadQueue::PostResult::kRanInline) {
                     return;
                 }
-                if (postResult ==
-                    Util::NativeMainThreadQueue::PostResult::kInlineThrew) {
-                    // execute self-catches, so a throw means its bookkeeping
-                    // epilogue failed; mirror the catch handlers below.
-                    {
-                        const std::scoped_lock lock{ g_deferredLoadSweepMutex };
-                        if (g_deferredLoadSweepInFlight == pending) {
-                            g_deferredLoadSweepInFlight.reset();
-                        }
-                    }
-                    KillMutation("deferred load-return scheduling threw");
-                    REX::CRITICAL(
-                        "[NpcAppearance] deferred LOAD-RETURN scheduling threw; no mutation");
-                    return;
-                }
-                if (postResult ==
-                    Util::NativeMainThreadQueue::PostResult::kQueued) {
+                if (postResult == Util::NativeMainThreadQueue::PostResult::kQueued) {
                     if (firstQueuedAttempt) {
                         REX::INFO(
                             "[NpcAppearance] LOAD-RETURN generation={} queued for verified native drain after queueDeferral={}",
@@ -789,15 +758,10 @@ namespace NpcAppearance
                     }
                 }
                 if (logDeferral) {
-                    // Fresh snapshot: the pre-post state can contradict the
-                    // refusal it would be explaining.
-                    const auto state = Util::NativeMainThreadQueue::SnapshotState();
                     REX::INFO(
-                        "[NpcAppearance] LOAD-RETURN generation={} deferred until native queue is available result={} tid={} queueEnabled={} singleton=0x{:X}",
+                        "[NpcAppearance] LOAD-RETURN generation={} deferred until native queue is available result={}",
                         pending->generation,
-                        Util::NativeMainThreadQueue::ToString(postResult),
-                        state.currentThreadID, state.queueEnabled,
-                        state.singleton);
+                        Util::NativeMainThreadQueue::ToString(postResult));
                 }
                 ScheduleDeferredLoadSweepRetry();
             } catch (const std::exception& e) {
