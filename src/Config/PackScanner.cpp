@@ -44,34 +44,56 @@ namespace Config
             return std::nullopt;
         }
 
-        RE::TESNPC* ResolveTarget(const Target& a_target)
+        struct LoadedPlugin
         {
-            const auto* handler = RE::TESDataHandler::GetSingleton();
-            if (!handler) {
-                return nullptr;
-            }
+            PluginTier tier;
+            std::uint32_t index;
+        };
 
-            const auto targetPlugin = Util::FoldASCII(a_target.plugin);
-            const auto find = [&](const auto& a_files, const PluginTier a_tier) -> RE::TESNPC* {
+        std::optional<LoadedPlugin> FindLoadedPlugin(const RE::TESDataHandler* a_handler, const std::string_view a_pluginName)
+        {
+            const auto targetName = Util::FoldASCII(a_pluginName);
+            const auto find = [&](const auto& a_files, PluginTier a_tier) -> std::optional<LoadedPlugin> {
                 std::uint32_t tierIndex = 0;
                 for (const auto* file : a_files) {
-                    if (file && Util::FoldASCII(Util::SafeText(file->fileName)) == targetPlugin) {
-                        const auto index = a_tier == PluginTier::kFull ? file->compileIndex : tierIndex;
-                        const auto runtimeFormID = EncodeRuntimeFormID(a_target.localFormID, a_tier, index);
-                        return runtimeFormID ? RE::TESForm::LookupByID<RE::TESNPC>(*runtimeFormID) : nullptr;
+                    if (file && Util::FoldASCII(Util::SafeText(file->fileName)) == targetName) {
+                        return LoadedPlugin{ .tier = a_tier, .index = a_tier == PluginTier::kFull ? file->compileIndex : tierIndex };
                     }
                     tierIndex++;
                 }
-                return nullptr;
+                return std::nullopt;
             };
+            if(auto plugin = find(a_handler->compiledFileCollection.files, PluginTier::kFull)) {
+                return plugin;
+            }
+            if(auto plugin = find(a_handler->compiledFileCollection.mediumFiles, PluginTier::kMedium)) {
+                return plugin;
+            }
 
-            if (auto* target = find(handler->compiledFileCollection.files, PluginTier::kFull)) {
-                return target;
+            return find(a_handler->compiledFileCollection.smallFiles, PluginTier::kSmall);
+        }
+
+        RE::TESNPC* ResolveTarget(const Target& a_target, const RE::TESDataHandler* a_handler, RE::TESRace* a_humanRace)
+        {
+            const auto plugin = FindLoadedPlugin(a_handler, a_target.plugin);
+            if (!plugin) {
+                REX::WARN("[PackScanner] assignment skipped: target {}:{} plugin not loaded", a_target.plugin, a_target.localFormID);
+                return nullptr;
             }
-            if (auto* target = find(handler->compiledFileCollection.mediumFiles, PluginTier::kMedium)) {
-                return target;
+
+            const auto runtimeFormID = EncodeRuntimeFormID(a_target.localFormID, plugin->tier, plugin->index);
+            if (!runtimeFormID) {
+                REX::WARN("[PackScanner] assignment skipped: target {}:{} plugin {} formID out of range for plugin tier", a_target.plugin, a_target.localFormID, a_target.plugin);
+                return nullptr;
             }
-            return find(handler->compiledFileCollection.smallFiles, PluginTier::kSmall);
+
+            auto* npc = RE::TESForm::LookupByID<RE::TESNPC>(*runtimeFormID);
+            if (!npc || !npc->IsUnique() || npc->GetRace() != a_humanRace) {
+                REX::WARN("[PackScanner] assignment skipped: target {}:{} plugin {} formID {} did not resolve to TESNPC", a_target.plugin, a_target.localFormID, a_target.plugin, *runtimeFormID);
+                return nullptr;
+            }
+
+            return npc;
         }
 
         bool CandidateLess(const Candidate& a_left, const Candidate& a_right)
@@ -101,15 +123,22 @@ namespace Config
 
             std::vector<Candidate> candidates;
 
+            const auto* handler = RE::TESDataHandler::GetSingleton();
+            auto* humanRace = RE::TESForm::LookupByEditorID<RE::TESRace>(RE::BSFixedString{"HumanRace"});
+            if(!handler || !humanRace) {
+                REX::WARN("[PackScanner] assignment skipped: TESDataHandler or HumanRace not available");
+                return {};
+            }
+
             for (const auto& pack : discovery.packs) {
                 for (const auto& assignment : pack.assignments) {
-                    auto* npc = ResolveTarget(assignment.target);
+                    auto* npc = ResolveTarget(assignment.target, handler, humanRace);
                     if (!npc) {
                         REX::WARN("[PackScanner] assignment skipped: target {}:{} did not resolve to TESNPC", assignment.target.plugin, assignment.target.localFormID);
                         continue;
                     }
 
-                    const auto loaded = LoadCkPreset(assignment.presetPath);
+                    auto loaded = LoadCkPreset(assignment.presetPath);
                     if (!loaded.preset) {
                         for (const auto& issue : loaded.issues) {
                             REX::WARN("[PackScanner] preset issue: {}:{}: {} ({})", issue.path.string(), issue.offset, issue.code, issue.message);
@@ -117,7 +146,7 @@ namespace Config
                         continue;
                     }
 
-                    const auto resolvedDependencies = ResolveAppearanceDependencies(*loaded.preset, npc);
+                    auto resolvedDependencies = ResolveAppearanceDependencies(*loaded.preset, npc);
                     if (!resolvedDependencies.Complete()) {
                         for (const auto& issue : resolvedDependencies.issues) {
                             REX::WARN("[PackScanner] dependency issue: {}:{}: {} ({})", assignment.presetPath.string(), 0, issue.code, issue.message);
