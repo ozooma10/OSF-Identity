@@ -72,7 +72,7 @@ namespace Config
 
     std::filesystem::path DefaultPacksDirectory()
     {
-        return std::filesystem::path{ REX::FModule::GetCurrentModule().GetFileName() }.parent_path() / L"OSFIdentity" / L"Packs";
+        return std::filesystem::path{ REX::FModule::GetExecutingModule().GetFileName() }.parent_path() / L"Data" / L"SFSE" / L"Plugins" / L"OSFIdentity" / L"Packs";
     }
 
 

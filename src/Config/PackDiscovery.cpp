@@ -30,7 +30,8 @@ namespace Config
             DiscoveryResult result;
             Pack pack{
                 .id = a_packDirectory.filename().string(),
-                .rootPath = a_packDirectory
+                .rootPath = a_packDirectory,
+                .assignments = {}
             };
 
             std::vector<std::filesystem::path> pluginDirectories;
