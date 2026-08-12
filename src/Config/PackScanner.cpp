@@ -121,7 +121,8 @@ namespace Config
                 auto resolvedDependencies = ResolveAppearanceDependencies(*loaded.preset, npc);
                 if (!resolvedDependencies.Complete()) {
                     for (const auto& issue : resolvedDependencies.issues) {
-                        REX::WARN("[PackScanner] dependency issue: {}: {}='{}': {} ({})", RelativeLogPath(assignment.presetPath, a_packsRoot), issue.field, issue.value, issue.code, issue.message);
+                        REX::WARN("[PackScanner] preset rejected: preset='{}' unresolved dependency field='{}' value='{}' code='{}' detail='{}'",
+                            RelativeLogPath(assignment.presetPath, a_packsRoot), issue.field, issue.value, issue.code, issue.message);
                     }
                     continue;
                 }
