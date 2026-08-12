@@ -27,7 +27,7 @@ namespace Runtime
         bool ReleaseAndVerify();
 
     private:
-        TemporaryNPCDonor(RE::TESNPC* a_donor, RE::TESFormID a_formID, NPCDonorPurpose a_purpose);
+        TemporaryNPCDonor(RE::TESNPC* a_donor, RE::TESFormID a_formID, const NPCDonorPurpose a_purpose);
 
         RE::TESNPC* m_donor{ nullptr };
         RE::TESFormID m_formID{ 0 };

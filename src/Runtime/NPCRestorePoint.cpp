@@ -14,7 +14,7 @@ namespace Runtime
     NPCRestorePoint::NPCRestorePoint(TemporaryNPCDonor a_donor, OriginalNPCState a_original) 
         : m_donor(std::move(a_donor)), m_original(std::move(a_original)) {}
 
-    NPCRestorePoint::NPCRestorePoint(NPCRestorePoint&&) noexcept = default;
+    NPCRestorePoint::NPCRestorePoint(NPCRestorePoint&&) = default;
     NPCRestorePoint::~NPCRestorePoint() = default;
 
     std::optional<NPCRestorePoint> NPCRestorePoint::Capture(RE::TESNPC* a_target)

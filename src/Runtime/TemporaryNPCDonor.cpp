@@ -68,7 +68,7 @@ namespace Runtime
         return std::optional<TemporaryNPCDonor>{ std::move(result) };
     }
 
-    bool TemporaryNPCDonor::ReleaseAndVerify() noexcept
+    bool TemporaryNPCDonor::ReleaseAndVerify()
     {
         if (!m_donor) {
             return false;
