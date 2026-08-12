@@ -74,7 +74,7 @@ namespace
 
     [[nodiscard]] std::uint32_t PackedTintIntensity(const NA::PresetTintLayer& a_layer)
     {
-        return static_cast<std::uint32_t>(std::floor(a_layer.intensity * 64.0));
+        return a_layer.packedIntensity;
     }
 
     [[nodiscard]] bool Rejects(const std::string& a_json)
@@ -265,6 +265,32 @@ int main()
           "wrong primitive type rejected");
 
     modified = baselineJson;
+    Check(ReplaceOnce(modified, R"("SkinTone" : 2)", R"("SkinTone" : 4281943808)") && Rejects(modified),
+          "CK SkinTone rejects upper-byte data");
+
+    modified = charGenBaselineJson;
+    auto paddedSkinToneReplaced = ReplaceOnce(modified, R"("SkinTone": 2)", R"("SkinTone": 4281943808)");
+    auto paddedSkinToneResult = NA::ParseCkPreset(modified, "char-gen-padded-skin-tone.npc");
+    Check(paddedSkinToneReplaced && paddedSkinToneResult.preset && paddedSkinToneResult.issues.empty() &&
+              paddedSkinToneResult.preset->skinTone == 0,
+          "CharGenMenu SkinTone ignores producer padding and preserves the low byte");
+
+    modified = charGenBaselineJson;
+    auto maxSkinToneReplaced = ReplaceOnce(modified, R"("SkinTone": 2)", R"("SkinTone": 4294967295)");
+    auto maxSkinToneResult = NA::ParseCkPreset(modified, "char-gen-max-skin-tone.npc");
+    Check(maxSkinToneReplaced && maxSkinToneResult.preset && maxSkinToneResult.issues.empty() &&
+              maxSkinToneResult.preset->skinTone == 255,
+          "CharGenMenu SkinTone accepts the full producer uint32 range");
+
+    modified = charGenBaselineJson;
+    Check(ReplaceOnce(modified, R"("SkinTone": 2)", R"("SkinTone": 4294967296)") && Rejects(modified),
+          "CharGenMenu SkinTone uint32 overflow rejected");
+
+    modified = charGenBaselineJson;
+    Check(ReplaceOnce(modified, R"("SkinTone": 2)", R"("SkinTone": -1)") && Rejects(modified),
+          "negative CharGenMenu SkinTone rejected");
+
+    modified = baselineJson;
     Check(ReplaceOnce(modified, R"("Sex" : "Female")", R"("Sex" : "Unknown")") && Rejects(modified),
           "unsupported Sex value rejected");
 
@@ -276,6 +302,13 @@ int main()
     Check(ReplaceOnce(modified, "[ 0, 0.20999999344348907, 0, 0, 0 ]",
                       "[ 0, 0.20999999344348907, 0, 0 ]") && Rejects(modified),
           "wrong body region count rejected");
+
+    modified = baselineJson;
+    auto emptyBodyReplaced = ReplaceOnce(modified, "[ 0, 0.20999999344348907, 0, 0, 0 ]", "[]");
+    auto emptyBodyResult = NA::ParseCkPreset(modified, "empty-body-regions.npc");
+    Check(emptyBodyReplaced && emptyBodyResult.preset && emptyBodyResult.issues.empty() &&
+              emptyBodyResult.preset->bodyMorphRegionValues.empty(),
+          "producer-empty body morph region array preserves target body data");
 
     modified = baselineJson;
     Check(ReplaceOnce(modified, "[ 0, 0.20999999344348907, 0, 0, 0 ]",
@@ -314,6 +347,27 @@ int main()
           "full 32-bit facial bone region ID range accepted");
 
     modified = baselineJson;
+    auto signedRegionReplaced = ReplaceOnce(modified, R"("RegionID" : 1)", R"("RegionID" : -1)");
+    auto signedRegionResult = NA::ParseCkPreset(modified, "signed-region-id.npc");
+    Check(signedRegionReplaced && signedRegionResult.preset && signedRegionResult.issues.empty() &&
+              !signedRegionResult.preset->facialBoneRegions.empty() &&
+              signedRegionResult.preset->facialBoneRegions.front().regionID == 0xFFFFFFFFu,
+          "producer-signed facial bone region ID preserves its 32-bit bit pattern");
+
+    modified = baselineJson;
+    Check(ReplaceOnce(modified, R"("RegionID" : 1)", R"("RegionID" : -2147483649)") && Rejects(modified),
+          "facial bone region ID signed underflow rejected before conversion");
+
+    modified = baselineJson;
+    auto signedSliderReplaced = ReplaceOnce(modified, R"("ID" : 0)", R"("ID" : -1)");
+    auto signedSliderResult = NA::ParseCkPreset(modified, "signed-slider-id.npc");
+    Check(signedSliderReplaced && signedSliderResult.preset && signedSliderResult.issues.empty() &&
+              !signedSliderResult.preset->facialBoneRegions.empty() &&
+              !signedSliderResult.preset->facialBoneRegions.front().sliders.empty() &&
+              signedSliderResult.preset->facialBoneRegions.front().sliders.front().id == 0xFFFFFFFFu,
+          "producer-signed facial bone slider ID preserves its 32-bit bit pattern");
+
+    modified = baselineJson;
     Check(ReplaceOnce(modified, R"("RegionID" : 1)", R"("RegionID" : 4294967296)") && Rejects(modified),
           "facial bone region ID overflow rejected before conversion");
 
@@ -327,9 +381,46 @@ int main()
           "non-quantized CharGenMenu tint intensity rejected");
 
     modified = charGenBaselineJson;
-    Check(ReplaceOnce(modified, R"("Intensity": 0.2890625,)", R"("Intensity": 0.5078125,)") &&
+    auto extendedTintReplaced = ReplaceOnce(modified, R"("Intensity": 0.2890625,)", R"("Intensity": 0.5078125,)");
+    auto extendedTintResult = NA::ParseCkPreset(modified, "char-gen-extended-tint.npc");
+    const auto* extendedTint = extendedTintResult.preset ? FindTint(*extendedTintResult.preset, "Dermaesthetic") : nullptr;
+    Check(extendedTintReplaced && extendedTintResult.preset && extendedTintResult.issues.empty() &&
+              extendedTint && extendedTint->packedIntensity == 65,
+          "CharGenMenu tint intensity preserves packed values above 64");
+
+    modified = charGenBaselineJson;
+    auto maxTintReplaced = ReplaceOnce(modified, R"("Intensity": 0.2890625,)", R"("Intensity": 1,)");
+    auto maxTintResult = NA::ParseCkPreset(modified, "char-gen-max-tint.npc");
+    const auto* maxTint = maxTintResult.preset ? FindTint(*maxTintResult.preset, "Dermaesthetic") : nullptr;
+    Check(maxTintReplaced && maxTintResult.preset && maxTintResult.issues.empty() &&
+              maxTint && maxTint->packedIntensity == 128,
+          "CharGenMenu tint intensity accepts the producer packed maximum");
+
+    modified = charGenBaselineJson;
+    Check(ReplaceOnce(modified, R"("Intensity": 0.2890625,)", R"("Intensity": 1.0078125,)") &&
               Rejects(modified),
           "out-of-range CharGenMenu tint intensity rejected");
+
+    auto customColorJson = charGenBaselineJson;
+    auto customColorInserted = ReplaceOnce(
+        customColorJson,
+        R"("ModulationValue": {)",
+        R"("ModulationValue": {"CustomColorValue":{"Blue":87,"Green":132,"Red":119,"Rough":229},)");
+    auto customColorResult = NA::ParseCkPreset(customColorJson, "char-gen-custom-color.npc");
+    const auto* customTint = customColorResult.preset ? FindTint(*customColorResult.preset, "Dermaesthetic") : nullptr;
+    Check(customColorInserted && customColorResult.preset && customColorResult.issues.empty() &&
+              customTint && customTint->customColor &&
+              customTint->customColor->red == 119 && customTint->customColor->green == 132 &&
+              customTint->customColor->blue == 87 && customTint->customColor->rough == 229,
+          "CharGenMenu custom modulation color decodes with producer channel ordering");
+
+    modified = customColorJson;
+    Check(ReplaceOnce(modified, R"("Blue":87)", R"("Blue":256)") && Rejects(modified),
+          "custom modulation color channel overflow rejected");
+
+    modified = customColorJson;
+    Check(ReplaceOnce(modified, R"("Rough":229)", R"("Rough":-1)") && Rejects(modified),
+          "negative custom modulation roughness rejected");
 
     modified = baselineJson;
     Check(ReplaceOnce(modified, R"("NPCFormEditorID" : "Companion_SarahMorgan")",

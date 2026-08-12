@@ -98,7 +98,7 @@ namespace Runtime
                 }
             }
 
-            a_target->skinToneIndex = static_cast<std::uint8_t>(a_preset.skinTone);
+            a_target->skinToneIndex = a_preset.skinTone;
             a_target->teeth = a_preset.teethCustomization;
             a_target->jewelryColor = a_preset.jewelryColor;
             a_target->eyeColor = a_preset.eyeColor;
@@ -128,12 +128,18 @@ namespace Runtime
         bool ValidateMorphs(RE::TESNPC* a_target, const Config::AppearancePreset& a_preset)
         {
             if (a_target->morphWeight.thin != static_cast<float>(a_preset.morphWeights.x) || a_target->morphWeight.muscular != static_cast<float>(a_preset.morphWeights.y) || 
-                a_target->morphWeight.fat != static_cast<float>(a_preset.morphWeights.z) || !a_target->bodyMorphValues || a_target->bodyMorphValues->size() != a_preset.bodyMorphRegionValues.size()) {
+                a_target->morphWeight.fat != static_cast<float>(a_preset.morphWeights.z)) {
                 return false;
             }
-            for (std::size_t i = 0; i < a_preset.bodyMorphRegionValues.size(); ++i) {
-                if ((*a_target->bodyMorphValues)[static_cast<std::uint32_t>(i)] != static_cast<float>(a_preset.bodyMorphRegionValues[i])) {
+
+            if (!a_preset.bodyMorphRegionValues.empty()) {
+                if (!a_target->bodyMorphValues || a_target->bodyMorphValues->size() != a_preset.bodyMorphRegionValues.size()) {
                     return false;
+                }
+                for (std::size_t i = 0; i < a_preset.bodyMorphRegionValues.size(); ++i) {
+                    if ((*a_target->bodyMorphValues)[static_cast<std::uint32_t>(i)] != static_cast<float>(a_preset.bodyMorphRegionValues[i])) {
+                        return false;
+                    }
                 }
             }
             for (const auto& morph : a_preset.facialMorphSliders) {
@@ -210,7 +216,7 @@ namespace Runtime
                 }
             }
 
-            if (a_target->skinToneIndex != static_cast<std::uint8_t>(a_preset.skinTone) || !SameText(a_target->teeth.c_str(), a_preset.teethCustomization) || !SameText(a_target->jewelryColor.c_str(), a_preset.jewelryColor) ||
+            if (a_target->skinToneIndex != a_preset.skinTone || !SameText(a_target->teeth.c_str(), a_preset.teethCustomization) || !SameText(a_target->jewelryColor.c_str(), a_preset.jewelryColor) ||
                 !SameText(a_target->eyeColor.c_str(), a_preset.eyeColor) || !SameText(a_target->hairColor.c_str(), a_preset.hairColor) || !SameText(a_target->facialColor.c_str(), a_preset.facialHairColor) ||
                 !SameText(a_target->eyebrowColor.c_str(), a_preset.browHairColor) || a_target->tintAVMData.size() != a_dependencies.avmLayers.size()) {
                 return false;

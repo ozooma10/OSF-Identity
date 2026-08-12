@@ -16,12 +16,13 @@ namespace Config
     namespace
     {
         constexpr std::size_t kBodyMorphRegionCount = 5;
+        constexpr std::int64_t kMinSerializedRuntimeID = std::numeric_limits<std::int32_t>::min();
         constexpr std::int64_t kMaxRuntimeID = std::numeric_limits<std::uint32_t>::max();
+        constexpr double kCkTintScale = 64.0;
         constexpr double kCharGenMenuTintScale = 128.0;
-        constexpr double kRuntimeTintScale = 64.0;
         constexpr double kTintQuantizationTolerance = 1.0e-6;
 
-        [[nodiscard]] bool IsSemanticString(const std::string_view a_value, const bool a_allowEmpty) noexcept
+        bool IsSemanticString(const std::string_view a_value, const bool a_allowEmpty) noexcept
         {
             if (!a_allowEmpty && a_value.empty()) {
                 return false;
@@ -56,7 +57,17 @@ namespace Config
             {
                 return (a_value >= 0 && a_value <= a_max) || Fail("invalid_integer", std::string(a_context) + " must be a bounded non-negative integer");
             }
+
+            bool RuntimeID(const std::int64_t a_value, const std::string_view a_context)
+            {
+                return (a_value >= kMinSerializedRuntimeID && a_value <= kMaxRuntimeID) || Fail("invalid_integer", std::string(a_context) + " must fit a serialized 32-bit runtime ID");
+            }
         };
+
+        std::uint32_t DecodeRuntimeID(const std::int64_t a_value) noexcept
+        {
+            return a_value < 0 ? static_cast<std::uint32_t>(static_cast<std::int32_t>(a_value)) : static_cast<std::uint32_t>(a_value);
+        }
 
         bool ReadStringArray(const std::vector<std::string>& a_items, std::vector<std::string>& a_out, Validator& a_validator, const std::string_view a_context)
         {
@@ -86,19 +97,19 @@ namespace Config
         {
             a_out.reserve(a_items.size());
             for (const auto& item : a_items) {
-                if (!a_validator.Index(item.RegionID, kMaxRuntimeID, "RegionID")) {
+                if (!a_validator.RuntimeID(item.RegionID, "RegionID")) {
                     return false;
                 }
                 PresetBoneRegion decoded;
-                decoded.regionID = static_cast<std::uint32_t>(item.RegionID);
+                decoded.regionID = DecodeRuntimeID(item.RegionID);
                 decoded.sliders.reserve(item.SlidersA.size());
                 for (const auto& slider : item.SlidersA) {
-                    if (!a_validator.Str(slider.GroupName, "slider group") || !a_validator.Index(slider.ID, kMaxRuntimeID, "slider ID") || !a_validator.Bounded(slider.Value, -1.0, 1.0, "bone slider value")) {
+                    if (!a_validator.Str(slider.GroupName, "slider group") || !a_validator.RuntimeID(slider.ID, "slider ID") || !a_validator.Bounded(slider.Value, -1.0, 1.0, "bone slider value")) {
                         return false;
                     }
                     decoded.sliders.push_back(PresetBoneSlider{
                         .groupName = slider.GroupName,
-                        .id = static_cast<std::uint32_t>(slider.ID),
+                        .id = DecodeRuntimeID(slider.ID),
                         .value = slider.Value });
                 }
                 a_out.push_back(std::move(decoded));
@@ -113,22 +124,40 @@ namespace Config
                 if (!a_validator.Str(item.Name, "tint layer name", false) ||
                     !a_validator.Str(item.ModulationValue.Value, "tint layer ModulationValue") ||
                     !a_validator.Str(item.Value.Value, "tint layer Value") ||
-                    !a_validator.Bounded(item.Intensity, 0.0, a_charGenMenu ? 0.5 : 1.0, "tint layer intensity")) {
+                    !a_validator.Bounded(item.Intensity, 0.0, 1.0, "tint layer intensity")) {
                     return false;
                 }
+
                 PresetTintLayer decoded{
                     .name = item.Name,
                     .value = item.Value.Value,
-                    .modulationValue = item.ModulationValue.Value,
-                    .intensity = item.Intensity };
+                    .modulationValue = item.ModulationValue.Value };
+
+                if (item.ModulationValue.CustomColorValue) {
+                    const auto& color = *item.ModulationValue.CustomColorValue;
+                    if (!a_validator.Index(color.Red, 255, "CustomColorValue.Red") ||
+                        !a_validator.Index(color.Green, 255, "CustomColorValue.Green") ||
+                        !a_validator.Index(color.Blue, 255, "CustomColorValue.Blue") ||
+                        !a_validator.Index(color.Rough, 255, "CustomColorValue.Rough")) {
+                        return false;
+                    }
+                    decoded.customColor = PresetCustomColor{
+                        .red = static_cast<std::uint8_t>(color.Red),
+                        .green = static_cast<std::uint8_t>(color.Green),
+                        .blue = static_cast<std::uint8_t>(color.Blue),
+                        .rough = static_cast<std::uint8_t>(color.Rough) };
+                }
+
                 if (a_charGenMenu) {
-                    // CharGenMenu writes 1/128-quantized intensities that the runtime consumes on a 1/64 scale; 
-                    const auto scaled = decoded.intensity * kCharGenMenuTintScale;
+                    // CharGenMenu serializes the engine's packed intensity as a 1/128-quantized number, including the full packed 0..128 range.
+                    const auto scaled = item.Intensity * kCharGenMenuTintScale;
                     const auto packed = std::round(scaled);
                     if (std::abs(scaled - packed) > kTintQuantizationTolerance) {
-                        return a_validator.Fail("invalid_char_gen_tint_intensity", "CharGenMenu tint intensity must be a 1/128-quantized value from 0 to 0.5");
+                        return a_validator.Fail("invalid_char_gen_tint_intensity", "CharGenMenu tint intensity must be a 1/128-quantized value from 0 to 1");
                     }
-                    decoded.intensity = packed / kRuntimeTintScale;
+                    decoded.packedIntensity = static_cast<std::uint32_t>(packed);
+                } else {
+                    decoded.packedIntensity = static_cast<std::uint32_t>(std::floor(item.Intensity * kCkTintScale));
                 }
                 a_out.push_back(std::move(decoded));
             }
@@ -160,10 +189,16 @@ namespace Config
             !validator.Str(document.JewelryColor, "JewelryColor") ||
             !validator.Str(document.NPCFormEditorID, "NPCFormEditorID") ||
             !validator.Str(document.RaceFormID, "RaceFormID", false) ||
-            !validator.Str(document.TeethCustomization, "TeethCustomization") ||
-            !validator.Index(document.SkinTone, 255, "SkinTone")) {
+            !validator.Str(document.TeethCustomization, "TeethCustomization")) {
             return result;
         }
+
+        // CharGenMenu's public producer contract serializes this as uint32_t even though the current TESNPC field is one byte. Real exports can therefore contain unrelated padding in the upper 24 bits.
+        const bool isCharGenMenu = document.NPCFormEditorID.empty();
+        if (!validator.Index(document.SkinTone, isCharGenMenu ? kMaxRuntimeID : 255, "SkinTone")) {
+            return result;
+        }
+
         preset.browHairColor = document.BrowHairColor;
         preset.eyeColor = document.EyeColor;
         preset.facialHairColor = document.FacialHairColor;
@@ -172,10 +207,7 @@ namespace Config
         preset.npcFormEditorID = document.NPCFormEditorID;
         preset.raceFormID = document.RaceFormID;
         preset.teethCustomization = document.TeethCustomization;
-        preset.skinTone = static_cast<std::uint32_t>(document.SkinTone);
-
-        // A CharGenMenu export carries no editor ID; that is what distinguishes it from a Creation Kit preset and it changes the tint contract below.
-        const bool isCharGenMenu = preset.npcFormEditorID.empty();
+        preset.skinTone = static_cast<std::uint8_t>(static_cast<std::uint32_t>(document.SkinTone));
 
         if (document.Sex == "Female") {
             preset.sex = PresetSex::kFemale;
@@ -186,11 +218,11 @@ namespace Config
             return result;
         }
 
-        if (document.BodyMorphRegionValuesA.size() != kBodyMorphRegionCount) {
-            validator.Fail("count_out_of_range", "BodyMorphRegionValuesA must contain exactly five values for CK 1.16.244");
+        if (!document.BodyMorphRegionValuesA.empty() && document.BodyMorphRegionValuesA.size() != kBodyMorphRegionCount) {
+            validator.Fail("count_out_of_range", "BodyMorphRegionValuesA must be empty or contain exactly five values for CK 1.16.244");
             return result;
         }
-        preset.bodyMorphRegionValues.reserve(kBodyMorphRegionCount);
+        preset.bodyMorphRegionValues.reserve(document.BodyMorphRegionValuesA.size());
         for (const auto value : document.BodyMorphRegionValuesA) {
             if (!validator.Bounded(value, 0.0, 1.0, "body morph region value")) {
                 return result;

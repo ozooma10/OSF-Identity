@@ -73,10 +73,25 @@ namespace Config::Schema
         std::string Value;
     };
 
+    struct CustomColor
+    {
+        // Read as signed so invalid negative and overflowing channel values are rejected explicitly before conversion to the engine's byte channels.
+        std::int64_t Blue{ 0 };
+        std::int64_t Green{ 0 };
+        std::int64_t Red{ 0 };
+        std::int64_t Rough{ 0 };
+    };
+
+    struct Modulation
+    {
+        std::string Value;
+        std::optional<CustomColor> CustomColorValue;
+    };
+
     struct TintLayer
     {
         double Intensity{ 0.0 };
-        ValueWrapper ModulationValue;
+        Modulation ModulationValue;
         std::string Name;
         ValueWrapper Value;
     };

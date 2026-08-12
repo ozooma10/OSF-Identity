@@ -1,7 +1,5 @@
 #include "Resolver.h"
 
-#include <cmath>
-
 namespace Config
 {
     namespace
@@ -136,7 +134,7 @@ namespace Config
 
         bool ResolveAvmModulation(ResolvedAppearanceDependencies& a_result, const PresetTintLayer& a_layer, const RE::BSFixedString& a_category)
         {
-            if (a_layer.modulationValue.empty()) {
+            if (a_layer.customColor || a_layer.modulationValue.empty()) {
                 return true;
             }
 
@@ -174,7 +172,7 @@ namespace Config
             for (const auto& layer : a_preset.postBlendLayers) {
                 RE::BSFixedString category{ layer.name };
                 RE::BSScrapArray<RE::BSFixedString> values;
-                RE::BSFaceDB::GetLayerValues(static_cast<std::uint8_t>(a_preset.skinTone), category, true, values);
+                RE::BSFaceDB::GetLayerValues(a_preset.skinTone, category, true, values);
                 if (values.empty()) {
                     ok = false;
                     AddIssue(a_result, "PostBlendFaceCustomization.LayersA.Name", layer.name, "avm_layer_not_found_for_skin_tone", std::format("FaceDB returned no valid value catalog for skin tone {}", a_preset.skinTone));
@@ -222,7 +220,13 @@ namespace Config
                 }
                 materialized.type = static_cast<RE::AVMData::Type>(matchedStore);
 
-                if (!layer.modulationValue.empty()) {
+                if (layer.customColor) {
+                    materialized.unk10.color = RE::Color{
+                        layer.customColor->red,
+                        layer.customColor->green,
+                        layer.customColor->blue,
+                        layer.customColor->rough };
+                } else if (!layer.modulationValue.empty()) {
                     const RE::BSFixedString modulationValue{ layer.modulationValue };
                     RE::AVMData::Entry modulation{};
                     if (!RE::BSFaceDB::ResolveEntry(3, category, modulationValue, modulation)) {
@@ -232,7 +236,7 @@ namespace Config
                     }
                     materialized.unk10.color = modulation.color;
                 }
-                materialized.unk10.intensity = static_cast<std::uint32_t>(std::floor(std::clamp(layer.intensity, 0.0, 1.0) * 64.0));
+                materialized.unk10.intensity = layer.packedIntensity;
                 a_result.avmLayers.push_back(std::move(materialized));
             }
             a_result.avmReferencesComplete = ok && a_result.avmLayers.size() == a_preset.postBlendLayers.size();

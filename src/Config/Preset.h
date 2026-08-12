@@ -52,12 +52,23 @@ namespace Config
         bool operator==(const PresetBoneRegion&) const = default;
     };
 
+    struct PresetCustomColor
+    {
+        std::uint8_t red{ 0 };
+        std::uint8_t green{ 0 };
+        std::uint8_t blue{ 0 };
+        std::uint8_t rough{ 0 };
+
+        bool operator==(const PresetCustomColor&) const = default;
+    };
+
     struct PresetTintLayer
     {
         std::string name;
         std::string value;
         std::string modulationValue;
-        double intensity{ 0.0 };
+        std::optional<PresetCustomColor> customColor;
+        std::uint32_t packedIntensity{ 0 };
 
         bool operator==(const PresetTintLayer&) const = default;
     };
@@ -67,7 +78,7 @@ namespace Config
         std::string npcFormEditorID;
         std::string raceFormID;
         PresetSex sex{ PresetSex::kFemale };
-        std::uint32_t skinTone{ 0 };
+        std::uint8_t skinTone{ 0 };
         std::string browHairColor;
         std::string eyeColor;
         std::string facialHairColor;
