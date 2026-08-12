@@ -22,6 +22,16 @@ namespace Config
             std::uint32_t index;
         };
 
+        std::string RelativeLogPath(const std::filesystem::path& a_path, const std::filesystem::path& a_packsRoot)
+        {
+            std::error_code ec;
+            auto relative = std::filesystem::relative(a_path, a_packsRoot, ec);
+            if (ec || relative.empty()) {
+                relative = a_path.lexically_normal().lexically_relative(a_packsRoot.lexically_normal());
+            }
+            return (relative.empty() ? a_path.filename() : relative).string();
+        }
+
         std::optional<LoadedPlugin> FindLoadedPlugin(const RE::TESDataHandler* a_handler, const std::string_view a_pluginName)
         {
             const auto targetName = Util::FoldASCII(a_pluginName);
@@ -82,7 +92,7 @@ namespace Config
 
         for(const auto& issue : discovery.issues)
         {
-            REX::WARN("[PackScanner] discovery issue: {}:{}: {} ({})", issue.path.string(), issue.offset, issue.code, issue.message);
+            REX::WARN("[PackScanner] discovery issue: {}:{}: {} ({})", RelativeLogPath(issue.path, a_packsRoot), issue.offset, issue.code, issue.message);
         }
 
         std::vector<Candidate> candidates;
@@ -104,7 +114,7 @@ namespace Config
                 auto loaded = LoadCkPreset(assignment.presetPath);
                 if (!loaded.preset) {
                     for (const auto& issue : loaded.issues) {
-                        REX::WARN("[PackScanner] preset issue: {}:{}: {} ({})", issue.path.string(), issue.offset, issue.code, issue.message);
+                        REX::WARN("[PackScanner] preset issue: {}:{}: {} ({})", RelativeLogPath(issue.path, a_packsRoot), issue.offset, issue.code, issue.message);
                     }
                     continue;
                 }
@@ -112,7 +122,7 @@ namespace Config
                 auto resolvedDependencies = ResolveAppearanceDependencies(*loaded.preset, npc);
                 if (!resolvedDependencies.Complete()) {
                     for (const auto& issue : resolvedDependencies.issues) {
-                        REX::WARN("[PackScanner] dependency issue: {}:{}: {} ({})", assignment.presetPath.string(), 0, issue.code, issue.message);
+                        REX::WARN("[PackScanner] dependency issue: {}:{}: {} ({})", RelativeLogPath(assignment.presetPath, a_packsRoot), 0, issue.code, issue.message);
                     }
                     continue;
                 }
