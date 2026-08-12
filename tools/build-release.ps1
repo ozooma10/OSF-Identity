@@ -57,9 +57,8 @@ try {
     }
     $examplePacksDir = Join-Path $examplesConfigDir 'Packs'
     [void](New-Item -ItemType Directory -Path $examplePacksDir -Force)
-    foreach ($example in @('project.community-example', 'author.folder-only-example')) {
-        Copy-Item -LiteralPath (Join-Path $repoRoot "fixtures\osf-identity\Packs\$example") -Destination $examplePacksDir -Recurse
-    }
+    $example = 'osf.identity-companion-smoke'
+    Copy-Item -LiteralPath (Join-Path $repoRoot "fixtures\osf-identity\Packs\$example") -Destination $examplePacksDir -Recurse
     Copy-Item -LiteralPath (Join-Path $repoRoot 'README.md') -Destination $docsDir
     Copy-Item -LiteralPath (Join-Path $repoRoot 'LICENSE') -Destination $docsDir
     Copy-Item -LiteralPath (Join-Path $repoRoot 'docs\PLAYER_GUIDE.md') -Destination $docsDir

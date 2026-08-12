@@ -14,7 +14,7 @@ add_requires("glaze v7.0.2")
 
 target("OSF Identity")
     add_rules("commonlibsf.plugin", {
-        name = "osf-identity",
+        name = "OSF Identity",
         author = "ozooma10",
         description = "Runtime NPC appearance distribution",
         email = "ozooma10@protonmail.com"
@@ -34,42 +34,16 @@ target("OSF Identity")
     add_packages("glaze")
     add_defines("NOMINMAX", "WIN32_LEAN_AND_MEAN")
 
-    after_build(function(target)
-        local modsroot = os.getenv("XSE_SF_MODS_PATH")
-        local gameroot = os.getenv("XSE_SF_GAME_PATH")
-        local plugindir = nil
+    add_installfiles(
+        "fixtures/osf-identity/package.schema.json",
+        "fixtures/osf-identity/preset-metadata.schema.json",
+        { prefixdir = "SFSE/Plugins/OSFIdentity" }
+    )
 
-        if modsroot and #modsroot > 0 then
-            plugindir = path.join(modsroot, target:name(), "SFSE", "Plugins")
-        elseif gameroot and #gameroot > 0 then
-            plugindir = path.join(gameroot, "Data", "SFSE", "Plugins")
-        else
-            cprint("${yellow}[osf-identity] no deploy root configured; skipping post-build copy")
-            return
-        end
-
-        os.mkdir(plugindir)
-        local outputs = {
-            { src = target:targetfile(), label = "plugin" },
-            { src = target:symbolfile(), label = "symbols" }
-        }
-        for _, entry in ipairs(outputs) do
-            if entry.src and os.isfile(entry.src) then
-                local dst = path.join(plugindir, path.filename(entry.src))
-                os.trycp(entry.src, dst)
-                cprint("${green}[osf-identity] copied %s:${clear} %s", entry.label, dst)
-            end
-        end
-
-        local configdir = path.join(plugindir, "OSFIdentity")
-        os.mkdir(configdir)
-        for _, schema in ipairs({ "package.schema.json", "preset-metadata.schema.json" }) do
-            os.trycp(
-                path.join(os.projectdir(), "fixtures", "osf-identity", schema),
-                path.join(configdir, schema)
-            )
-        end
-    end)
+    add_installfiles(
+        "fixtures/osf-identity/Packs/(**)",
+        { prefixdir = "SFSE/Plugins/OSFIdentity/Packs" }
+    )
 
 target("npc-appearance-config-tests")
     set_kind("binary")

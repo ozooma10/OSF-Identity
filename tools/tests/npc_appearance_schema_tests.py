@@ -43,29 +43,36 @@ class PublicSchemaContractTests(unittest.TestCase):
             "preset": "Sarah.npc",
         }
 
-    def test_checked_in_examples_and_schema_examples_are_valid(self) -> None:
-        for path in (
-            FIXTURE_ROOT / "Packs" / "author.sarah-example" / "package.json",
-            FIXTURE_ROOT / "Packs" / "project.community-example" / "package.json",
-        ):
-            with self.subTest(path=path):
-                self.assertValid(self.package_validator, load_json(path))
-
-        sidecar_example = (
-            FIXTURE_ROOT
-            / "Packs"
-            / "project.community-example"
-            / "Starfield.esm"
-            / "0029A8EB.json.example"
-        )
-        self.assertValid(self.metadata_validator, load_json(sidecar_example))
-
+    def test_schema_examples_are_valid(self) -> None:
         for example in self.package_schema["examples"]:
             with self.subTest(schema="package", example=example):
                 self.assertValid(self.package_validator, example)
         for example in self.metadata_schema["examples"]:
             with self.subTest(schema="metadata", example=example):
                 self.assertValid(self.metadata_validator, example)
+
+    def test_companion_smoke_pack_is_directly_loadable(self) -> None:
+        plugin_directory = (
+            FIXTURE_ROOT
+            / "Packs"
+            / "osf.identity-companion-smoke"
+            / "Starfield.esm"
+        )
+        self.assertEqual(
+            {"00005983.npc", "000059A7.npc"},
+            {path.name for path in plugin_directory.glob("*.npc")},
+        )
+
+        expected_sources = {
+            "00005983.npc": "HeadpartOnly.npc",
+            "000059A7.npc": "Sarah.npc",
+        }
+        for target, source in expected_sources.items():
+            with self.subTest(target=target, source=source):
+                self.assertEqual(
+                    (FIXTURE_ROOT / "Presets" / "CK" / source).read_bytes(),
+                    (plugin_directory / target).read_bytes(),
+                )
 
     def test_package_defaults_and_independent_requirement_lists(self) -> None:
         valid_instances = [
