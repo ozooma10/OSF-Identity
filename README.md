@@ -23,7 +23,11 @@ Data/SFSE/Plugins/OSFIdentity/Packs/   # shared root (packs must be in this fold
       00005983.npc                  # plugin-local FormID
 ```
 
-Removing a pack promotes the next valid one, or restores the original appearance. For issues, refer to [TroubleShooting](docs/TROUBLESHOOTING.md).
+Removing a pack promotes the next valid one, or restores the original appearance.
+
+- [Troubleshooting](docs/TROUBLESHOOTING.md) if something is not working
+- [Architecture](docs/ARCHITECTURE.md) for the runtime design
+
 
 ## How packs are chosen
 
