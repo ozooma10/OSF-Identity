@@ -7,7 +7,6 @@
 
 namespace Config
 {
-
     namespace
     {
         struct Candidate
@@ -122,7 +121,7 @@ namespace Config
                 auto resolvedDependencies = ResolveAppearanceDependencies(*loaded.preset, npc);
                 if (!resolvedDependencies.Complete()) {
                     for (const auto& issue : resolvedDependencies.issues) {
-                        REX::WARN("[PackScanner] dependency issue: {}:{}: {} ({})", RelativeLogPath(assignment.presetPath, a_packsRoot), 0, issue.code, issue.message);
+                        REX::WARN("[PackScanner] dependency issue: {}: {}='{}': {} ({})", RelativeLogPath(assignment.presetPath, a_packsRoot), issue.field, issue.value, issue.code, issue.message);
                     }
                     continue;
                 }
@@ -153,10 +152,14 @@ namespace Config
 
         const auto selection = SelectAlphabeticalAssignments(identities);
 
+        REX::DEBUG("[PackScanner] preset selection overview: {} valid, {} winning, {} shadowed", candidates.size(), selection.winnerIndices.size(), candidates.size() - selection.winnerIndices.size());
+
         PreparedAssignmentMap selected;
         for (const auto winnerIndex : selection.winnerIndices) {
             const auto& winner = candidates[winnerIndex];
             selected.emplace(winner.baseFormID, winner.assignment);
+            REX::DEBUG("[PackScanner] preset winner: base=0x{:08X} target {}:{:08X} pack='{}' preset='{}'", 
+                winner.baseFormID, winner.assignment->target.plugin, winner.assignment->target.localFormID, winner.assignment->packID, RelativeLogPath(winner.assignment->presetPath, a_packsRoot));
         }
         for (std::size_t i = 0; i < candidates.size(); ++i) {
             const auto winnerIndex = selection.winnerForCandidate[i];
@@ -165,7 +168,8 @@ namespace Config
             }
             const auto& loser = *candidates[i].assignment;
             const auto& winner = *candidates[winnerIndex].assignment;
-            REX::WARN("[PackScanner] assignment skipped: base=0x{:08X} pack '{}' target {}:{:08X} is shadowed by alphabetically earlier pack '{}'", candidates[i].baseFormID, loser.packID, loser.target.plugin, loser.target.localFormID, winner.packID);
+            REX::DEBUG("[PackScanner] preset loser: base=0x{:08X} target {}:{:08X} pack='{}' preset='{}' is shadowed by alphabetically earlier pack='{}' preset='{}'",
+                candidates[i].baseFormID, loser.target.plugin, loser.target.localFormID, loser.packID, RelativeLogPath(loser.presetPath, a_packsRoot), winner.packID, RelativeLogPath(winner.presetPath, a_packsRoot));
         }
 
         return selected;
