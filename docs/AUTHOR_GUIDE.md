@@ -1,175 +1,76 @@
-# Author Guide
+# Appearance Pack Author Guide
 
-## Quickstart
+OSF Identity uses a filesystem-only pack format. A pack is just a folder of
+`.npc` presets arranged by target plugin and plugin-local FormID.
 
-An appearance pack replaces the face and body of unique human NPCs with
-presets you export from Creation Kit or CharGenMenu. Every target uses the
-plugin that owns the NPC plus its plugin-local FormID:
+## Pack layout
+
+Install packs beneath:
 
 ```text
 Data/SFSE/Plugins/OSFIdentity/Packs/
-  Sarah Reimagined/               # folder name is the pack ID
-    package.json                  # optional priority/shared requirements
-    Starfield.esm/
-      00005983.npc
-      00005983.json               # optional per-preset dependencies
 ```
 
-To build one:
+A complete pack looks like this:
 
-1. **Export a preset** with Creation Kit `1.16.244` or the verified
-   CharGenMenu/SFEE `1.16.244` build, and confirm the producer reloads the
-   exact export. Never hand-edit the `.npc`.
-2. **Identify the target.** Use the plugin that owns the base NPC plus its
-   plugin-local hexadecimal FormID. Put the preset at
-   `<OwningPlugin>/<localFormId>.npc`, or use the same tuple in an explicit
-   assignment. Never use a load-order-prefixed runtime FormID.
-3. **Name the pack folder.** Its name is the pack ID, exactly as written, and
-   can be any folder name accepted by the filesystem. Spaces, capitalization,
-   and ordinary punctuation are supported. IDs are compared case-insensitively
-   for conflicts and tie-breaking. A stray `package.jsn`, `notes.json`, or a
-   `package.json` buried in a subfolder rejects the whole pack rather than being
-   ignored.
-4. **Declare dependencies.** Optional hair, beard, or asset mods go in a
-   sidecar (per preset, below) or in a manifest `requires` (pack-wide).
-   Undeclared dependencies are the top cause of "works on my machine" — users
-   without them load a broken preset.
-5. **Restart Starfield through SFSE.** Packs are scanned once after game
-   data load; a quickload will not pick up changes. Confirm your pack ID
-   appears as the winner in
-   `Documents\My Games\Starfield\SFSE\Logs\osf-identity.log` — failures are
-   silent in-game and explained only in the log.
-
-## Runtime and save behavior
-
-The winning preset is applied after every successful load. If the matching actor already
-has loaded 3D, OSF Identity issues one immediate appearance refresh; actors encountered
-later build from the already-applied base without a lifecycle sink.
-
-The NPC base keeps its original appearance data at rest. The winning preset is applied
-transiently each time the actor's 3D is built: apply, notify, refresh, and byte-exact
-restore all happen inside one verified native task, so no save — quicksave, autosave,
-manual, or exitsave — can observe preset data. The save may contain an `NPC_`
-changed-form because appearance notifications registered it, but the serialized values are
-the original values. Styling failures leave that NPC rendering its vanilla appearance;
-saves are never blocked or altered.
-
-Pack removal requires a full Starfield restart, not a mid-session file change. With the
-pack absent, the next valid candidate wins; with no winner or with the framework disabled,
-the save loads the original appearance without a cleanup command.
-
-## When you need a manifest
-
-A manifest-less pack runs at priority `0` with no pack-wide requirements and
-discovers `<OwningPlugin>/<localFormId>.npc` files. Add `package.json` only for
-a different priority, pack-wide `requires`, or explicit assignments:
-
-```json
-{
-  "schemaVersion": 1,
-  "priority": 100
-}
+```text
+Data/SFSE/Plugins/OSFIdentity/Packs/
+  Cool_Appearance_Pack/              # pack name
+    Starfield.esm/                  # plugin that owns the target NPC
+      00005983.npc                  # target's plugin-local FormID
+    ExampleCompanion.esm/
+      0000082A.npc
 ```
 
-`priority` is optional and defaults to `0`. `requires` is also optional. If
-omitted, the pack has no declared package-wide requirements; runtime
-preset-reference validation still runs before conflict selection. Declare it
-only when the pack has plugin or Data-asset preconditions that cannot be
-inferred reliably from the preset.
+All pack folders and `.npc` files must be installed as loose files. OSF Identity does not discover packs from BA2 archives.
 
-The folder name remains the pack ID even when a manifest is present. Renaming
-the folder intentionally changes the ID.
+## Creating a pack
 
-## Manifest reference
+1. Export a `.npc` preset with the Creation Kit or from chargenmenu.
+2. Find the target's base NPC record. Use the plugin that owns that record and  plugin-local FormID.
+3. Create a directory named exactly like the owning plugin, including its `.esm`, `.esp`, or `.esl` extension.
+4. Name the preset with the hexadecimal local FormID and a `.npc` extension.
+5. Put the plugin directory inside a uniquely named pack folder under `Packs/`.
+6. Fully restart Starfield through SFSE. Packs are scanned once during startup.
 
-- `priority` - optional; `-1000000` to `1000000`, defaulting to `0`. When
-  several valid packs target the same NPC, the highest priority wins; ties go
-  to ascending case-insensitive pack folder name. Mod-manager order is
-  irrelevant. The `100` used in these examples outranks every manifest-less
-  pack.
-- `requires` - optional plugins and Data-relative assets every preset needs.
-  `plugins` and `assets` are independently optional; omit either list when it is
-  empty. A missing pack-wide requirement disables the whole pack. An explicit
-  plugin-local target automatically adds its owning plugin to that assignment.
-- If `assignments` is present, only those mappings are used. If it is absent,
-  the plugin-folder convention is scanned.
+For example, Sarah Morgan's base NPC is `Starfield.esm:00005983`, so her preset
+belongs at:
 
-Two folder names that resolve to the same case-insensitive pack ID are both
-rejected with `duplicate_package_id`.
-
-`package.schema.json` and `preset-metadata.schema.json` provide editor
-validation, field descriptions, defaults, and examples. A `$schema` property is
-an optional editor hint; `schemaVersion` is the required runtime format version.
-The runtime parser remains authoritative and rejects unknown properties,
-duplicate targets, path traversal, and absolute preset paths.
-
-Preset paths in explicit assignments and `requires.assets` are resolved through
-Starfield's resource system, so loose files and files in loaded BA2 archives
-both satisfy them. Package discovery itself remains folder-based: `package.json`
-and convention-discovered `<OwningPlugin>/<localFormId>.npc` entries must be
-loose. To archive a preset, keep a loose explicit `package.json` that names it.
-
-## Per-preset dependencies
-
-If a single preset needs optional mods, add `<localFormId>.json` beside its
-matching `<localFormId>.npc` file inside the owning-plugin directory:
-
-```json
-{
-  "schemaVersion": 1,
-  "requires": {
-    "plugins": ["ExampleHairMod.esm"]
-  }
-}
+```text
+Cool_Appearance_Pack/Starfield.esm/00005983.npc
 ```
 
-Sidecar and manifest requirements are additive. `requires`, `plugins`, and
-`assets` are optional here too; omitted values add no requirements. A malformed
-sidecar disables only its preset; the rest of the pack and lower-priority
-candidates still compete. List every plugin needed to resolve non-vanilla
-headparts and every loose asset that needs an availability check.
+## Target rules
 
-## Explicit assignments
+- FormIDs must contain one to eight hexadecimal digits without `0x`.
+- The numeric local FormID cannot exceed `00FFFFFF`.
+- Full, medium, and small plugins are supported.
+- Targets must resolve to unique `HumanRace` NPC bases.
+- The preset must use the same race and sex as the target. Race and sex conversion are not supported.
+- Each pack may contain only one preset for a target. `5983.npc` and `00005983.npc` identify the same local FormID and therefore conflict.
+- A preset replaces the target's complete face-and-body appearance. OSF Identity does not apply independent appearance layers.
 
-Packs may map targets to presets directly, with per-assignment `requires`:
+The runtime validates forms referenced by the preset, including its race, headparts, morph data, colors, and AVM entries. 
+If required forms cannot be resolved, that preset is skipped.
 
-```json
-{
-  "schemaVersion": 1,
-  "assignments": [
-    {
-      "target": { "plugin": "Starfield.esm", "localFormId": "00005983" },
-      "preset": "Sarah.npc",
-      "requires": { "plugins": ["ExampleHairMod.esm"] }
-    }
-  ]
-}
+## Conflicts
+
+If several valid packs target the same NPC, the alphabetically earliest pack
+folder name wins. Comparison is case-insensitive first and does not use
+mod-manager priority.
+
+Choose a stable, distinctive pack folder name. The log identifies both the
+winner and any pack it shadows.
+
+## Runtime and saves
+
+OSF Identity applies the selected preset when the actor's 3D is built, refreshes that actor, and restores the original NPC base before the native task ends.
+The preset is therefore visible in game without being left on the NPC base for a save to serialize.
+
+Removing a pack requires a full game restart. With the pack absent, another valid pack can win; otherwise the NPC loads with its original appearance.
+
+## Logs
+
+```text
+Documents/My Games/Starfield/SFSE/Logs/OSF Identity.log
 ```
-
-The target object must contain exactly `plugin` and `localFormId`.
-`localFormId` accepts one to eight hexadecimal digits without `0x`, and its
-numeric value must not exceed `00FFFFFF`. Equivalent spellings such as `5983`
-and `00005983` identify the same target and therefore conflict.
-
-## Limits and rules
-
-- Unique `HumanRace` NPC bases only; complete face-and-body appearance replacement only.
-  No leveled/template-shared crowds, race or sex conversion, or per-reference
-  variation.
-- Only the two producers above are supported. CharGenMenu's empty
-  `NPCFormEditorID` and quantized tint encoding are part of its verified
-  contract; renaming arbitrary JSON to `.npc` does not make it compatible.
-- Plugin-local targets support full, medium, and small plugins and are resolved
-  against the current load order. The owning plugin is always an implicit
-  dependency, and the local ID must fit that plugin's resolved tier.
-- Conflicts are decided after resolution by the actual base FormID. Duplicate
-  spellings of one plugin-local tuple are rejected deterministically before
-  mutation.
-- Do not bundle the OSF Identity DLL in a pack — keeping framework, story
-  mod, and appearance pack separate stops optional mods from becoming
-  story-mod dependencies.
-
-Before publishing, test for every target: a fresh-process load, mid-session load, named
-save, quicksave, autosave, interior-cell round trip, fast-travel rebuild, missing optional
-dependency, pack removal, fallback promotion, and a fresh-process original-appearance
-check with the pack disabled.

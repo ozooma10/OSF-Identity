@@ -2,7 +2,9 @@
 
 [![CI](https://github.com/ozooma10/OSF-Identity/actions/workflows/ci.yml/badge.svg)](https://github.com/ozooma10/OSF-Identity/actions/workflows/ci.yml)
 
-OSF Identity applies appearance presets to starfield NPCs from drop-in packs at runtime without needing to edit any plugins.
+OSF Identity distributes appearance presets to starfield NPCs from drop-in packs at runtime without needing to edit any plugins or baking the presets into the save.
+
+As such it is safe to add/remove/change presets mid-save.
 
 ## Requirements
 
@@ -17,13 +19,11 @@ Then install appearance packs as separate mods:
 ```text
 Data/SFSE/Plugins/OSFIdentity/Packs/   # shared root (packs must be in this folder to be found)
   Sarah_Reimagined/                 # arbitrary folder name; this is the pack ID
-    package.json                    # optional priority/shared requirements
     Starfield.esm/                  # plugin that owns the target NPC
       00005983.npc                  # plugin-local FormID
-      00005983.json                 # optional per-preset requirements
 ```
 
-Removing a pack promotes the next valid one, or restores the original appearance. See the [Player Guide](docs/PLAYER_GUIDE.md).
+Removing a pack promotes the next valid one, or restores the original appearance. For issues, refer to [TroubleShooting](docs/TROUBLESHOOTING.md).
 
 ## How packs are chosen
 
@@ -32,7 +32,9 @@ Packs discover presets from `<OwningPlugin>/<localFormId>.npc`.
 
 Runtime/load-order FormIDs and EditorID targets are not accepted.
 
-When several valid packs resolve to the same NPC base, the highest `priority` wins; ties go to the case-insensitively alphabetical pack folder name.
+When several valid packs resolve to the same NPC base, the alphabetically earliest pack
+folder name wins
+
 Mod-manager load order is irrelevant.
 
 A candidate with a missing plugin or asset is skipped and the next valid pack wins instead.
@@ -45,7 +47,5 @@ Example packs live in `fixtures/osf-identity/Packs`.
 
 ```powershell
 git clone --recursive <repository-url>   # pulls commonlibsf submodule
-python -m pip install -r .\requirements-dev.txt
-pwsh -NoProfile -File .\tools\verify.ps1
-pwsh -NoProfile -File .\tools\build-release.ps1   # writes the ZIP to dist/
+xmake build
 ```
