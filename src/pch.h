@@ -13,5 +13,3 @@
 
 #include "RE/Starfield.h"
 #include "SFSE/SFSE.h"
-
-#include "Util/StarfieldRuntime.h"
