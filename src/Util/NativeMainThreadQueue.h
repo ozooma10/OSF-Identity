@@ -9,12 +9,23 @@ namespace Util::NativeMainThreadQueue
         kUnavailable,   // queue disabled/singleton missing; refused, caller must retry.
     };
 
-    [[nodiscard]] bool IsAvailable() noexcept;
+    struct QueueState
+    {
+        std::uintptr_t singleton{ 0 };
+        std::uint32_t currentThreadID{ 0 };
+        std::uint32_t drainOwnerThreadID{ 0 };
+        bool queueEnabled{ false };
+        bool insideDrain{ false };
+    };
 
-    [[nodiscard]] PostResult Post(
+    QueueState SnapshotState();
+
+    bool IsAvailable();
+
+    PostResult Post(
         std::function<void()> a_task,
         std::string_view a_label,
         std::function<void()> a_onDrop = {});
 
-    [[nodiscard]] const char* ToString(PostResult a_result) noexcept;
+    const char* ToString(PostResult a_result);
 }

@@ -46,10 +46,9 @@ namespace Util::NativeMainThreadQueue
                 std::function<void()> _onDrop;
         };
 
-        [[nodiscard]] bool InsideDrain() noexcept
+        bool InsideDrain() noexcept
         {
-            const auto owner = RE::BSService::TaskQueue::GetDrainOwnerThreadID();
-            return owner != 0 && owner == REX::W32::GetCurrentThreadId();
+            return SnapshotState().insideDrain;
         }
     }
 
@@ -79,12 +78,29 @@ namespace Util::NativeMainThreadQueue
         return PostResult::kUnavailable;
     }
 
-    bool IsAvailable() noexcept
+    QueueState SnapshotState()
     {
-        return InsideDrain() || (RE::BSService::TaskQueue::GetSingleton() != nullptr && RE::BSService::TaskQueue::IsQueueEnabled());
+        QueueState state{};
+
+        state.currentThreadID = REX::W32::GetCurrentThreadId();
+        state.drainOwnerThreadID = RE::BSService::TaskQueue::GetDrainOwnerThreadID();
+
+        auto* queue = RE::BSService::TaskQueue::GetSingleton();
+        state.singleton = reinterpret_cast<std::uintptr_t>(queue);
+        state.queueEnabled = queue != nullptr && RE::BSService::TaskQueue::IsQueueEnabled();
+
+        state.insideDrain = state.drainOwnerThreadID != 0 && state.currentThreadID == state.drainOwnerThreadID;
+
+        return state;
     }
 
-    const char* ToString(const PostResult a_result) noexcept
+    bool IsAvailable()
+    {
+        const auto state = SnapshotState();
+        return state.insideDrain || (state.singleton != 0 && state.queueEnabled);
+    }
+
+    const char* ToString(const PostResult a_result)
     {
         switch (a_result) {
         case PostResult::kQueued:
