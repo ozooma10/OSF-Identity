@@ -11,6 +11,8 @@ from pathlib import Path
 
 
 TOOLS_RE = Path(__file__).resolve().parents[1] / "re"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+FIXTURE_ROOT = REPO_ROOT / "fixtures" / "osf-identity"
 sys.path.insert(0, str(TOOLS_RE))
 
 import npc_appearance_fixture_check as fixture_check  # noqa: E402
@@ -60,6 +62,25 @@ class NpcAppearanceFixtureCheckTests(unittest.TestCase):
 
     def test_complete_matrix_is_ready(self) -> None:
         self.assertEqual([], fixture_check.validate_root(self.root))
+
+    def test_companion_smoke_pack_is_directly_loadable(self) -> None:
+        plugin_directory = (
+            FIXTURE_ROOT / "Packs" / "osf.identity-companion-smoke" / "Starfield.esm"
+        )
+        self.assertEqual(
+            {"00005983.npc", "000059A7.npc"},
+            {path.name for path in plugin_directory.glob("*.npc")},
+        )
+        expected_sources = {
+            "00005983.npc": "HeadpartOnly.npc",
+            "000059A7.npc": "Sarah.npc",
+        }
+        for target, source in expected_sources.items():
+            with self.subTest(target=target, source=source):
+                self.assertEqual(
+                    (FIXTURE_ROOT / "Presets" / "CK" / source).read_bytes(),
+                    (plugin_directory / target).read_bytes(),
+                )
 
     def test_missing_file_is_rejected(self) -> None:
         (self.root / "CK" / "TintOnly.npc").unlink()

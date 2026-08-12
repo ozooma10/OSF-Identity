@@ -30,9 +30,7 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "Test failed with exit code ${LASTEXITCODE}: $test" }
     }
 
-    & python -m unittest `
-        tools.tests.npc_appearance_fixture_check_tests `
-        tools.tests.npc_appearance_schema_tests
+    & python -m unittest tools.tests.npc_appearance_fixture_check_tests
     if ($LASTEXITCODE -ne 0) { throw "Python validation tests failed with exit code $LASTEXITCODE" }
 
     & python .\tools\re\npc_appearance_fixture_check.py

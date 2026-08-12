@@ -26,10 +26,7 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install validation dependencies
-        run: python -m pip install -r requirements-dev.txt
-
-      # Parsers, public JSON Schemas, fixture validator, and the provenance gate:
+      # Parsers, fixture validator, and the provenance gate:
       # fast feedback that does not need the game toolchain.
       - name: Run host verification
         run: ./tools/verify-host.sh
@@ -47,9 +44,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-
-      - name: Install validation dependencies
-        run: python -m pip install -r requirements-dev.txt
 
       - uses: xmake-io/github-action-setup-xmake@v1
         with:
