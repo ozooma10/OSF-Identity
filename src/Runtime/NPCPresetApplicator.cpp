@@ -1,9 +1,9 @@
 #include "NPCPresetApplicator.h"
 
 #include "NPCSnapshot.h"
+#include "TemporaryNPCDonor.h"
 #include "Util/String.h"
 
-#include <memory>
 #include <vector>
 
 namespace Runtime
@@ -18,23 +18,6 @@ namespace Runtime
         bool SameText(const char* a_left, const char* a_right)
         {
             return ::_stricmp(Util::SafeText(a_left), Util::SafeText(a_right)) == 0;
-        }
-
-        bool IsRegisteredEmptyDonor(RE::TESNPC* a_donor, const RE::TESFormID a_formID)
-        {
-            if (!a_donor || a_formID == 0 || RE::TESForm::LookupByID<RE::TESNPC>(a_formID) != a_donor || a_donor->QRefCount() != 0 || a_donor->GetRace() != nullptr || a_donor->faceNPC != nullptr || a_donor->bodyMorphValues != nullptr ||
-                a_donor->facialBoneValues != nullptr || a_donor->unk3E8 != nullptr || !a_donor->tintAVMData.empty() || a_donor->shapeBlendData != nullptr || a_donor->pronoun.underlying() != 0) {
-                return false;
-            }
-
-            auto headParts = a_donor->headParts.Lock();
-            return (*headParts).empty();
-        }
-
-        bool ReleaseDonor(std::unique_ptr<RE::TESNPC>& a_donor, const RE::TESFormID a_formID)
-        {
-            a_donor.reset();
-            return a_formID != 0 && RE::TESForm::LookupByID<RE::TESNPC>(a_formID) == nullptr;
         }
 
         void ApplyMorphs(RE::TESNPC* a_target, const Config::AppearancePreset& a_preset)
@@ -245,49 +228,43 @@ namespace Runtime
         }
     }
 
-    PreparedAppearanceApplyResult ApplyPreparedAppearance(RE::TESNPC* a_target, const Config::AppearancePreset& a_preset, const Config::ResolvedAppearanceDependencies& a_dependencies)
+    PreparedAppearanceApplyResult ApplyPreparedAppearance(RE::TESNPC* a_target, const Config::AppearancePreset& a_preset, const Config::ResolvedAppearanceDependencies& a_dependencies, const OriginalNPCState& a_original)
     {
         PreparedAppearanceApplyResult result;
-        if (!a_target || !a_dependencies.Complete() ||
-            a_target->GetRace() != a_dependencies.race) {
+        if (!a_target || !a_dependencies.Complete() || a_target->GetRace() != a_dependencies.race) {
             return result;
         }
-        const auto original = CaptureOriginalNPCState(a_target);
+
         const auto originalStorage = CaptureVisualStorageState(a_target);
-        std::unique_ptr<RE::TESNPC> donor{ RE::TESNPC::Create(false) };
+        auto donor = TemporaryNPCDonor::Create(NPCDonorPurpose::kPreset);
         if (!donor) {
             return result;
         }
 
         result.donorReleased = false;
-        const auto donorFormID = donor->GetFormID();
-        if (!IsRegisteredEmptyDonor(donor.get(), donorFormID)) {
-            result.donorReleased = ReleaseDonor(donor, donorFormID);
-            return result;
-        }
+        auto* donorNPC = donor->Get();
 
         try {
-            donor->CopyAppearance(a_target, false);
-            const bool donorCopiedExactly = SameExactVisualValues(donor.get(), a_target);
-            const bool donorIndependent = HasIndependentVisualStorage(originalStorage, CaptureVisualStorageState(donor.get()));
-            const bool sourcePreserved = CaptureNonVisualState(a_target) == original.nonVisual && a_target->faceNPC == original.faceNPC && a_target->actorData.actorBaseFlags.underlying() == original.actorFlags;
+            donorNPC->CopyAppearance(a_target, false);
+            const bool donorCopiedExactly = SameExactVisualValues(donorNPC, a_target);
+            const bool donorIndependent = HasIndependentVisualStorage(originalStorage, CaptureVisualStorageState(donorNPC));
+            const bool sourcePreserved = CaptureNonVisualState(a_target) == a_original.nonVisual && a_target->faceNPC == a_original.faceNPC && a_target->actorData.actorBaseFlags.underlying() == a_original.actorFlags;
             if (donorCopiedExactly && donorIndependent && sourcePreserved) {
-                ApplyMorphs(donor.get(), a_preset);
-                ApplyVisuals(donor.get(), a_preset, a_dependencies);
+                ApplyMorphs(donorNPC, a_preset);
+                ApplyVisuals(donorNPC, a_preset, a_dependencies);
 
-                const bool donorValid = ValidateMorphs(donor.get(), a_preset) && ValidateVisuals(donor.get(), a_preset, a_dependencies);
+                const bool donorValid = ValidateMorphs(donorNPC, a_preset) && ValidateVisuals(donorNPC, a_preset, a_dependencies);
                 if (donorValid) {
-                    a_target->morphWeight = donor->morphWeight;
+                    a_target->morphWeight = donorNPC->morphWeight;
                     for (std::size_t i = 0; i < a_preset.bodyMorphRegionValues.size(); ++i) {
                         a_target->SetBodyMorph(static_cast<std::uint32_t>(i), static_cast<float>(a_preset.bodyMorphRegionValues[i]));
                     }
-                    a_target->skinToneIndex = donor->skinToneIndex;
-                    a_target->CopyOwnedAppearance(donor.get(), false);
+                    a_target->skinToneIndex = donorNPC->skinToneIndex;
+                    a_target->CopyOwnedAppearance(donorNPC, false);
                     a_target->faceNPC = nullptr;
 
-                    result.applied = ValidateMorphs(a_target, a_preset) && ValidateVisuals(a_target, a_preset, a_dependencies) && SameExactVisualValues(a_target, donor.get()) &&
-                        HasIndependentVisualStorage(CaptureVisualStorageState(donor.get()), CaptureVisualStorageState(a_target)) && CaptureNonVisualState(a_target) == original.nonVisual &&
-                        a_target->actorData.actorBaseFlags.underlying() == original.actorFlags;
+                    result.applied = SameExactVisualValues(a_target, donorNPC) && HasIndependentVisualStorage(CaptureVisualStorageState(donorNPC), CaptureVisualStorageState(a_target)) &&
+                        CaptureNonVisualState(a_target) == a_original.nonVisual && a_target->actorData.actorBaseFlags.underlying() == a_original.actorFlags && a_target->faceNPC == nullptr;
                 }
             }
         } catch (const std::exception& error) {
@@ -296,7 +273,8 @@ namespace Runtime
             REX::ERROR("[NPCPresetApplicator] prepared appearance apply threw an unknown exception before donor teardown");
         }
 
-        result.donorReleased = ReleaseDonor(donor, donorFormID);
+        result.donorReleased = donor->ReleaseAndVerify();
+        result.applied = result.applied && result.donorReleased;
         return result;
     }
 

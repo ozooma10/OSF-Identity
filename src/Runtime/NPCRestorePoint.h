@@ -1,8 +1,8 @@
 #pragma once
 
 #include "NPCSnapshot.h"
+#include "TemporaryNPCDonor.h"
 
-#include <memory>
 #include <optional>
 
 namespace Runtime
@@ -13,7 +13,7 @@ namespace Runtime
         NPCRestorePoint(const NPCRestorePoint&) = delete;
         NPCRestorePoint& operator=(const NPCRestorePoint&) = delete;
 
-        NPCRestorePoint(NPCRestorePoint&&) noexcept;
+        NPCRestorePoint(NPCRestorePoint&&);
         NPCRestorePoint& operator=(NPCRestorePoint&&) = delete;
         ~NPCRestorePoint();
 
@@ -23,13 +23,15 @@ namespace Runtime
 
         bool ReleaseAndVerify();
 
-        RE::TESNPC* Donor() const noexcept;
+        const OriginalNPCState& OriginalState() const
+        {
+            return m_original;
+        }
 
     private:
-        struct Impl;
+        NPCRestorePoint(TemporaryNPCDonor a_donor, OriginalNPCState a_original);
 
-        explicit NPCRestorePoint(std::unique_ptr<Impl> a_impl) noexcept;
-
-        std::unique_ptr<Impl> m_impl;
+        TemporaryNPCDonor m_donor;
+        OriginalNPCState m_original;
     };
 }

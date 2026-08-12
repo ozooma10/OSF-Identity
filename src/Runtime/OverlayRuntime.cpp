@@ -1,4 +1,5 @@
 #include "OverlayRuntime.h"
+#include "MutationSafety.h"
 #include "NPCRestorePoint.h"
 #include "NPCPresetApplicator.h"
 
@@ -17,8 +18,12 @@ namespace Runtime
 
     bool OverlayRuntime::Arm(AssignmentMap assignments)
     {
-        if(assignments.empty()) {
+        if (assignments.empty()) {
             REX::WARN("[OverlayRuntime] Arm() called with empty assignments; overlay runtime remains disabled");
+            return false;
+        }
+        if (!IsMutationOperational()) {
+            REX::WARN("[OverlayRuntime] Arm() called after mutation was disabled; overlay runtime remains disabled");
             return false;
         }
 
@@ -28,6 +33,11 @@ namespace Runtime
         m_assignments = std::move(assignments);
         m_armed.store(true);
         return true;
+    }
+
+    bool OverlayRuntime::IsArmed() const
+    {
+        return m_armed.load(std::memory_order_acquire) && IsMutationOperational();
     }
 
     std::shared_ptr<const Config::PreparedAssignment> Runtime::OverlayRuntime::FindAssignment(RE::TESFormID baseID) const
@@ -92,7 +102,7 @@ namespace Runtime
 
     bool Runtime::OverlayRuntime::TryReserveApply(RE::TESFormID baseID, RE::TESFormID refID)
     {
-        if (m_mutationKilled.load()) {
+        if (!IsMutationOperational()) {
             return false;
         }
 
@@ -120,12 +130,12 @@ namespace Runtime
 
     bool OverlayRuntime::ApplyTransientOverlay(RE::TESNPC *target, RE::Actor *actor, RE::TESFormID actorRefID, const Config::PreparedAssignment &assignment)
     {
-        if (m_mutationKilled.load() || !target || !actor || actor->GetNPC() != target || actor->GetFormID() != actorRefID) {
+        if (!IsMutationOperational() || !target || !actor || actor->GetNPC() != target || actor->GetFormID() != actorRefID) {
             return false;
         }
 
         const auto baseID = target->GetFormID();
-        if (assignment.baseFormID != baseID || !assignment.dependencies.Complete()) {
+        if (assignment.baseFormID != baseID) {
             DisableBase(baseID);
             REX::WARN( "[OverlayRuntime] prepared assignment no longer matches base=0x{:08X}; overlay disabled for that base", baseID);
             return false;
@@ -137,25 +147,23 @@ namespace Runtime
         }
 
         const auto started = std::chrono::steady_clock::now();
-        const auto originalState = CaptureOriginalNPCState(target);
         auto restorePoint = NPCRestorePoint::Capture(target);
         if (!restorePoint) {
-            DisableBase(baseID);
-            REX::WARN("[OverlayRuntime] could not capture an exact restore point for base=0x{:08X}; overlay disabled for that base", baseID);
+            if (IsMutationOperational()) {
+                DisableBase(baseID);
+                REX::WARN("[OverlayRuntime] could not capture an exact restore point for base=0x{:08X}; overlay disabled for that base", baseID);
+            }
             return false;
         }
 
+        const auto& originalState = restorePoint->OriginalState();
         bool appearanceApplied = false;
         bool presetDonorReleased = true;
         bool actorRefreshed = false;
         try {
-            const auto applyResult = ApplyPreparedAppearance(target, assignment.preset, assignment.dependencies);
+            const auto applyResult = ApplyPreparedAppearance(target, assignment.preset, assignment.dependencies, originalState);
             appearanceApplied = applyResult.applied;
             presetDonorReleased = applyResult.donorReleased;
-            if (appearanceApplied && (CaptureNonVisualState(target) != originalState.nonVisual || target->actorData.actorBaseFlags.underlying() != originalState.actorFlags)) {
-                appearanceApplied = false;
-                REX::ERROR("[OverlayRuntime] preset apply crossed the visual-only boundary for base=0x{:08X} ref=0x{:08X}; skipping refresh", baseID, actorRefID);
-            }
             if (appearanceApplied) {
                 actorRefreshed = NotifyAndRefreshAppearance(target, actor, actorRefID);
             }
@@ -203,14 +211,6 @@ namespace Runtime
     {
         const std::scoped_lock lock{ m_stateMutex };
         m_disabledBases.insert(baseID);
-    }
-
-    void OverlayRuntime::KillMutation(const std::string_view reason)
-    {
-        bool expected = false;
-        if (m_mutationKilled.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
-            REX::CRITICAL("[OverlayRuntime] mutation disabled for the process: {}", reason);
-        }
     }
 
     void OverlayRuntime::RecordSuccessfulApply(RE::TESFormID actorRefId)
