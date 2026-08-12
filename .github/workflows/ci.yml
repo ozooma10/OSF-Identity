@@ -17,8 +17,7 @@ jobs:
   host-checks:
     name: Host checks (Linux)
     runs-on: ubuntu-latest
-    # Pushes already cover every same-repo branch, so the pull_request event is
-    # only needed for forks. Without this the two events double every run.
+    # Pushes already cover every same-repo branch, so the pull_request event is only needed for forks. Without this the two events double every run.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     steps:
       - uses: actions/checkout@v4
@@ -56,8 +55,6 @@ jobs:
         with:
           xmake-version: latest
 
-      # spdlog and the xmake package repository are rebuilt from source on a
-      # cold cache, which dominates the job's runtime.
       - name: Cache xmake packages
         uses: actions/cache@v4
         with:
@@ -66,9 +63,6 @@ jobs:
           restore-keys: |
             xmake-${{ runner.os }}-
 
-      # Plugin build plus both host test suites, the fixture validator tests,
-      # and the provenance gate. This does not prove the game-side lifecycle;
-      # see the evidence boundary in AGENTS.md.
       - name: Run full verification
         shell: pwsh
         run: ./tools/verify.ps1
