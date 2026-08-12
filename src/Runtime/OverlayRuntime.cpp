@@ -30,8 +30,14 @@ namespace Runtime
         if (m_armed.load()) {
             REX::WARN("[OverlayRuntime] Arm() called while already armed; assignments are replaced");
         }
+
+        if(!StartRetryPump()) {
+            REX::WARN("[OverlayRuntime] retry pump could not be started; overlay runtime remains disabled");
+            return false;
+        }
+
         m_assignments = std::move(assignments);
-        m_armed.store(true);
+        m_armed.store(true, std::memory_order_release);
         return true;
     }
 
@@ -67,48 +73,28 @@ namespace Runtime
         }
 
         const auto refID = actor->GetFormID();
-        if (!TryReserveApply(baseID, refID)) {
+
+        if(!RememberPendingApply(baseID, refID, std::move(assignment))) {
             return;
         }
 
-        const auto result = Util::NativeMainThreadQueue::Post(
-            [this, refID, baseID, assignment = std::move(assignment)] {
-                try {
-                    auto* actor = RE::TESForm::LookupByID<RE::Actor>(refID);
-                    auto* target = RE::TESForm::LookupByID<RE::TESNPC>(baseID);
-                    if (actor && target && actor->GetNPC() == target) {
-                        static_cast<void>(ApplyTransientOverlay(target, actor, refID, *assignment));
-                    }
-                } catch (const std::exception& error) {
-                    REX::CRITICAL("[OverlayRuntime] overlay apply for ref=0x{:08X} threw: {}", refID, error.what());
-                } catch (...) {
-                    REX::CRITICAL("[OverlayRuntime] overlay apply for ref=0x{:08X} threw an unknown exception", refID);
-                }
-                ReleaseInFlight(refID);
-            },
-            "OverlayRuntime.OverlayApply",
-            [this, refID]() {
-                ReleaseInFlight(refID);
-                REX::WARN("[OverlayRuntime] overlay apply for ref=0x{:08X} dropped by the native queue; will retry at the next 3D build", refID);
-            }
-        );
-
-        if(result == Util::NativeMainThreadQueue::PostResult::kUnavailable) {
-            ReleaseInFlight(refID);
-            REX::WARN("[OverlayRuntime] native queue unavailable for overlay apply for ref=0x{:08X}; will retry at the next 3D build", refID);
-        }
+        TryDispatchPending(refID);
     }
 
 
-    bool Runtime::OverlayRuntime::TryReserveApply(RE::TESFormID baseID, RE::TESFormID refID)
+    bool Runtime::OverlayRuntime::RememberPendingApply(RE::TESFormID baseID, RE::TESFormID refID, std::shared_ptr<const Config::PreparedAssignment> assignment)
     {
-        if (!IsMutationOperational()) {
+        if (!IsMutationOperational() || !assignment) {
             return false;
         }
 
         const std::scoped_lock lock{ m_stateMutex };
 
         if(m_disabledBases.contains(baseID)) {
+            return false;
+        }
+
+        if(m_inFlightRefs.contains(refID)) {
             return false;
         }
 
@@ -119,13 +105,8 @@ namespace Runtime
             return false;
         }
 
-        return m_inFlightRefs.insert(refID).second;
-    }
-
-    void Runtime::OverlayRuntime::ReleaseInFlight(RE::TESFormID refID)
-    {
-        const std::scoped_lock lock{ m_stateMutex };
-        m_inFlightRefs.erase(refID);
+        m_pendingApplies.insert_or_assign(refID, PendingApply{ baseID, std::move(assignment) });
+        return true;
     }
 
     bool OverlayRuntime::ApplyTransientOverlay(RE::TESNPC *target, RE::Actor *actor, RE::TESFormID actorRefID, const Config::PreparedAssignment &assignment)
@@ -217,5 +198,133 @@ namespace Runtime
     {
         const std::scoped_lock lock{ m_stateMutex };
         m_lastAppliedByRef[actorRefId] = std::chrono::steady_clock::now();
+    }
+
+    bool OverlayRuntime::StartRetryPump()
+    {
+        bool expected = false;
+        if (!m_retryPumpRegistered.compare_exchange_strong(expected, true)) {
+            return true;
+        }
+
+        auto* taskInterface = SFSE::GetTaskInterface();
+        if (!taskInterface) {
+            m_retryPumpRegistered.store(false);
+            REX::ERROR("[OverlayRuntime] SFSE task interface unavailable");
+            return false;
+        }
+
+        taskInterface->AddPermanentTask([this] {
+            PumpPendingApplies();
+        });
+
+        REX::DEBUG("[OverlayRuntime] pending-apply retry pump registered");
+        return true;
+    }
+
+    void OverlayRuntime::PumpPendingApplies()
+    {
+        if (!IsArmed() || !Util::NativeMainThreadQueue::IsAvailable()) {
+            return;
+        }
+
+        RE::TESFormID refID = 0;
+        {
+            const std::scoped_lock lock{ m_stateMutex };
+            for (auto it = m_pendingApplies.begin(); it != m_pendingApplies.end(); it++) {
+                if (!m_inFlightRefs.contains(it->first)) {
+                    refID = it->first;
+                    break;
+                }
+            }
+        }
+
+        if (refID != 0) {
+            TryDispatchPending(refID);
+        }
+    }
+
+    void OverlayRuntime::TryDispatchPending(RE::TESFormID refID)
+    {
+        if (!Util::NativeMainThreadQueue::IsAvailable()) {
+            REX::DEBUG("[OverlayRuntime] overlay apply for ref=0x{:08X} pending while native queue is unavailable", refID);
+            return;
+        }
+
+        PendingApply pending;
+        {
+            const std::scoped_lock lock{ m_stateMutex };
+
+            const auto found = m_pendingApplies.find(refID);
+            if (found == m_pendingApplies.end()) { return; }
+
+            if (m_disabledBases.contains(found->second.baseID)) {
+                m_pendingApplies.erase(found);
+                return;
+            }
+
+            if (!m_inFlightRefs.insert(refID).second) {
+                return;
+            }
+
+            pending = found->second;
+        }
+
+        const auto baseID = pending.baseID;
+        auto assignment = std::move(pending.assignment);
+
+        const auto result = Util::NativeMainThreadQueue::Post([this, refID, baseID, assignment = std::move(assignment)] {
+            try {
+                auto* actor = RE::TESForm::LookupByID<RE::Actor>(refID);
+                auto* target = RE::TESForm::LookupByID<RE::TESNPC>(baseID);
+
+                if (actor && target && actor->GetNPC() == target && HasLoaded3D(actor)) {
+                    ApplyTransientOverlay(target, actor, refID, *assignment);
+                } else {
+                    REX::DEBUG("[OverlayRuntime] pending overlay for ref=0x{:08X} is no longer loaded or valid; discarding", refID);
+                }
+            } catch (const std::exception& error) {
+                REX::CRITICAL("[OverlayRuntime] overlay apply for ref=0x{:08X} threw: {}", refID, error.what());
+            } catch (...) {
+                REX::CRITICAL("[OverlayRuntime] overlay apply for ref=0x{:08X} threw an unknown exception", refID);
+            }
+
+            CompletePendingApply(refID);
+        },
+        "OverlayRuntime.OverlayApply",
+        [this, refID] {
+            ReleaseInFlight(refID);
+
+            REX::WARN("[OverlayRuntime] overlay apply for ref=0x{:08X} dropped by the native queue; retained for retry", refID);
+        });
+
+        if (result == Util::NativeMainThreadQueue::PostResult::kUnavailable) {
+            ReleaseInFlight(refID);
+
+            REX::DEBUG("[OverlayRuntime] native queue became unavailable for ref=0x{:08X}; apply remains pending", refID);
+        } else {
+            REX::DEBUG("[OverlayRuntime] overlay apply dispatch for ref=0x{:08X}: {}", refID, Util::NativeMainThreadQueue::ToString(result));
+        }
+    }
+
+    void Runtime::OverlayRuntime::ReleaseInFlight(RE::TESFormID refID)
+    {
+        const std::scoped_lock lock{ m_stateMutex };
+        m_inFlightRefs.erase(refID);
+    }
+
+    void OverlayRuntime::CompletePendingApply(RE::TESFormID refID)
+    {
+        const std::scoped_lock lock{ m_stateMutex };
+        m_inFlightRefs.erase(refID);
+        m_pendingApplies.erase(refID);
+    }
+
+    bool OverlayRuntime::HasLoaded3D(RE::Actor *actor)
+    {
+        if(!actor) { return false; }
+
+        const auto loaded = actor->loadedData.LockRead();
+        return *loaded && (*loaded)->data3D;
     }
 }
