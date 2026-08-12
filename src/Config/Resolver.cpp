@@ -98,7 +98,9 @@ namespace Config
                 }
                 const auto descriptorName = morph.name.substr(0, separator);
                 const auto groupName = morph.name.substr(separator + 1);
-                if (!a_result.race->FindShapeDescriptorByName(a_sex, descriptorName.c_str())) {
+                // Chargen does not sex-lock archetype faces, so a real export can carry descriptors of either sex (e.g. 'male_as_md1' on a Female preset); accept whichever catalog has it.
+                const auto otherSex = a_sex == RE::SEX::kMale ? RE::SEX::kFemale : RE::SEX::kMale;
+                if (!a_result.race->FindShapeDescriptorByName(a_sex, descriptorName.c_str()) && !a_result.race->FindShapeDescriptorByName(otherSex, descriptorName.c_str())) {
                     shapeOK = false;
                     AddIssue(a_result, "FacialMorphSliderDataA.Name", morph.name, "facial_shape_descriptor_not_found", std::format("race/sex descriptor '{}' was not found", descriptorName));
                     continue;
@@ -160,6 +162,11 @@ namespace Config
             return true;
         }
 
+        bool UsesComplexAvmGroup(const std::string_view a_category)
+        {
+            return a_category == "Scars" || a_category == "Accents1" || a_category == "Accents2" || a_category == "ColorlessAccents1" || a_category == "ColorlessAccents2";
+        }
+
         void ResolveAvmReferences(ResolvedAppearanceDependencies& a_result, const AppearancePreset& a_preset)
         {
             if (a_preset.postBlendLayers.empty()) {
@@ -171,20 +178,18 @@ namespace Config
             a_result.avmLayers.reserve(a_preset.postBlendLayers.size());
             for (const auto& layer : a_preset.postBlendLayers) {
                 RE::BSFixedString category{ layer.name };
+                // The skin-tone value catalog only exists for chargen-authorable layers (those with a bare SimpleGroup_/Chargen_ AVMD). 
+                // Complex-group layers such as Accents1 have no catalog yet are valid on NPC records, so an empty catalog is advisory; 
                 RE::BSScrapArray<RE::BSFixedString> values;
                 RE::BSFaceDB::GetLayerValues(a_preset.skinTone, category, true, values);
-                if (values.empty()) {
-                    ok = false;
-                    AddIssue(a_result, "PostBlendFaceCustomization.LayersA.Name", layer.name, "avm_layer_not_found_for_skin_tone", std::format("FaceDB returned no valid value catalog for skin tone {}", a_preset.skinTone));
-                    continue;
-                }
-
-                const auto valueFound = std::ranges::any_of(values, [&](const RE::BSFixedString& a_value) {
-                    return a_value == std::string_view{ layer.value };
-                });
-                if (!valueFound) {
-                    ok = false;
-                    AddIssue(a_result, "PostBlendFaceCustomization.LayersA.Value", layer.value, "avm_value_not_found", std::format("value is absent from layer '{}' for skin tone {}", layer.name, a_preset.skinTone));
+                if (!values.empty()) {
+                    const auto valueFound = std::ranges::any_of(values, [&](const RE::BSFixedString& a_value) {
+                        return a_value == std::string_view{ layer.value };
+                    });
+                    if (!valueFound) {
+                        ok = false;
+                        AddIssue(a_result, "PostBlendFaceCustomization.LayersA.Value", layer.value, "avm_value_not_found", std::format("value is absent from layer '{}' for skin tone {}", layer.name, a_preset.skinTone));
+                    }
                 }
 
                 if (!ResolveAvmModulation(a_result, layer, category)) {
@@ -194,31 +199,23 @@ namespace Config
                 RE::AVMData materialized{};
                 materialized.category = category;
                 const RE::BSFixedString value{ layer.value };
-                std::uint32_t matchedStore = 0;
-                bool ambiguous = false;
-                for (std::uint32_t store = 1; store <= 2; ++store) {
-                    RE::AVMData::Entry candidate{};
-                    if (!RE::BSFaceDB::ResolveEntry(store, category, value, candidate)) {
-                        continue;
+                auto valueCategory = category;
+                auto type = RE::AVMData::Type::kSimpleGroup;
+                if (UsesComplexAvmGroup(layer.name)) {
+                    RE::BSScrapArray<RE::BSFixedString> groups;
+                    RE::BSFaceDB::GetCategoryValues(2, category, groups);
+                    if (!groups.empty()) {
+                        valueCategory = groups[0];
+                        type = RE::AVMData::Type::kComplexGroup;
                     }
-                    if (matchedStore != 0) {
-                        ok = false;
-                        ambiguous = true;
-                        AddIssue(a_result, "PostBlendFaceCustomization.LayersA.Value", layer.value, "avm_value_ambiguous", std::format("value resolves in multiple FaceDB stores for layer '{}'", layer.name));
-                        break;
-                    }
-                    matchedStore = store;
-                    materialized.unk10 = candidate;
                 }
-                if (matchedStore == 0) {
+
+                if (!RE::BSFaceDB::ResolveEntry(1, valueCategory, value, materialized.unk10)) {
                     ok = false;
-                    AddIssue(a_result, "PostBlendFaceCustomization.LayersA.Value", layer.value, "avm_value_materialization_failed", std::format("value could not be materialized for layer '{}'", layer.name));
+                    AddIssue(a_result, "PostBlendFaceCustomization.LayersA.Value", layer.value, "avm_value_materialization_failed", std::format("value could not be materialized for layer '{}' through FaceDB {} group '{}'", layer.name, type == RE::AVMData::Type::kComplexGroup ? "complex" : "simple", valueCategory.c_str()));
                     continue;
                 }
-                if (ambiguous) {
-                    continue;
-                }
-                materialized.type = static_cast<RE::AVMData::Type>(matchedStore);
+                materialized.type = type;
 
                 if (layer.customColor) {
                     materialized.unk10.color = RE::Color{

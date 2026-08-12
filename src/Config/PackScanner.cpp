@@ -23,12 +23,11 @@ namespace Config
 
         std::string RelativeLogPath(const std::filesystem::path& a_path, const std::filesystem::path& a_packsRoot)
         {
-            std::error_code ec;
-            auto relative = std::filesystem::relative(a_path, a_packsRoot, ec);
-            if (ec || relative.empty()) {
-                relative = a_path.lexically_normal().lexically_relative(a_packsRoot.lexically_normal());
+            const auto relative = a_path.lexically_normal().lexically_relative(a_packsRoot.lexically_normal());
+            if (relative.empty() || relative == "." || *relative.begin() == "..") {
+                return a_path.filename().string();
             }
-            return (relative.empty() ? a_path.filename() : relative).string();
+            return relative.string();
         }
 
         std::optional<LoadedPlugin> FindLoadedPlugin(const RE::TESDataHandler* a_handler, const std::string_view a_pluginName)
