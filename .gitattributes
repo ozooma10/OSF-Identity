@@ -9,4 +9,4 @@
 *.yml text eol=lf
 
 # Producer exports are immutable byte-for-byte compatibility fixtures.
-fixtures/osf-identity/Presets/**/*.npc binary
+fixtures/osf-identity/**/*.npc binary
