@@ -46,11 +46,7 @@ try {
     [void](New-Item -ItemType Directory -Path $configDir -Force)
 
     Copy-Item -LiteralPath $dll -Destination $pluginDir
-    foreach ($schema in @('package.schema.json', 'preset-metadata.schema.json')) {
-        $schemaPath = Join-Path $repoRoot "fixtures\osf-identity\$schema"
-        Copy-Item -LiteralPath $schemaPath -Destination $configDir
-    }
-
+    
     $runtimePacksDir = Join-Path $configDir 'Packs'
     if (Test-Path -LiteralPath $runtimePacksDir) {
         throw "Production staging unexpectedly contains a runtime Packs directory: $runtimePacksDir"

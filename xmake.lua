@@ -40,12 +40,6 @@ target("OSF Identity")
     add_packages("glaze")
     add_defines("NOMINMAX", "WIN32_LEAN_AND_MEAN")
 
-    add_installfiles(
-        "fixtures/osf-identity/package.schema.json",
-        "fixtures/osf-identity/preset-metadata.schema.json",
-        { prefixdir = "SFSE/Plugins/OSFIdentity" }
-    )
-
     if has_config("test_fixtures") then
         add_installfiles(
             "fixtures/osf-identity/Packs/(**)",
