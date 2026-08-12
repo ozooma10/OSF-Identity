@@ -66,3 +66,15 @@ jobs:
       - name: Run full verification
         shell: pwsh
         run: ./tools/verify.ps1
+
+      - name: Build production package
+        shell: pwsh
+        run: ./tools/build-release.ps1 -SkipVerify
+
+      - name: Upload production package
+        uses: actions/upload-artifact@v4
+        with:
+          name: OSF-Identity-${{ github.sha }}
+          path: dist/*.zip
+          if-no-files-found: error
+          retention-days: 14

@@ -12,6 +12,12 @@ add_rules("plugin.vsxmake.autoupdate")
 -- Structural JSON parsing and string decoding for the manifest/preset readers.
 add_requires("glaze v7.0.2")
 
+option("test_fixtures", function()
+    set_default(false)
+    set_showmenu(true)
+    set_description("Install companion smoke fixtures for live testing")
+end)
+
 target("OSF Identity")
     add_rules("commonlibsf.plugin", {
         name = "OSF Identity",
@@ -40,10 +46,12 @@ target("OSF Identity")
         { prefixdir = "SFSE/Plugins/OSFIdentity" }
     )
 
-    add_installfiles(
-        "fixtures/osf-identity/Packs/(**)",
-        { prefixdir = "SFSE/Plugins/OSFIdentity/Packs" }
-    )
+    if has_config("test_fixtures") then
+        add_installfiles(
+            "fixtures/osf-identity/Packs/(**)",
+            { prefixdir = "SFSE/Plugins/OSFIdentity/Packs" }
+        )
+    end
 
 target("npc-appearance-config-tests")
     set_kind("binary")
