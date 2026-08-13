@@ -13,18 +13,19 @@ namespace
             return;
         }
 
-        auto& runtime = Runtime::GetOverlayRuntime();
-        if(!runtime.Arm(std::move(assignments))) {
-            REX::WARN("[PackScanner] failed to arm overlay runtime");
-            return;
-        }
-
         auto* set3dSource = RE::RuntimeComponentDBFactory::ReferenceSet3d::GetEventSource();
         if(!set3dSource) {
             REX::WARN("[PackScanner] failed to get ReferenceSet3d event source");
             return;
         }
         set3dSource->RegisterSink(Events::ReferenceSet3dEventHandler::GetSingleton());
+
+        auto& runtime = Runtime::GetOverlayRuntime();
+        if(!runtime.Arm(std::move(assignments))) {
+            REX::WARN("[PackScanner] failed to arm overlay runtime");
+            return;
+        }
+
         REX::INFO("[PackScanner] startup scan complete; overlay runtime armed");
     }
 
