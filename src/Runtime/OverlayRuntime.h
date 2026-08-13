@@ -42,6 +42,7 @@ namespace Runtime
         bool RefreshWaitingReference(RE::TESNPC* target, RE::TESNPC* source, RE::TESFormID actorRefID, const Config::PreparedAssignment& assignment);
         static bool HasLoaded3D(RE::Actor* actor);
 
+        AssignmentMap m_configuredAssignments;
         std::unordered_map<RE::TESFormID, BaseState> m_bases;
         mutable std::mutex m_stateMutex;
         std::atomic<bool> m_armed{ false };

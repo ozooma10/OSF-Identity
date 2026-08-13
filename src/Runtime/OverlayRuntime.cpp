@@ -10,6 +10,20 @@
 
 namespace Runtime
 {
+    namespace
+    {
+        RE::TESBoundObject* GetConfiguredLeveledBase(RE::TESObjectREFR* a_ref)
+        {
+            if (!a_ref || !a_ref->extraDataList) {
+                return nullptr;
+            }
+
+            using func_t = RE::TESBoundObject* (*)(RE::ExtraDataList*);
+            static REL::Relocation<func_t> func{ REL::ID(44957) };
+            return func(a_ref->extraDataList.get());
+        }
+    }
+
     OverlayRuntime& GetOverlayRuntime()
     {
         static OverlayRuntime instance;
@@ -40,9 +54,12 @@ namespace Runtime
             return false;
         }
 
+        AssignmentMap configuredAssignments;
+        configuredAssignments.reserve(assignments.size());
         std::unordered_map<RE::TESFormID, BaseState> bases;
         bases.reserve(assignments.size());
         for (auto& [baseID, assignment] : assignments) {
+            configuredAssignments.emplace(baseID, assignment);
             bases.emplace(baseID, BaseState{ .assignment = std::move(assignment) });
         }
 
@@ -52,6 +69,7 @@ namespace Runtime
                 REX::WARN("[OverlayRuntime] concurrent Arm() call lost the one-shot publication race");
                 return false;
             }
+            m_configuredAssignments = std::move(configuredAssignments);
             m_bases = std::move(bases);
             m_armed.store(true, std::memory_order_release);
         }
@@ -77,11 +95,22 @@ namespace Runtime
 
         const auto baseID = base->GetFormID();
         const auto refID = actor->GetFormID();
+        auto* configuredBase = GetConfiguredLeveledBase(actor);
+        const auto configuredBaseID = configuredBase ? configuredBase->GetFormID() : RE::TESFormID{ 0 };
         bool dispatch = false;
         bool recheckReadyState = false;
+        bool inheritedAssignment = false;
         {
             const std::scoped_lock lock{ m_stateMutex };
-            const auto found = m_bases.find(baseID);
+            auto found = m_bases.find(baseID);
+            if (found == m_bases.end()) {
+                const auto configured = m_configuredAssignments.find(configuredBaseID);
+                if (configured != m_configuredAssignments.end() && configuredBaseID != baseID && configured->second) {
+                    found = m_bases.emplace(baseID, BaseState{ .assignment = configured->second }).first;
+                    inheritedAssignment = true;
+                }
+            }
+
             if (found == m_bases.end() || found->second.status == BaseStatus::kDisabled) {
                 return;
             }
@@ -99,6 +128,10 @@ namespace Runtime
             }
         }
 
+        if (inheritedAssignment) {
+            REX::DEBUG("[OverlayRuntime] configured leveled actor mapped: ref=0x{:08X} configuredBase=0x{:08X} runtimeBase=0x{:08X}",
+                refID, configuredBaseID, baseID);
+        }
         if (recheckReadyState) {
             if (!FindRenderSource(base)) {
                 KillRuntime("a base marked ready had no published render source");
@@ -212,18 +245,11 @@ namespace Runtime
         }
 
         auto* target = RE::TESForm::LookupByID<RE::TESNPC>(baseID);
-        if (!target || assignment->baseFormID != baseID) {
+        if (!target) {
             DisableBaseBeforePublication(baseID);
-            REX::WARN("[OverlayRuntime] prepared assignment no longer resolves to base=0x{:08X}; rendering vanilla and disabling that base", baseID);
+            REX::WARN("[OverlayRuntime] runtime base=0x{:08X} for configured base=0x{:08X} no longer resolves; rendering vanilla and disabling that runtime base", baseID, assignment->baseFormID);
             return;
         }
-        if (!assignment->preset.bodyMorphRegionValues.empty() &&
-            (!target->bodyMorphValues || target->bodyMorphValues->size() != assignment->preset.bodyMorphRegionValues.size())) {
-            DisableBaseBeforePublication(baseID);
-            REX::WARN("[OverlayRuntime] base=0x{:08X} does not have the expected body-morph storage; rendering vanilla and disabling that base", baseID);
-            return;
-        }
-
         const auto started = std::chrono::steady_clock::now();
         auto* source = FindRenderSource(target);
         if (!source) {
@@ -250,8 +276,8 @@ namespace Runtime
         }
 
         auto waitingRefs = CompletePublication(baseID, assignment);
-        REX::DEBUG("[OverlayRuntime] detached render source published for base=0x{:08X} pack='{}' waitingRefs={} in {} us",
-            baseID, assignment->packID, waitingRefs.size(), std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count());
+        REX::DEBUG("[OverlayRuntime] detached render source published for runtimeBase=0x{:08X} configuredBase=0x{:08X} pack='{}' waitingRefs={} in {} us",
+            baseID, assignment->baseFormID, assignment->packID, waitingRefs.size(), std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count());
 
         for (const auto refID : waitingRefs) {
             if (!IsRuntimeOperational()) {
