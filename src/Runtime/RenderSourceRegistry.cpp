@@ -29,6 +29,12 @@ namespace Runtime
             std::atomic<RE::TESNPC*> faceTextureIdentity{ nullptr };
         };
 
+        struct SourceIndexSlot
+        {
+            std::atomic<RE::TESNPC*> source{ nullptr };
+            RegistrySlot* registrySlot{ nullptr };
+        };
+
         static_assert(std::is_standard_layout_v<RegistrySlot>);
         static_assert(std::atomic<RE::TESNPC*>::is_always_lock_free);
         static_assert(std::atomic<std::uint64_t>::is_always_lock_free);
@@ -38,16 +44,25 @@ namespace Runtime
         static_assert(offsetof(RegistrySlot, active) == 2 * sizeof(RE::TESNPC*));
         static_assert(offsetof(RegistrySlot, faceTextureIdentity) == 3 * sizeof(RE::TESNPC*));
         static_assert(sizeof(RegistrySlot) == 4 * sizeof(RE::TESNPC*));
+        static_assert(std::is_standard_layout_v<SourceIndexSlot>);
+        static_assert(offsetof(SourceIndexSlot, source) == 0);
+        static_assert(offsetof(SourceIndexSlot, registrySlot) == sizeof(RE::TESNPC*));
+        static_assert(sizeof(SourceIndexSlot) == 2 * sizeof(RE::TESNPC*));
 
         alignas(64) std::array<RegistrySlot, kRegistryCapacity> g_registry;
+        alignas(64) std::array<SourceIndexSlot, kRegistryCapacity> g_sourceIndex;
         std::mutex g_publishMutex;
 
-        [[nodiscard]] std::size_t StartIndex(const RE::TESFormID a_formID) noexcept
+        [[nodiscard]] std::size_t StartIndex(std::uint64_t a_key) noexcept
         {
-            auto value = static_cast<std::uint64_t>(a_formID);
-            value *= kHashMultiplier;
-            value ^= value >> kFoldShift;
-            return static_cast<std::size_t>(value) & kRegistryMask;
+            a_key *= kHashMultiplier;
+            a_key ^= a_key >> kFoldShift;
+            return static_cast<std::size_t>(a_key) & kRegistryMask;
+        }
+
+        [[nodiscard]] std::size_t SourceStartIndex(const RE::TESNPC* a_source) noexcept
+        {
+            return StartIndex(static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(a_source)));
         }
 
         [[nodiscard]] RegistrySlot* FindSlot(const RE::TESFormID a_formID) noexcept
@@ -56,7 +71,7 @@ namespace Runtime
                 return nullptr;
             }
 
-            const auto start = StartIndex(a_formID);
+            const auto start = StartIndex(static_cast<std::uint64_t>(a_formID));
             for (std::size_t probe = 0; probe < kRegistryCapacity; ++probe) {
                 auto& slot = g_registry[(start + probe) & kRegistryMask];
                 const auto key = slot.formID.load(std::memory_order_acquire);
@@ -64,6 +79,26 @@ namespace Runtime
                     return &slot;
                 }
                 if (key == 0) {
+                    return nullptr;
+                }
+            }
+            return nullptr;
+        }
+
+        [[nodiscard]] RegistrySlot* FindSourceRegistrySlot(const RE::TESNPC* a_source) noexcept
+        {
+            if (!a_source) {
+                return nullptr;
+            }
+
+            const auto start = SourceStartIndex(a_source);
+            for (std::size_t probe = 0; probe < kRegistryCapacity; ++probe) {
+                const auto& slot = g_sourceIndex[(start + probe) & kRegistryMask];
+                const auto key = slot.source.load(std::memory_order_acquire);
+                if (key == a_source) {
+                    return slot.registrySlot;
+                }
+                if (!key) {
                     return nullptr;
                 }
             }
@@ -128,13 +163,11 @@ namespace Runtime
             return a_source->GetFormID();
         }
 
-        //@TODO: THIS IS GARBAGE. PROBABLY OPTIMIZE BUT THIS IS JUST TEX CREATE PATH SO PROB FINE FOR NOW
-        for (const auto& slot : g_registry) {
-            if (slot.source.load(std::memory_order_acquire) == a_source) {
-                const auto formID = slot.formID.load(std::memory_order_acquire);
-                if (formID != 0) {
-                    return static_cast<RE::TESFormID>(formID);
-                }
+        auto* slot = FindSourceRegistrySlot(a_source);
+        if (slot) {
+            const auto formID = slot->formID.load(std::memory_order_relaxed);
+            if (formID != 0) {
+                return static_cast<RE::TESFormID>(formID);
             }
         }
         return a_source->GetFormID();
@@ -146,12 +179,10 @@ namespace Runtime
             return a_source;
         }
 
-        //@TODO: THIS IS GARBAGE. PROBABLY OPTIMIZE BUT THIS IS JUST TEX CREATE PATH SO PROB FINE FOR NOW
-        for (const auto& slot : g_registry) {
-            if (slot.source.load(std::memory_order_acquire) == a_source) {
-                auto* identity = slot.faceTextureIdentity.load(std::memory_order_acquire);
-                return identity ? identity : a_source;
-            }
+        auto* slot = FindSourceRegistrySlot(a_source);
+        if (slot) {
+            auto* identity = slot->faceTextureIdentity.load(std::memory_order_relaxed);
+            return identity ? identity : a_source;
         }
         return a_source;
     }
@@ -168,7 +199,8 @@ namespace Runtime
         }
 
         const std::scoped_lock lock{ g_publishMutex };
-        const auto start = StartIndex(formID);
+        const auto start = StartIndex(static_cast<std::uint64_t>(formID));
+        RegistrySlot* publishSlot = nullptr;
         for (std::size_t probe = 0; probe < kRegistryCapacity; ++probe) {
             auto& slot = g_registry[(start + probe) & kRegistryMask];
             const auto key = slot.formID.load(std::memory_order_acquire);
@@ -176,16 +208,44 @@ namespace Runtime
                 return { slot.source.load(std::memory_order_relaxed), false };
             }
             if (key == 0) {
-                slot.source.store(a_source, std::memory_order_relaxed);
-                slot.active.store(0, std::memory_order_relaxed);
-                slot.faceTextureIdentity.store(a_faceTextureIdentity, std::memory_order_relaxed);
-                slot.formID.store(formID, std::memory_order_release);
-                return { a_source, true };
+                publishSlot = &slot;
+                break;
             }
         }
 
-        REX::CRITICAL("[RenderSourceRegistry] render-source registry is full (capacity={})", kRegistryCapacity);
-        return {};
+        if (!publishSlot) {
+            REX::CRITICAL("[RenderSourceRegistry] render-source registry is full (capacity={})", kRegistryCapacity);
+            return {};
+        }
+
+        const auto sourceStart = SourceStartIndex(a_source);
+        SourceIndexSlot* sourcePublishSlot = nullptr;
+        for (std::size_t probe = 0; probe < kRegistryCapacity; ++probe) {
+            auto& slot = g_sourceIndex[(sourceStart + probe) & kRegistryMask];
+            const auto key = slot.source.load(std::memory_order_acquire);
+            if (key == a_source) {
+                REX::CRITICAL("[RenderSourceRegistry] render source is already indexed to another runtime FormID (source={})", static_cast<const void*>(a_source));
+                return {};
+            }
+            if (!key) {
+                sourcePublishSlot = &slot;
+                break;
+            }
+        }
+
+        if (!sourcePublishSlot) {
+            REX::CRITICAL("[RenderSourceRegistry] render-source pointer index is full (capacity={})", kRegistryCapacity);
+            return {};
+        }
+
+        publishSlot->source.store(a_source, std::memory_order_relaxed);
+        publishSlot->active.store(0, std::memory_order_relaxed);
+        publishSlot->faceTextureIdentity.store(a_faceTextureIdentity, std::memory_order_relaxed);
+        publishSlot->formID.store(formID, std::memory_order_release);
+
+        sourcePublishSlot->registrySlot = publishSlot;
+        sourcePublishSlot->source.store(a_source, std::memory_order_release);
+        return { a_source, true };
     }
 
     bool ActivateRenderSource(RE::TESNPC* a_canonical, RE::TESNPC* a_source) noexcept
@@ -201,5 +261,20 @@ namespace Runtime
 
         slot->active.store(1, std::memory_order_release);
         return true;
+    }
+
+    bool DeactivateRenderSource(RE::TESNPC* a_canonical, RE::TESNPC* a_source) noexcept
+    {
+        if (!a_canonical || !a_source || a_canonical == a_source) {
+            return false;
+        }
+
+        auto* slot = FindSlot(a_canonical->GetFormID());
+        if (!slot || slot->source.load(std::memory_order_relaxed) != a_source) {
+            return false;
+        }
+
+        std::uint64_t expected = 1;
+        return slot->active.compare_exchange_strong(expected, 0, std::memory_order_acq_rel);
     }
 }

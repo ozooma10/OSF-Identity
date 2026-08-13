@@ -38,12 +38,13 @@ namespace Runtime
     // Finds a source owned by the registry whether it is staged or active.
     [[nodiscard]] RE::TESNPC *FindOwnedRenderSource(RE::TESNPC *a_canonical) noexcept;
 
-    // Runtime FormID reverse lookup used by the compositor and FaceDB selection path.
+    // Runtime FormID reverse lookup through the append-only source-pointer index, used by the compositor and FaceDB selection path.
     [[nodiscard]] RE::TESFormID ResolveRuntimeFormIDForRenderSource(RE::TESNPC *a_source) noexcept;
 
-    // Stable configured NPC identity used only by FaceDB texture naming. A dynamic leveled base has no plugin owner and cannot serve as a persistent generated-texture key.
+    // Stable configured NPC identity resolved through the source-pointer index and used only by FaceDB texture naming. A dynamic leveled base has no plugin owner and cannot serve as a persistent generated-texture key.
     [[nodiscard]] RE::TESNPC *ResolveFaceTextureIdentityForRenderSource(RE::TESNPC *a_source) noexcept;
 
     [[nodiscard]] RenderSourcePublishResult PublishRenderSource(RE::TESNPC *a_canonical, RE::TESNPC *a_source, RE::TESNPC *a_faceTextureIdentity) noexcept;
     [[nodiscard]] bool ActivateRenderSource(RE::TESNPC *a_canonical, RE::TESNPC *a_source) noexcept;
+    [[nodiscard]] bool DeactivateRenderSource(RE::TESNPC *a_canonical, RE::TESNPC *a_source) noexcept;
 }
