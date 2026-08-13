@@ -169,7 +169,9 @@ namespace Config
                     .name = item.Name,
                     .value = item.Value.Value,
                     .modulationValue = item.ModulationValue.Value,
-                    .customColor = std::nullopt };
+                    .customColor = std::nullopt,
+                    .materialType = std::nullopt,
+                    .texturePath = std::nullopt };
 
                 if (item.ModulationValue.CustomColorValue) {
                     const auto& color = *item.ModulationValue.CustomColorValue;
@@ -483,7 +485,7 @@ namespace Config
                 validator.Fail("invalid_integer", "Morphs region keys must be unsigned decimal 32-bit IDs");
                 return result;
             }
-            PresetBoneRegion region{ .regionID = regionID };
+            PresetBoneRegion region{ .regionID = regionID, .sliders = {} };
             region.sliders.reserve(sliders.size());
             for (const auto& [groupName, value] : sliders) {
                 if (!validator.Str(groupName, "Morphs group name", false) ||
