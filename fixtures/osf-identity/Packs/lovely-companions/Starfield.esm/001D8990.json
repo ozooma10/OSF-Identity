@@ -1,0 +1,300 @@
+{
+    "AdditionalSliders": {
+        "102": 0.10000000149011612,
+        "104": 0.10000000149011612,
+        "105": -0.10000000149011612,
+        "120": 0.30000001192092896,
+        "128": 0.5,
+        "25": 0.5,
+        "30": -0.5,
+        "31": 2.831220591303918e-08,
+        "34": -0.4999999403953552,
+        "35": 0.29999998211860657,
+        "36": 0.4999999403953552,
+        "38": -0.09999995678663254,
+        "39": -0.5999999642372131,
+        "42": 4.3213368883243675e-08,
+        "43": 0.09999995678663254,
+        "45": 0.2999999523162842,
+        "51": -0.29999998211860657,
+        "52": 0.3999999761581421,
+        "57": 0.29999998211860657,
+        "58": 0.3999999761581421,
+        "59": 0.2999999523162842,
+        "61": -4.3213368883243675e-08,
+        "62": 0.29999998211860657,
+        "63": -0.699999988079071,
+        "65": 0.09999998658895493,
+        "67": 1.0,
+        "69": -1.0,
+        "70": -0.9000000953674316,
+        "72": -1.0,
+        "73": -0.10000000149011612,
+        "77": 0.5,
+        "79": -0.4999999403953552,
+        "92": -0.10000000149011612,
+        "93": -0.10000000149011612,
+        "94": 0.10000000149011612,
+        "95": -0.10000000149011612,
+        "97": 0.10000000149011612
+    },
+    "Dependencies": [
+        "Starfield.esm"
+    ],
+    "EyeColor": "Iron",
+    "EyebrowColor": "BlackBrown",
+    "FacialHairColor": "",
+    "Gender": "Female",
+    "HairColor": "White",
+    "HeadPartData": [
+        {
+            "Color": {
+                "a": 0,
+                "b": 0,
+                "g": 0,
+                "r": 0
+            },
+            "Group": "Dermaesthetic",
+            "Intensity": 0.5,
+            "Name": "European_Female_md1_Sk1",
+            "Texture": "textures/actors/human/faces/chargen/postblenddetails/dermaesthetic/female_eu_md1_sk1_derm_color.dds",
+            "Type": 1,
+            "unk04": 450
+        },
+        {
+            "Color": {
+                "a": 130,
+                "b": 40,
+                "g": 70,
+                "r": 166
+            },
+            "Group": "ComplexionMask1",
+            "Intensity": 0.046875,
+            "Name": "Freckles_MidFace",
+            "Texture": "textures/actors/human/faces/chargen/postblenddetails/complexion/freckles_midface_mask.dds",
+            "Type": 1,
+            "unk04": 0
+        },
+        {
+            "Color": {
+                "a": 0,
+                "b": 0,
+                "g": 0,
+                "r": 0
+            },
+            "Group": "Complexion1",
+            "Intensity": 0.390625,
+            "Name": "Crevice_Complexion_Cool",
+            "Texture": "textures/actors/human/faces/chargen/postblenddetails/complexion/complexioncool_color.dds",
+            "Type": 1,
+            "unk04": 0
+        },
+        {
+            "Color": {
+                "a": 160,
+                "b": 32,
+                "g": 35,
+                "r": 146
+            },
+            "Group": "ComplexionMask2",
+            "Intensity": 0.2421875,
+            "Name": "Rosacea_FullFace",
+            "Texture": "textures/actors/human/faces/chargen/postblenddetails/complexion/rosacea_fullface_mask.dds",
+            "Type": 1,
+            "unk04": 0
+        },
+        {
+            "Color": {
+                "a": 0,
+                "b": 0,
+                "g": 0,
+                "r": 0
+            },
+            "Group": "Scars",
+            "Intensity": 0.390625,
+            "Name": "Scar_RightCheekSmall",
+            "Texture": "textures/actors/human/faces/chargen/postblenddetails/scars/scar_rightcheeksmall_color.dds",
+            "Type": 2,
+            "unk04": 0
+        },
+        {
+            "Color": {
+                "a": 0,
+                "b": 0,
+                "g": 0,
+                "r": 0
+            },
+            "Group": "Accents1",
+            "Intensity": 0.03125,
+            "Name": "Accents_CrowsFeet",
+            "Texture": "textures/actors/human/faces/chargen/postblenddetails/accents/accents_crowsfeet_color.dds",
+            "Type": 2,
+            "unk04": 0
+        },
+        {
+            "Color": {
+                "a": 0,
+                "b": 0,
+                "g": 0,
+                "r": 0
+            },
+            "Group": "Accents2",
+            "Intensity": 0.0078125,
+            "Name": "Accents_RoughFace",
+            "Texture": "textures/actors/human/faces/chargen/postblenddetails/accents/accents_roughface_color.dds",
+            "Type": 2,
+            "unk04": 0
+        },
+        {
+            "Color": {
+                "a": 0,
+                "b": 0,
+                "g": 0,
+                "r": 0
+            },
+            "Group": "ColorlessAccents1",
+            "Intensity": 0.5,
+            "Name": "Accents_UnderEyeBags_Small",
+            "Texture": "textures/actors/human/faces/chargen/postblenddetails/accents/accents_undereyebagssmall_color.dds",
+            "Type": 2,
+            "unk04": 0
+        },
+        {
+            "Color": {
+                "a": 255,
+                "b": 30,
+                "g": 20,
+                "r": 77
+            },
+            "Group": "Lipstick1",
+            "Intensity": 0.2421875,
+            "Name": "Lipstick_Standard",
+            "Texture": "textures/actors/human/faces/chargen/postblenddetails/lipstick1/testlipstick01_mask.dds",
+            "Type": 1,
+            "unk04": 0
+        },
+        {
+            "Color": {
+                "a": 255,
+                "b": 11,
+                "g": 11,
+                "r": 11
+            },
+            "Group": "Eyeshadow1",
+            "Intensity": 0.5,
+            "Name": "Conservative_Eyeshadow_Upper_mask",
+            "Texture": "textures/actors/human/faces/chargen/postblenddetails/eyeshadow1/conservative_eyeshadow_upper_mask.dds",
+            "Type": 1,
+            "unk04": 0
+        },
+        {
+            "Color": {
+                "a": 255,
+                "b": 82,
+                "g": 108,
+                "r": 186
+            },
+            "Group": "Eyeshadow2",
+            "Intensity": 0.5,
+            "Name": "EyeShadow_Lower_02",
+            "Texture": "textures/actors/human/faces/chargen/postblenddetails/eyeshadow2/testeyeshadowlower02_mask.dds",
+            "Type": 1,
+            "unk04": 1029235923
+        },
+        {
+            "Color": {
+                "a": 255,
+                "b": 11,
+                "g": 11,
+                "r": 11
+            },
+            "Group": "Eyeliner1",
+            "Intensity": 1.0,
+            "Name": "Eyeliner_Upper03",
+            "Texture": "textures/actors/human/faces/chargen/postblenddetails/eyeliner1/testeyelinerupper03_mask.dds",
+            "Type": 1,
+            "unk04": 1032407059
+        },
+        {
+            "Color": {
+                "a": 255,
+                "b": 11,
+                "g": 11,
+                "r": 11
+            },
+            "Group": "Eyeliner2",
+            "Intensity": 1.0,
+            "Name": "EyeLinerConservative_Lower",
+            "Texture": "textures/actors/human/faces/chargen/postblenddetails/eyeliner2/eyelinerconservative_lower_mask.dds",
+            "Type": 1,
+            "unk04": 3178670802
+        }
+    ],
+    "HeadParts": [
+        "Starfield.esm|12F270",
+        "Starfield.esm|1F7EFE",
+        "Starfield.esm|3A289B",
+        "Starfield.esm|317AE",
+        "Starfield.esm|317AF",
+        "Starfield.esm|640B8",
+        "Starfield.esm|12203",
+        "Starfield.esm|3BE58F",
+        "Starfield.esm|12202",
+        "Starfield.esm|12201",
+        "Starfield.esm|78273"
+    ],
+    "JewelryColor": "",
+    "Morphs": {
+        "1": {
+            "Cheeks": 0.2580600082874298,
+            "Ears": 0.49000000953674316,
+            "Eyes": 0.550000011920929,
+            "Mouth": 0.6899999976158142,
+            "Nose": 0.8100000023841858
+        },
+        "11": {
+            "Cheeks": 0.3199999928474426
+        },
+        "17": {
+            "Eyes": 0.3100000023841858
+        },
+        "19": {
+            "Cheeks": 0.2111399918794632,
+            "Jaw": 0.6299999952316284
+        },
+        "5": {
+            "Cheeks": 0.21080000698566437,
+            "Chin": 0.5699999928474426,
+            "Jaw": 0.3700000047683716,
+            "Neck": 0.5
+        },
+        "9": {
+            "Forehead": 1.0,
+            "Neck": 0.5
+        }
+    },
+    "Name": "Octavia",
+    "Pronoun": 2,
+    "Race": "Starfield.esm|347D",
+    "ShapeBlendData": {
+        "female_af_yo1_Cheeks": 0.5,
+        "female_af_yo1_Chin": 0.5,
+        "female_af_yo1_Mouth": 0.5,
+        "female_as_md1_Chin": 0.5,
+        "female_as_md1_Ears": 0.75,
+        "female_as_md1_Nose": 0.25,
+        "female_as_ol1_Ears": 0.25,
+        "female_as_yo1_Mouth": 0.5,
+        "female_as_yo1_Nose": 0.25,
+        "female_eu_md2_Cheeks": 0.5
+    },
+    "SkinTone": 0,
+    "Teeth": "Teeth_Clean",
+    "Version": 2,
+    "Weight": {
+        "Heavy": 0.0027707500848919153,
+        "Muscular": 0.0,
+        "Thin": 0.0005993153317831457
+    },
+    "unk470": ""
+}

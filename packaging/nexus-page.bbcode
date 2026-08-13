@@ -1,0 +1,146 @@
+[center][img]{{OSF_IDENTITY_HEADER_IMAGE_URL}}[/img][/center]
+
+[center][size=5][b]Drop-in appearances. Original records.[/b][/size][/center]
+
+[center][i]Assign complete [font=Courier New].npc[/font] appearance presets to Starfield NPCs at runtime—without patch plugins and without baking those appearances into the save.[/i][/center]
+
+[line]
+
+[center][img]{{SECTION_01_OVERVIEW_IMAGE_URL}}[/img][/center]
+
+[b]OSF Identity[/b] is an open-source SFSE framework for distributing NPC appearances through simple, drop-in packs. A pack author exports a real Creation Kit or compatible CharGenMenu [font=Courier New].npc[/font] preset, places it under the target NPC's owning plugin and plugin-local FormID, and OSF Identity handles discovery, validation, selection, and runtime display.
+
+[center][b]IMPORTANT: OSF Identity is the framework. It does not include appearance packs and will not visibly change an NPC by itself.[/b][/center]
+
+Install one or more compatible appearance packs alongside it. Remove or replace a pack, fully restart the game, and the next valid appearance is selected—or the NPC uses its original appearance when none remains.
+
+[list]
+[*][b]No patch plugin[/b] — packs are loose [font=Courier New].npc[/font] files; authors do not need to edit the target plugin.[/*]
+[*][b]Nothing baked into the save[/b] — the canonical NPC record is not mutated and OSF Identity does not serialize the selected appearance.[/*]
+[*][b]Stable targets[/b] — packs identify NPCs by owning plugin plus plugin-local FormID, independent of runtime load-order indexes.[/*]
+[*][b]Deterministic conflicts[/b] — when several valid packs target the same NPC, the alphabetically earliest pack folder wins.[/*]
+[*][b]Fail-closed validation[/b] — an invalid or incompatible preset is skipped; the runtime falls back to another valid pack or vanilla appearance.[/*]
+[/list]
+
+[line]
+
+[center][img]{{SECTION_02_HOW_IT_WORKS_IMAGE_URL}}[/img][/center]
+
+At startup, OSF Identity scans:
+
+[font=Courier New]Data/SFSE/Plugins/OSFIdentity/Packs/[/font]
+
+It resolves every target against the loaded game, validates the exported preset and its referenced forms, and selects one valid assignment for each NPC base. When that actor's 3D is built, OSF Identity prepares a detached engine-owned render source and redirects the appearance builder to it. The actor's real base NPC remains canonical and unmodified.
+
+This boundary is intentional:
+
+[list]
+[*]Invalid packs do not partially apply.[/*]
+[*]Unsupported runtime hook sites refuse plugin load instead of patching unknown code.[/*]
+[*]A failed per-NPC preparation leaves that NPC vanilla for the session.[/*]
+[*]Published render sources remain alive for the process so asynchronous appearance work never reads freed data.[/*]
+[/list]
+
+[i]OSF Identity changes the appearance used for rendering. It does not change an NPC's identity, voice, AI, inventory, affinity, quests, or gameplay records.[/i]
+
+[line]
+
+[center][img]{{SECTION_03_INSTALL_IMAGE_URL}}[/img][/center]
+
+[size=4][b]Requirements[/b][/size]
+
+[list]
+[*]Starfield [b]Steam Edition[/b][/*]
+[*][url=https://sfse.silverlock.org/]Starfield Script Extender (SFSE)[/url][/*]
+[*][url=https://www.nexusmods.com/starfield/mods/3256]Address Library for SFSE Plugins[/url][/*]
+[*]At least one OSF Identity appearance pack if you want a visible change[/*]
+[/list]
+
+[size=4][b]Installation[/b][/size]
+
+[list=1]
+[*]Install SFSE and Address Library.[/*]
+[*]Install the OSF Identity release archive with Mod Organizer 2 or Vortex and enable it.[/*]
+[*]Install one or more compatible OSF Identity appearance packs as separate mods.[/*]
+[*]Fully exit Starfield, then launch it through SFSE. Packs are scanned once per process at startup.[/*]
+[*]If needed, check [font=Courier New]Documents/My Games/Starfield/SFSE/Logs/OSF Identity.log[/font].[/*]
+[/list]
+
+[size=4][b]Updating, removing, or changing packs[/b][/size]
+
+Fully exit Starfield before changing the framework or any appearance pack. On the next launch, OSF Identity scans the folders again. With a pack removed, another valid pack can win; with no valid pack for that NPC, the original appearance is used. There is no appearance data to clean from the save.
+
+[line]
+
+[center][img]{{SECTION_04_APPEARANCE_PACKS_IMAGE_URL}}[/img][/center]
+
+Appearance packs use a filesystem-only layout:
+
+[font=Courier New]Data/SFSE/Plugins/OSFIdentity/Packs/
+  Sarah_Reimagined/              &lt;-- unique pack folder
+    Starfield.esm/               &lt;-- plugin that owns the NPC base
+      00005983.npc               &lt;-- plugin-local FormID[/font]
+
+For pack authors:
+
+[list=1]
+[*]Export a real [font=Courier New].npc[/font] preset with the Creation Kit or a compatible producer.[/*]
+[*]Find the target's [b]base NPC record[/b], its owning [font=Courier New].esm/.esp/.esl[/font], and its [b]plugin-local[/b] hexadecimal FormID.[/*]
+[*]Create [font=Courier New]Packs/&lt;YourPack&gt;/&lt;OwningPlugin&gt;/&lt;LocalFormID&gt;.npc[/font].[/*]
+[*]Keep the files loose and fully restart Starfield to test the pack.[/*]
+[/list]
+
+[b]Do not use[/b] a load-order-prefixed runtime FormID, an EditorID, or a placed actor reference. For example, Sarah Morgan's base target is [font=Courier New]Starfield.esm:00005983[/font], so her preset belongs at [font=Courier New]Starfield.esm/00005983.npc[/font].
+
+When several valid packs resolve to the same NPC, the [b]alphabetically earliest pack folder name wins[/b], compared case-insensitively first. Mod-manager priority does not choose the winner. The log names both the selected pack and anything it shadows.
+
+The complete authoring contract and examples are in the [url=https://github.com/ozooma10/OSF-Identity/blob/master/docs/AUTHOR_GUIDE.md]Appearance Pack Author Guide[/url].
+
+[line]
+
+[center][img]{{SECTION_05_COMPATIBILITY_IMAGE_URL}}[/img][/center]
+
+[list]
+[*][b]Supported targets:[/b] unique human NPC bases whose race and sex match the preset.[/*]
+[*][b]Complete appearances:[/b] a preset replaces the target's full supported face-and-body appearance. Independent appearance layers are not supported.[/*]
+[*][b]One appearance per NPC base:[/b] every loaded reference sharing that base uses the selected appearance; per-reference variation is not supported.[/*]
+[*][b]Loose files only:[/b] packs are not discovered from BA2 archives.[/*]
+[*][b]Startup scan:[/b] installing, removing, renaming, or editing a pack requires a full game restart.[/*]
+[*][b]Load order:[/b] plugin load order and mod-manager priority do not select conflicts; pack folder name does.[/*]
+[*][b]OSF family:[/b] OSF Identity is standalone. OSF UI and OSF Animation are not required.[/*]
+[/list]
+
+Presets that require a missing race, headpart, morph, color, AVM entry, or other referenced form are rejected with a concrete reason in the log. Race conversion, sex conversion, non-human targets, non-unique NPC bases, and hand-authored/fabricated preset payloads are not supported.
+
+[line]
+
+[center][img]{{SECTION_06_SUPPORT_CREDITS_IMAGE_URL}}[/img][/center]
+
+[size=4][b]Troubleshooting and bug reports[/b][/size]
+
+Start with:
+
+[font=Courier New]Documents/My Games/Starfield/SFSE/Logs/OSF Identity.log[/font]
+
+The startup scan reports the exact pack path and reason for anything it skips. For useful bug reports, include:
+
+[list]
+[*]Your Starfield, SFSE, Address Library, and OSF Identity versions.[/*]
+[*]The complete OSF Identity log from a fresh game launch.[/*]
+[*]The pack's folder tree and the target's owning plugin plus plugin-local FormID.[/*]
+[*]Whether the actor was already loaded, appeared after changing cells, or remained vanilla after re-entry.[/*]
+[/list]
+
+See the [url=https://github.com/ozooma10/OSF-Identity/blob/master/docs/TROUBLESHOOTING.md]Troubleshooting Guide[/url] or report a reproducible issue on [url=https://github.com/ozooma10/OSF-Identity/issues]GitHub[/url].
+
+[size=4][b]Source, permissions, and license[/b][/size]
+
+OSF Identity is [b]open source[/b] under GPL-3.0. Source, technical architecture, author documentation, and the issue tracker are available at [url=https://github.com/ozooma10/OSF-Identity]github.com/ozooma10/OSF-Identity[/url].
+
+[size=4][b]Credits[/b][/size]
+
+[list]
+[*][url=https://github.com/Starfield-Reverse-Engineering/CommonLibSF]CommonLibSF[/url] and its contributors[/*]
+[*][url=https://sfse.silverlock.org/]Starfield Script Extender[/url] team[/*]
+[*]Bethesda Game Studios for Starfield and the Creation Kit[/*]
+[/list]

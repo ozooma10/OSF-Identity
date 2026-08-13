@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1300 130" width="1300" height="130">
+  <defs><linearGradient id="title" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#bda7ed"/><stop offset="1" stop-color="#68439f"/></linearGradient></defs>
+  <path d="M24 38 h18 M24 38 v54 M24 92 h18" fill="none" stroke="#7765a8" stroke-width="2"/>
+  <path d="M11 17 h11 M11 17 v9 M11 113 h11 M11 113 v-9" fill="none" stroke="#443964" stroke-width="1.5"/>
+  <text x="66" y="42" fill="#9d86ca" font-family="Consolas,'Cascadia Mono',monospace" font-size="13" letter-spacing="4">OSF // ID.SEC.01</text>
+  <text x="64" y="100" fill="url(#title)" font-family="Bahnschrift,'DIN Alternate','Arial Narrow',sans-serif" font-weight="700" font-size="46" letter-spacing="2">OVERVIEW</text>
+  <line x1="66" y1="112" x2="1240" y2="112" stroke="#33424d" stroke-width="1"/>
+  <path d="M66 112v-8 M156 112v-8 M246 112v-8 M336 112v-8 M426 112v-8 M516 112v-8 M606 112v-8 M696 112v-8 M786 112v-8 M876 112v-8 M966 112v-8 M1056 112v-8 M1146 112v-8" stroke="#524572"/>
+  <line x1="84" y1="112" x2="1218" y2="112" stroke="#33424d" stroke-width="5" stroke-dasharray="1 17"/>
+</svg>

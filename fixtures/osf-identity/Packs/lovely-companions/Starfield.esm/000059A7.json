@@ -1,0 +1,277 @@
+{
+    "AdditionalSliders": {
+        "102": 0.10000000149011612,
+        "104": 0.10000000149011612,
+        "105": -0.10000000149011612,
+        "108": 0.10000000149011612,
+        "120": 0.10000001639127731,
+        "121": -0.10000000149011612,
+        "125": 0.5,
+        "128": -0.10000000149011612,
+        "25": 0.5,
+        "30": -0.5,
+        "34": -0.4999999403953552,
+        "35": 0.5,
+        "36": 1.0,
+        "38": 0.3999999761581421,
+        "40": 0.19999998807907104,
+        "43": -0.09999998658895493,
+        "45": 0.4999999701976776,
+        "47": -0.09999995678663254,
+        "48": -0.09999995678663254,
+        "49": -1.0,
+        "51": -0.699999988079071,
+        "52": -1.3411044719191523e-08,
+        "53": -0.10000000149011612,
+        "54": 0.4999999403953552,
+        "55": -0.29999998211860657,
+        "59": -0.29999998211860657,
+        "61": 1.0,
+        "62": -0.5999999642372131,
+        "63": -1.0,
+        "65": 1.0,
+        "67": 1.0,
+        "69": -1.0,
+        "70": -0.7999999523162842,
+        "72": -1.0,
+        "73": -0.10000000149011612,
+        "75": 0.699999988079071,
+        "77": 0.5,
+        "78": -0.699999988079071,
+        "79": -1.0,
+        "92": -0.20000000298023224,
+        "93": -0.10000000149011612,
+        "94": 0.10000000149011612,
+        "95": -0.10000000149011612,
+        "97": 0.10000000149011612
+    },
+    "BodyMorphRegionValues": [
+        0.0,
+        0.20999999344348907,
+        0.0,
+        0.0,
+        0.0
+    ],
+    "Dependencies": [
+        "Starfield_Hair+Beards_Z.esm",
+        "Starfield.esm"
+    ],
+    "EyeColor": "Brown",
+    "EyebrowColor": "Black",
+    "FacialHairColor": "",
+    "Gender": "Female",
+    "HairColor": "Black",
+    "HeadPartData": [
+        {
+            "Color": {
+                "a": 0,
+                "b": 0,
+                "g": 0,
+                "r": 0
+            },
+            "Group": "Dermaesthetic",
+            "Intensity": 0.5,
+            "Name": "European_Female_yo1_Sk1",
+            "Texture": "textures/actors/human/faces/chargen/postblenddetails/dermaesthetic/female_eu_yo1_sk1_derm_color.dds",
+            "Type": 1,
+            "unk04": 637
+        },
+        {
+            "Color": {
+                "a": 160,
+                "b": 32,
+                "g": 35,
+                "r": 146
+            },
+            "Group": "ComplexionMask1",
+            "Intensity": 0.0625,
+            "Name": "Blemishes_Forehead",
+            "Texture": "textures/actors/human/faces/chargen/postblenddetails/complexion/blemishes_forehead_mask.dds",
+            "Type": 1,
+            "unk04": 0
+        },
+        {
+            "Color": {
+                "a": 0,
+                "b": 0,
+                "g": 0,
+                "r": 0
+            },
+            "Group": "Complexion1",
+            "Intensity": 0.09375,
+            "Name": "Color_Temperature_Warm",
+            "Texture": "textures/actors/human/faces/chargen/postblenddetails/complexion/complexion_colortemperature_warm_color.dds",
+            "Type": 1,
+            "unk04": 0
+        },
+        {
+            "Color": {
+                "a": 0,
+                "b": 0,
+                "g": 0,
+                "r": 0
+            },
+            "Group": "ComplexionMask2",
+            "Intensity": 0.5,
+            "Name": "moles_Many_Small_02",
+            "Texture": "textures/actors/human/faces/chargen/postblenddetails/complexion/moles_many_small_02_mask.dds",
+            "Type": 1,
+            "unk04": 4294967295
+        },
+        {
+            "Color": {
+                "a": 255,
+                "b": 62,
+                "g": 82,
+                "r": 141
+            },
+            "Group": "Cheeks1",
+            "Intensity": 0.2421875,
+            "Name": "Blush_Sides",
+            "Texture": "textures/actors/human/faces/chargen/postblenddetails/cheeks1/testblush03_mask.dds",
+            "Type": 1,
+            "unk04": 0
+        },
+        {
+            "Color": {
+                "a": 255,
+                "b": 82,
+                "g": 108,
+                "r": 186
+            },
+            "Group": "Cheeks2",
+            "Intensity": 0.2421875,
+            "Name": "Blush_Inner_Contour",
+            "Texture": "textures/actors/human/faces/chargen/postblenddetails/cheeks2/testblush03_mask.dds",
+            "Type": 1,
+            "unk04": 0
+        },
+        {
+            "Color": {
+                "a": 255,
+                "b": 30,
+                "g": 20,
+                "r": 77
+            },
+            "Group": "Lipstick1",
+            "Intensity": 0.2421875,
+            "Name": "Lipstick_Standard",
+            "Texture": "textures/actors/human/faces/chargen/postblenddetails/lipstick1/testlipstick01_mask.dds",
+            "Type": 1,
+            "unk04": 0
+        },
+        {
+            "Color": {
+                "a": 255,
+                "b": 11,
+                "g": 11,
+                "r": 11
+            },
+            "Group": "Eyeshadow1",
+            "Intensity": 0.5,
+            "Name": "StrongEyeshadow_Upper",
+            "Texture": "textures/actors/human/faces/chargen/postblenddetails/eyeshadow1/strongeyeshadow_upper_mask.dds",
+            "Type": 1,
+            "unk04": 0
+        },
+        {
+            "Color": {
+                "a": 255,
+                "b": 82,
+                "g": 108,
+                "r": 186
+            },
+            "Group": "Eyeshadow2",
+            "Intensity": 0.5,
+            "Name": "EyeShadow_Lower_02",
+            "Texture": "textures/actors/human/faces/chargen/postblenddetails/eyeshadow2/testeyeshadowlower02_mask.dds",
+            "Type": 1,
+            "unk04": 0
+        },
+        {
+            "Color": {
+                "a": 255,
+                "b": 11,
+                "g": 11,
+                "r": 11
+            },
+            "Group": "Eyeliner1",
+            "Intensity": 1.0,
+            "Name": "EyeLinerNeon_Upper",
+            "Texture": "textures/actors/human/faces/chargen/postblenddetails/eyeliner1/eyelinerneon_upper_mask.dds",
+            "Type": 1,
+            "unk04": 0
+        },
+        {
+            "Color": {
+                "a": 255,
+                "b": 11,
+                "g": 11,
+                "r": 11
+            },
+            "Group": "Eyeliner2",
+            "Intensity": 1.0,
+            "Name": "EyeLinerConservative_Lower",
+            "Texture": "textures/actors/human/faces/chargen/postblenddetails/eyeliner2/eyelinerconservative_lower_mask.dds",
+            "Type": 1,
+            "unk04": 743
+        }
+    ],
+    "HeadParts": [
+        "Starfield_Hair+Beards_Z.esm|868",
+        "Starfield.esm|317AE",
+        "Starfield.esm|317AF",
+        "Starfield.esm|12203",
+        "Starfield.esm|3BE58F",
+        "Starfield.esm|3A289B",
+        "Starfield.esm|12202",
+        "Starfield.esm|640B8",
+        "Starfield.esm|12201",
+        "Starfield.esm|78273"
+    ],
+    "JewelryColor": "",
+    "Morphs": {
+        "1": {
+            "Chin": 0.2199999988079071,
+            "Eyes": 0.6100000143051147,
+            "Forehead": 0.18000000715255737,
+            "Nose": 0.1899999976158142
+        },
+        "19": {
+            "Cheeks": 1.0,
+            "Chin": 0.7799999713897705,
+            "Ears": 1.0,
+            "Eyes": 0.38999998569488525,
+            "Forehead": 0.7400000095367432,
+            "Jaw": 1.0,
+            "Mouth": 1.0,
+            "Neck": 1.0,
+            "Nose": 0.8100000023841858
+        }
+    },
+    "Name": "Octavia",
+    "Pronoun": 2,
+    "Race": "Starfield.esm|347D",
+    "ShapeBlendData": {
+        "female_af_yo1_Cheeks": 0.5,
+        "female_af_yo1_Chin": 0.5,
+        "female_af_yo1_Mouth": 0.5,
+        "female_as_md1_Chin": 0.5,
+        "female_as_md1_Ears": 0.75,
+        "female_as_md1_Nose": 0.25,
+        "female_as_ol1_Ears": 0.25,
+        "female_as_yo1_Mouth": 0.5,
+        "female_as_yo1_Nose": 0.25,
+        "female_eu_md2_Cheeks": 0.5,
+        "male_eu_yo1_Neck": 0.05000000074505806
+    },
+    "SkinTone": 2,
+    "Teeth": "",
+    "Version": 2,
+    "Weight": {
+        "Heavy": 0.0027707500848919153,
+        "Muscular": 0.0,
+        "Thin": 0.0005993153317831457
+    },
+    "unk470": ""
+}

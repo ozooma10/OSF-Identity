@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="32 32 616 616" width="1024" height="1024" role="img" font-family="Bahnschrift, 'DIN Next', 'Oswald', 'Segoe UI Semibold', sans-serif">
+  <title>OSF Identity mission patch</title>
+  <desc>A circular OSF-family mission patch in orbital violet, with a biometric profile-contour emblem representing drop-in NPC appearances.</desc>
+  <defs>
+    <clipPath id="scene"><circle cx="340" cy="340" r="238"/></clipPath>
+    <path id="topArc" d="M116.61 221.22 A253 253 0 0 1 563.39 221.22" fill="none"/>
+    <path id="botArc" d="M111.03 483.08 A270 270 0 0 0 568.97 483.08" fill="none"/>
+  </defs>
+
+  <circle cx="340" cy="340" r="296" fill="#7654b5"/>
+  <circle cx="340" cy="340" r="289" fill="none" stroke="#41266f" stroke-width="3"/>
+  <circle cx="340" cy="340" r="283" fill="#0c1118"/>
+  <circle cx="340" cy="340" r="238" fill="#0a0d12"/>
+
+  <g clip-path="url(#scene)">
+    <g fill="#ece8f5">
+      <circle cx="168" cy="196" r="1.2" opacity="0.45"/><circle cx="200" cy="158" r="0.9" opacity="0.38"/>
+      <circle cx="512" cy="168" r="1.1" opacity="0.45"/><circle cx="486" cy="206" r="0.9" opacity="0.4"/>
+      <circle cx="150" cy="262" r="1" opacity="0.4"/><circle cx="540" cy="262" r="1.1" opacity="0.44"/>
+      <circle cx="498" cy="402" r="0.9" opacity="0.36"/><circle cx="178" cy="372" r="0.9" opacity="0.36"/>
+      <circle cx="158" cy="216" r="0.8" opacity="0.32"/><circle cx="524" cy="232" r="0.8" opacity="0.34"/>
+    </g>
+    <circle cx="340" cy="845" r="360" fill="#171525"/>
+    <circle cx="340" cy="845" r="360" fill="none" stroke="#7654b5" stroke-width="2.5" opacity="0.62"/>
+    <circle cx="340" cy="845" r="347" fill="none" stroke="#bda7ed" stroke-width="1" opacity="0.28"/>
+  </g>
+
+  <circle cx="340" cy="340" r="239" fill="none" stroke="#b9c0c9" stroke-opacity="0.20" stroke-width="1"/>
+  <g stroke="#b9c0c9" stroke-opacity="0.38" stroke-width="1.6" stroke-linecap="round">
+    <line x1="340" y1="98" x2="340" y2="104" transform="rotate(45 340 340)"/>
+    <line x1="340" y1="98" x2="340" y2="104" transform="rotate(135 340 340)"/>
+    <line x1="340" y1="98" x2="340" y2="104" transform="rotate(225 340 340)"/>
+    <line x1="340" y1="98" x2="340" y2="104" transform="rotate(315 340 340)"/>
+  </g>
+
+  <text font-size="15" letter-spacing="7" font-weight="600" text-anchor="middle" fill="#9aa3ad">
+    <textPath href="#topArc" startOffset="50%">EST · MMXXVI</textPath>
+  </text>
+  <text font-size="14.8" letter-spacing="3.2" font-weight="500" text-anchor="middle" fill="#aeb6bf">
+    <textPath href="#botArc" startOffset="50%">NPC APPEARANCE FRAMEWORK</textPath>
+  </text>
+
+  <text x="340" y="252" text-anchor="middle" font-size="74" letter-spacing="16" font-weight="700" fill="#cdd3da">OSF</text>
+  <g stroke="#7654b5" stroke-width="2.4" stroke-linecap="round">
+    <line x1="287" y1="270" x2="393" y2="270"/>
+    <line x1="287" y1="266" x2="287" y2="274"/><line x1="393" y1="266" x2="393" y2="274"/>
+  </g>
+  <text x="340" y="299" text-anchor="middle" font-size="25" letter-spacing="10" font-weight="650" fill="#9570d1">IDENTITY</text>
+
+  <!-- compact biometric profile emblem -->
+  <g transform="translate(212,267) scale(0.5)">
+    <g fill="none" stroke="#7052a8" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M222 128 C176 140 151 181 157 232 C162 282 185 316 222 334" stroke-width="5" stroke-opacity="0.3"/>
+      <path d="M290 128 C336 140 361 181 355 232 C350 282 327 316 290 334" stroke-width="5" stroke-opacity="0.3"/>
+    </g>
+    <g fill="none" stroke="#9570d1" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M256 108 C204 108 176 150 181 211 C186 273 212 312 256 330 C300 312 326 273 331 211 C336 150 308 108 256 108 Z" stroke-width="8"/>
+      <path d="M174 397 C184 354 214 327 256 327 C298 327 328 354 338 397" stroke-width="8"/>
+    </g>
+    <g fill="none" stroke="#7459a7" stroke-width="5" stroke-linecap="round">
+      <path d="M120 165 V94 H191"/><path d="M392 165 V94 H321"/>
+      <path d="M120 347 V418 H191"/><path d="M392 347 V418 H321"/>
+    </g>
+    <line x1="105" y1="229" x2="407" y2="229" stroke="#9570d1" stroke-width="8" stroke-linecap="round"/>
+    <g fill="#bda7ed"><path d="M105 216 L118 229 L105 242 L92 229 Z"/><path d="M407 216 L420 229 L407 242 L394 229 Z"/></g>
+    <g fill="none" stroke="#7052a8"><circle cx="256" cy="229" r="27" stroke-width="4" stroke-opacity="0.55"/><circle cx="256" cy="229" r="45" stroke-width="3" stroke-opacity="0.28"/></g>
+    <circle cx="256" cy="229" r="12" fill="#0b0e12" stroke="#bda7ed" stroke-width="5"/><circle cx="256" cy="229" r="4.5" fill="#eee8ff"/>
+  </g>
+
+  <g fill="#bda7ed">
+    <path d="M78 328 L81.1 336.9 L90 340 L81.1 343.1 L78 352 L74.9 343.1 L66 340 L74.9 336.9 Z"/>
+    <path d="M602 328 L605.1 336.9 L614 340 L605.1 343.1 L602 352 L598.9 343.1 L590 340 L598.9 336.9 Z"/>
+  </g>
+</svg>

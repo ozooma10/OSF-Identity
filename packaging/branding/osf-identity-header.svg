@@ -1,0 +1,40 @@
+<svg width="1600" height="520" viewBox="0 0 1600 520" role="img" xmlns="http://www.w3.org/2000/svg" font-family="Bahnschrift, 'DIN Next', 'Oswald', 'Segoe UI Semibold', sans-serif">
+  <title>OSF Identity header banner</title>
+  <desc>A wide NASA-punk OSF-family banner with the violet Identity mission patch, brushed-steel wordmark, and NPC Appearance Framework tagline.</desc>
+  <defs>
+    <linearGradient id="steel" x1="0" y1="190" x2="0" y2="290" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#d4dae1"/><stop offset="1" stop-color="#828a93"/></linearGradient>
+    <linearGradient id="identity" x1="800" y1="200" x2="1500" y2="290" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#bda7ed"/><stop offset="0.52" stop-color="#9570d1"/><stop offset="1" stop-color="#68439f"/></linearGradient>
+    <radialGradient id="halo" cx="19%" cy="52%" r="40%"><stop offset="0" stop-color="#7654b5" stop-opacity="0.18"/><stop offset="1" stop-color="#7654b5" stop-opacity="0"/></radialGradient>
+    <radialGradient id="vig" cx="50%" cy="45%" r="75%"><stop offset="0.58" stop-color="#0b0e12" stop-opacity="0"/><stop offset="1" stop-color="#04060a" stop-opacity="0.68"/></radialGradient>
+  </defs>
+
+  <rect width="1600" height="520" fill="#0b0e12"/>
+  <rect width="1600" height="520" fill="url(#halo)"/>
+  <circle cx="800" cy="1320" r="860" fill="#14121f"/>
+  <circle cx="800" cy="1320" r="860" fill="none" stroke="#7654b5" stroke-width="2.5" opacity="0.36"/>
+  <g fill="#e8e5f0">
+    <circle cx="700" cy="70" r="1.2" opacity="0.5"/><circle cx="900" cy="48" r="0.9" opacity="0.4"/>
+    <circle cx="1080" cy="92" r="1.1" opacity="0.45"/><circle cx="1280" cy="60" r="1" opacity="0.42"/>
+    <circle cx="1440" cy="110" r="1.2" opacity="0.5"/><circle cx="1180" cy="150" r="0.8" opacity="0.35"/>
+    <circle cx="1520" cy="210" r="0.9" opacity="0.4"/><circle cx="760" cy="120" r="0.8" opacity="0.34"/>
+    <circle cx="990" cy="420" r="0.9" opacity="0.38"/><circle cx="1350" cy="400" r="0.8" opacity="0.34"/>
+    <circle cx="1230" cy="450" r="1" opacity="0.4"/><circle cx="1470" cy="330" r="0.9" opacity="0.36"/>
+  </g>
+  <g fill="none" stroke="#7765a8" stroke-opacity="0.34" stroke-width="1.4">
+    <path d="M44 78 V44 H78"/><path d="M1556 78 V44 H1522"/>
+    <path d="M44 442 V476 H78"/><path d="M1556 442 V476 H1522"/>
+  </g>
+
+  <!-- Match the OSF family header grid: visible patch centre (300,260), diameter 420. -->
+  <image id="header-patch" href="osf-identity-patch-emblem.svg" x="81.5" y="41.5" width="437" height="437"/>
+
+  <!-- Wordmark, rule, and subtitle share the same 1048px optical centre. -->
+  <text id="header-wordmark" x="1047.15" y="270" text-anchor="middle" font-size="102" font-weight="700" letter-spacing="2"><tspan fill="url(#steel)">OSF </tspan><tspan fill="url(#identity)">IDENTITY</tspan></text>
+  <g id="header-rule" stroke="#7654b5" stroke-opacity="0.62" stroke-width="2" stroke-linecap="round">
+    <line x1="635" y1="299" x2="1461" y2="299"/>
+    <line x1="635" y1="293" x2="635" y2="305"/><line x1="1461" y1="293" x2="1461" y2="305"/>
+  </g>
+  <text id="header-subtitle" x="1048" y="338" font-size="25" letter-spacing="5.5" font-weight="500" fill="#aeb6bf" text-anchor="middle">NPC APPEARANCE FRAMEWORK</text>
+
+  <rect width="1600" height="520" fill="url(#vig)"/>
+</svg>
