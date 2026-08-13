@@ -6,6 +6,7 @@
 namespace Runtime
 {
     struct FaceTextureComposite;
+    struct RenderSourceStructureState;
 
     using AssignmentMap = Config::PreparedAssignmentMap;
 
@@ -38,6 +39,7 @@ namespace Runtime
             RE::TESFormID configuredBaseID{0};
             std::unordered_set<RE::TESFormID> waitingRefs;
             FaceTextureComposite *faceTextureComposite{nullptr};
+            std::shared_ptr<const RenderSourceStructureState> renderSourceStructure;
             std::chrono::steady_clock::time_point compositionStarted{};
             bool publicationBarrierArmed{false};
             BaseStatus status{BaseStatus::kDormant};
@@ -58,6 +60,7 @@ namespace Runtime
         void RefreshVanillaAfterIdentityMismatch(RE::TESFormID baseID);
         void RequeueVanillaRefresh(RE::TESFormID baseID);
         void DisableBaseBeforePublication(RE::TESFormID baseID);
+        bool ValidateRenderSourceForActivation(RE::TESFormID baseID, RE::TESNPC *source);
         std::vector<RE::TESFormID> CompletePublication(RE::TESFormID baseID, const std::shared_ptr<const Config::PreparedAssignment> &assignment, RE::TESNPC *canonical, RE::TESNPC *source);
         void ReleasePreparationOwner(RE::TESFormID baseID);
         void UpdatePendingWorkFlagLocked();

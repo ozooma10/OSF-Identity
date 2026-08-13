@@ -10,6 +10,12 @@ namespace Runtime
     {
         using Util::SafeText;
 
+        constexpr std::size_t kMaxRootHeadParts = 64;
+        constexpr std::size_t kMaxHeadPartCapacity = 256;
+        constexpr std::size_t kMaxExtraPartsPerHeadPart = 64;
+        constexpr std::size_t kMaxExtraPartCapacity = 256;
+        constexpr std::size_t kMaxReachableHeadParts = 256;
+
         [[nodiscard]] bool IndependentStorage(
             const std::size_t a_count,
             const void* a_sourceStorage,
@@ -84,6 +90,121 @@ namespace Runtime
             .faceNPC = a_npc->faceNPC,
             .actorFlags = a_npc->actorData.actorBaseFlags.underlying(),
         };
+    }
+
+    std::optional<RenderSourceStructureState> CaptureRenderSourceStructure(RE::TESNPC* a_source) noexcept
+    {
+        if (!a_source || a_source->GetFormID() != 0)
+        {
+            REX::WARN("[NPCSnapshot] detached render-source structure rejected: source={} formID=0x{:08X}",
+                      static_cast<const void*>(a_source), a_source ? a_source->GetFormID() : 0);
+            return std::nullopt;
+        }
+
+        try
+        {
+            RenderSourceStructureState state;
+            state.source = a_source;
+            {
+                auto locked = a_source->headParts.Lock();
+                const auto count = static_cast<std::size_t>((*locked).size());
+                const auto capacity = static_cast<std::size_t>((*locked).capacity());
+                auto* storage = (*locked).data();
+                if (count > capacity || count > kMaxRootHeadParts || capacity > kMaxHeadPartCapacity || (count != 0 && !storage))
+                {
+                    REX::WARN("[NPCSnapshot] detached render-source head-part array rejected: count={} capacity={} storage={}",
+                              count, capacity, static_cast<const void*>(storage));
+                    return std::nullopt;
+                }
+                state.headPartStorage = storage;
+                state.headPartCapacity = capacity;
+                if (count != 0)
+                {
+                    state.headParts.assign((*locked).begin(), (*locked).end());
+                }
+            }
+
+            std::vector<RE::BGSHeadPart*> pending = state.headParts;
+            for (std::size_t cursor = 0; cursor < pending.size(); ++cursor)
+            {
+                auto* headPart = pending[cursor];
+                if (!headPart)
+                {
+                    REX::WARN("[NPCSnapshot] detached render-source head-part graph rejected: null node at traversal index={}", cursor);
+                    return std::nullopt;
+                }
+                if (std::ranges::find_if(state.headPartGraph, [headPart](const HeadPartGraphNodeState& a_node)
+                                         { return a_node.headPart == headPart; }) != state.headPartGraph.end())
+                {
+                    continue;
+                }
+                if (state.headPartGraph.size() >= kMaxReachableHeadParts)
+                {
+                    REX::WARN("[NPCSnapshot] detached render-source head-part graph rejected: reachable-node limit={} exceeded", kMaxReachableHeadParts);
+                    return std::nullopt;
+                }
+
+                const auto formID = headPart->GetFormID();
+                const auto type = static_cast<std::uint32_t>(headPart->type.get());
+                if (formID == 0 || RE::TESForm::LookupByID<RE::BGSHeadPart>(formID) != headPart ||
+                    type > static_cast<std::uint32_t>(RE::BGSHeadPart::HeadPartType::kCreatureWings))
+                {
+                    REX::WARN("[NPCSnapshot] detached render-source head-part graph rejected: node={} formID=0x{:08X} type={} registered={}",
+                              static_cast<const void*>(headPart), formID, type,
+                              formID != 0 && RE::TESForm::LookupByID<RE::BGSHeadPart>(formID) == headPart);
+                    return std::nullopt;
+                }
+
+                const auto count = static_cast<std::size_t>(headPart->extraParts.size());
+                const auto capacity = static_cast<std::size_t>(headPart->extraParts.capacity());
+                auto* storage = headPart->extraParts.data();
+                if (count > capacity || count > kMaxExtraPartsPerHeadPart || capacity > kMaxExtraPartCapacity || (count != 0 && !storage))
+                {
+                    REX::WARN("[NPCSnapshot] detached render-source extra-part array rejected: headPart=0x{:08X} count={} capacity={} storage={}",
+                              formID, count, capacity, static_cast<const void*>(storage));
+                    return std::nullopt;
+                }
+
+                HeadPartGraphNodeState node{
+                    .headPart = headPart,
+                    .formID = formID,
+                    .type = type,
+                    .extraPartStorage = storage,
+                    .extraPartCapacity = capacity,
+                };
+                if (count != 0)
+                {
+                    node.extraParts.assign(headPart->extraParts.begin(), headPart->extraParts.end());
+                }
+                pending.insert(pending.end(), node.extraParts.begin(), node.extraParts.end());
+                if (pending.size() > kMaxReachableHeadParts + kMaxExtraPartsPerHeadPart)
+                {
+                    REX::WARN("[NPCSnapshot] detached render-source head-part graph rejected: traversal edge limit exceeded");
+                    return std::nullopt;
+                }
+                state.headPartGraph.push_back(std::move(node));
+            }
+            return state;
+        }
+        catch (const std::exception& error)
+        {
+            REX::ERROR("[NPCSnapshot] detached render-source structure capture threw: {}", error.what());
+        }
+        catch (...)
+        {
+            REX::ERROR("[NPCSnapshot] detached render-source structure capture threw an unknown exception");
+        }
+        return std::nullopt;
+    }
+
+    bool MatchesRenderSourceStructure(RE::TESNPC* a_source, const RenderSourceStructureState& a_expected) noexcept
+    {
+        if (!a_source || a_expected.source != a_source)
+        {
+            return false;
+        }
+        const auto actual = CaptureRenderSourceStructure(a_source);
+        return actual && *actual == a_expected;
     }
 
     bool HasIndependentVisualStorage(

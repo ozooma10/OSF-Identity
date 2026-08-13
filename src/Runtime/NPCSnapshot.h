@@ -3,7 +3,9 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
+#include <vector>
 
 namespace Runtime
 {
@@ -60,9 +62,38 @@ namespace Runtime
         bool operator==(const OriginalNPCState&) const = default;
     };
 
+    struct HeadPartGraphNodeState
+    {
+        RE::BGSHeadPart*              headPart{ nullptr };
+        RE::TESFormID                 formID{ 0 };
+        std::uint32_t                 type{ 0 };
+        const void*                   extraPartStorage{ nullptr };
+        std::size_t                   extraPartCapacity{ 0 };
+        std::vector<RE::BGSHeadPart*> extraParts;
+
+        bool operator==(const HeadPartGraphNodeState&) const = default;
+    };
+
+    // Exact process-lifetime structure expected by FaceDB after a detached source is frozen.
+    // Refcount is deliberately excluded because transient engine owners may change it.
+    struct RenderSourceStructureState
+    {
+        RE::TESNPC*                       source{ nullptr };
+        const void*                       headPartStorage{ nullptr };
+        std::size_t                       headPartCapacity{ 0 };
+        std::vector<RE::BGSHeadPart*>     headParts;
+        std::vector<HeadPartGraphNodeState> headPartGraph;
+
+        bool operator==(const RenderSourceStructureState&) const = default;
+    };
+
     NonVisualState CaptureNonVisualState(RE::TESNPC* a_npc);
     VisualStorageState CaptureVisualStorageState(RE::TESNPC* a_npc);
     OriginalNPCState CaptureOriginalNPCState(RE::TESNPC* a_npc);
+
+    // Validates that every reachable head part is a registered form and captures the exact root/extra-part graph without retaining ownership of global head-part forms.
+    [[nodiscard]] std::optional<RenderSourceStructureState> CaptureRenderSourceStructure(RE::TESNPC* a_source) noexcept;
+    [[nodiscard]] bool MatchesRenderSourceStructure(RE::TESNPC* a_source, const RenderSourceStructureState& a_expected) noexcept;
 
     bool HasIndependentVisualStorage(const VisualStorageState& a_source, const VisualStorageState& a_donor);
 

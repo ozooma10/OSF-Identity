@@ -446,6 +446,16 @@ namespace Runtime
                 return;
             }
 
+            const auto capturedStructure = CaptureRenderSourceStructure(source);
+            if (!capturedStructure)
+            {
+                DestroyUnpublishedRenderSource(source);
+                DisableBaseBeforePublication(baseID);
+                REX::WARN("[OverlayRuntime] detached render source failed structural validation for base=0x{:08X}; rendering vanilla and disabling that base", baseID);
+                return;
+            }
+            const auto preparedStructure = std::make_shared<const RenderSourceStructureState>(std::move(*capturedStructure));
+
             if (NeedsFaceTextureComposite(source))
             {
                 composite = CreateFaceTextureComposite();
@@ -479,8 +489,35 @@ namespace Runtime
             if (!published.adopted)
             {
                 DestroyUnpublishedRenderSource(source);
+                KillRuntime("single-flight publication unexpectedly found an existing render source");
+                return;
             }
             source = published.source;
+
+            bool invalidStructurePublication = false;
+            {
+                const std::scoped_lock lock{m_stateMutex};
+                const auto found = m_bases.find(baseID);
+                if (m_preparationOwnerBaseID != baseID || found == m_bases.end() || found->second.status != BaseStatus::kQueued ||
+                    found->second.assignment != assignment || found->second.renderSourceStructure)
+                {
+                    invalidStructurePublication = true;
+                }
+                else
+                {
+                    found->second.renderSourceStructure = preparedStructure;
+                }
+            }
+            if (invalidStructurePublication)
+            {
+                KillRuntime("render-source structure publication crossed an invalid base-state transition");
+                return;
+            }
+        }
+        else if (!ValidateRenderSourceForActivation(baseID, source))
+        {
+            KillRuntime("staged render-source structure was invalid before preparation resumed");
+            return;
         }
 
         if (NeedsFaceTextureComposite(source))
@@ -529,6 +566,11 @@ namespace Runtime
             return;
         }
 
+        if (!ValidateRenderSourceForActivation(baseID, source))
+        {
+            KillRuntime("a textureless render source changed after structural publication");
+            return;
+        }
         if (!ActivateRenderSource(target, source))
         {
             KillRuntime("a textureless render source could not be activated after staged publication");
@@ -807,6 +849,11 @@ namespace Runtime
             RequeueCompositeActivation(baseID);
             return;
         }
+        if (!ValidateRenderSourceForActivation(baseID, source))
+        {
+            KillRuntime("a render source changed during face-texture composition");
+            return;
+        }
         if (!ActivateRenderSource(target, source))
         {
             KillRuntime("a render source could not be activated after the face-texture publication barrier");
@@ -981,6 +1028,37 @@ namespace Runtime
         {
             REX::DEBUG("[OverlayRuntime] single-flight preparation ownership released after disabling base=0x{:08X}", baseID);
         }
+    }
+
+    bool OverlayRuntime::ValidateRenderSourceForActivation(const RE::TESFormID baseID, RE::TESNPC *source)
+    {
+        std::shared_ptr<const RenderSourceStructureState> expected;
+        {
+            const std::scoped_lock lock{m_stateMutex};
+            const auto found = m_bases.find(baseID);
+            if (found != m_bases.end())
+            {
+                expected = found->second.renderSourceStructure;
+            }
+        }
+
+        if (!source || !expected || expected->source != source || source->GetFormID() != 0 || source->QRefCount() == 0)
+        {
+            REX::CRITICAL("[OverlayRuntime] detached render-source activation invariant failed: base=0x{:08X} source={} snapshot={} formID=0x{:08X} references={}",
+                          baseID,
+                          static_cast<const void*>(source),
+                          static_cast<bool>(expected),
+                          source ? source->GetFormID() : 0,
+                          source ? source->QRefCount() : 0);
+            return false;
+        }
+        if (!MatchesRenderSourceStructure(source, *expected))
+        {
+            REX::CRITICAL("[OverlayRuntime] detached render-source structure changed before activation: base=0x{:08X} source={}",
+                          baseID, static_cast<const void*>(source));
+            return false;
+        }
+        return true;
     }
 
     std::vector<RE::TESFormID> OverlayRuntime::CompletePublication(

@@ -194,6 +194,12 @@ namespace Runtime
             return {};
         }
 
+        if (a_source->GetFormID() != 0 || a_source->QRefCount() != 0) {
+            REX::CRITICAL("[RenderSourceRegistry] source must be unregistered and unreferenced before publication (source={} formID=0x{:08X} references={})",
+                          static_cast<const void*>(a_source), a_source->GetFormID(), a_source->QRefCount());
+            return {};
+        }
+
         const auto formID = a_canonical->GetFormID();
         if (formID == 0) {
             return {};
@@ -243,6 +249,9 @@ namespace Runtime
             REX::CRITICAL("[RenderSourceRegistry] render-source pointer index is full (capacity={})", kRegistryCapacity);
             return {};
         }
+
+        // Get ownership reference so hopefully a_source doesnt get destroyed when ownship transfered to engine.
+        a_source->IncRefCount();
 
         publishSlot->source.store(a_source, std::memory_order_relaxed);
         publishSlot->active.store(0, std::memory_order_relaxed);
