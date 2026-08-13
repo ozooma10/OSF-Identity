@@ -1,7 +1,8 @@
-# Appearance Pack Author Guide
+# NPC Appearance Replacer Pack Authoring Guide
 
-OSF Identity uses a filesystem-only pack format. A pack is just a folder of
-`.npc` presets arranged by target plugin and plugin-local FormID.
+OSF Identity uses a filesystem pack format. A pack is just a folder of `.npc` or `.json` presets arranged by target plugin and plugin-local FormID.
+
+both `.npc` and `.json` CK/chargen presets are accepted.
 
 ## Pack layout
 
