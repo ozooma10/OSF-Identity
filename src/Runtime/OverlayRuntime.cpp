@@ -123,7 +123,7 @@ namespace Runtime
             REX::WARN( "[OverlayRuntime] prepared assignment no longer matches base=0x{:08X}; overlay disabled for that base", baseID);
             return false;
         }
-        if (!target->bodyMorphValues || target->bodyMorphValues->size() != assignment.preset.bodyMorphRegionValues.size()) {
+        if (!assignment.preset.bodyMorphRegionValues.empty() && (!target->bodyMorphValues || target->bodyMorphValues->size() != assignment.preset.bodyMorphRegionValues.size())) {
             DisableBase(baseID);
             REX::WARN("[OverlayRuntime] base=0x{:08X} does not have the expected body-morph storage; detached render source was not created", baseID);
             return false;
