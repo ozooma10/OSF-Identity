@@ -274,20 +274,6 @@ namespace Config
                     continue;
                 }
 
-                // The skin-tone value catalog only exists for chargen-authorable layers (those with a bare SimpleGroup_/Chargen_ AVMD). 
-                // Complex-group layers such as Accents1 have no catalog yet are valid on NPC records, so an empty catalog is advisory; 
-                RE::BSScrapArray<RE::BSFixedString> values;
-                RE::BSFaceDB::GetLayerValues(a_preset.skinTone, category, true, values);
-                if (!values.empty()) {
-                    const auto valueFound = std::ranges::any_of(values, [&](const RE::BSFixedString& a_value) {
-                        return a_value == std::string_view{ layer.value };
-                    });
-                    if (!valueFound) {
-                        ok = false;
-                        AddIssue(a_result, "PostBlendFaceCustomization.LayersA.Value", layer.value, "avm_value_not_found", std::format("value is absent from layer '{}' for skin tone {}", layer.name, a_preset.skinTone));
-                    }
-                }
-
                 if (!ResolveAvmModulation(a_result, layer, category)) {
                     ok = false;
                 }
@@ -359,8 +345,7 @@ namespace Config
                     return;
                 }
                 if (!a_part) {
-                    ok = false;
-                    AddIssue(a_result, std::string{ a_field }, a_atom, "color_headpart_unresolved", "the color-bearing headpart did not resolve");
+                    // Producer exports can retain a color for an absent optional headpart. The value is inert once that slot is removed; an explicitly requested headpart that failed resolution is already fatal through its headpart issue.
                     return;
                 }
                 RE::BSFixedString candidate{ a_atom };
