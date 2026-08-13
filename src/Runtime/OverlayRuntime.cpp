@@ -243,46 +243,62 @@ namespace Runtime
         bool pollComposite = false;
         bool pollActivation = false;
         bool refreshVanilla = false;
+        bool invalidOwner = false;
         {
             const std::scoped_lock lock{m_stateMutex};
-            for (const auto &[candidateID, state] : m_bases)
+            if (m_preparationOwnerBaseID != 0)
             {
-                if (state.status == BaseStatus::kVanillaRefreshPending)
+                const auto found = m_bases.find(m_preparationOwnerBaseID);
+                if (found == m_bases.end())
                 {
-                    baseID = candidateID;
-                    refreshVanilla = true;
-                    break;
+                    invalidOwner = true;
                 }
-            }
-            for (const auto &[candidateID, state] : m_bases)
-            {
-                if (baseID == 0 && state.status == BaseStatus::kPending)
+                else
                 {
-                    baseID = candidateID;
-                    break;
-                }
-            }
-            if (baseID == 0)
-            {
-                for (const auto &[candidateID, state] : m_bases)
-                {
-                    if (state.status == BaseStatus::kCompositePending)
+                    const auto &state = found->second;
+                    switch (state.status)
                     {
-                        baseID = candidateID;
+                    case BaseStatus::kPending:
+                        baseID = m_preparationOwnerBaseID;
+                        break;
+                    case BaseStatus::kCompositePending:
+                        baseID = m_preparationOwnerBaseID;
                         pollComposite = true;
+                        break;
+                    case BaseStatus::kCompositeFinalized:
+                        baseID = m_preparationOwnerBaseID;
+                        pollActivation = true;
+                        break;
+                    case BaseStatus::kQueued:
+                    case BaseStatus::kCompositeQueued:
+                    case BaseStatus::kCompositeActivationQueued:
+                        break;
+                    default:
+                        invalidOwner = true;
                         break;
                     }
                 }
             }
-            if (baseID == 0)
+            else
             {
                 for (const auto &[candidateID, state] : m_bases)
                 {
-                    if (state.status == BaseStatus::kCompositeFinalized)
+                    if (state.status == BaseStatus::kVanillaRefreshPending)
                     {
                         baseID = candidateID;
-                        pollActivation = true;
+                        refreshVanilla = true;
                         break;
+                    }
+                }
+                if (baseID == 0)
+                {
+                    for (const auto &[candidateID, state] : m_bases)
+                    {
+                        if (state.status == BaseStatus::kPending)
+                        {
+                            baseID = candidateID;
+                            break;
+                        }
                     }
                 }
             }
@@ -290,6 +306,12 @@ namespace Runtime
             {
                 UpdatePendingWorkFlagLocked();
             }
+        }
+
+        if (invalidOwner)
+        {
+            KillRuntime("the single-flight preparation owner crossed an invalid base-state transition");
+            return;
         }
 
         if (baseID != 0)
@@ -316,6 +338,7 @@ namespace Runtime
     void OverlayRuntime::TryDispatchPendingBase(const RE::TESFormID baseID)
     {
         std::shared_ptr<const Config::PreparedAssignment> assignment;
+        bool acquiredOwner = false;
         {
             const std::scoped_lock lock{m_stateMutex};
             const auto found = m_bases.find(baseID);
@@ -323,9 +346,24 @@ namespace Runtime
             {
                 return;
             }
+            if (m_preparationOwnerBaseID != 0 && m_preparationOwnerBaseID != baseID)
+            {
+                UpdatePendingWorkFlagLocked();
+                return;
+            }
+            if (m_preparationOwnerBaseID == 0)
+            {
+                m_preparationOwnerBaseID = baseID;
+                acquiredOwner = true;
+            }
             found->second.status = BaseStatus::kQueued;
             assignment = found->second.assignment;
             UpdatePendingWorkFlagLocked();
+        }
+
+        if (acquiredOwner)
+        {
+            REX::DEBUG("[OverlayRuntime] single-flight preparation ownership acquired for base=0x{:08X}", baseID);
         }
 
         const auto result = Util::NativeMainThreadQueue::Post([this, baseID, assignment = std::move(assignment)]
@@ -373,6 +411,16 @@ namespace Runtime
         {
             DisableBaseBeforePublication(baseID);
             return;
+        }
+
+        {
+            const std::scoped_lock lock{m_stateMutex};
+            const auto found = m_bases.find(baseID);
+            if (m_preparationOwnerBaseID != baseID || found == m_bases.end() || found->second.status != BaseStatus::kQueued || found->second.assignment != assignment)
+            {
+                KillRuntime("render-source preparation started without single-flight ownership");
+                return;
+            }
         }
 
         auto *target = RE::TESForm::LookupByID<RE::TESNPC>(baseID);
@@ -458,7 +506,7 @@ namespace Runtime
             {
                 const std::scoped_lock lock{m_stateMutex};
                 const auto found = m_bases.find(baseID);
-                if (found == m_bases.end() || found->second.status != BaseStatus::kQueued || found->second.assignment != assignment || found->second.faceTextureComposite)
+                if (m_preparationOwnerBaseID != baseID || found == m_bases.end() || found->second.status != BaseStatus::kQueued || found->second.assignment != assignment || found->second.faceTextureComposite)
                 {
                     invalidTransition = true;
                 }
@@ -498,12 +546,17 @@ namespace Runtime
             }
             RefreshWaitingReference(target, source, refID, *assignment);
         }
+        if (IsRuntimeOperational())
+        {
+            ReleasePreparationOwner(baseID);
+        }
     }
 
     void OverlayRuntime::TryDispatchCompositePoll(const RE::TESFormID baseID)
     {
         std::shared_ptr<const Config::PreparedAssignment> assignment;
         FaceTextureComposite *composite = nullptr;
+        bool invalidOwner = false;
         {
             const std::scoped_lock lock{m_stateMutex};
             const auto found = m_bases.find(baseID);
@@ -511,10 +564,22 @@ namespace Runtime
             {
                 return;
             }
-            found->second.status = BaseStatus::kCompositeQueued;
-            assignment = found->second.assignment;
-            composite = found->second.faceTextureComposite;
+            if (m_preparationOwnerBaseID != baseID)
+            {
+                invalidOwner = true;
+            }
+            else
+            {
+                found->second.status = BaseStatus::kCompositeQueued;
+                assignment = found->second.assignment;
+                composite = found->second.faceTextureComposite;
+            }
             UpdatePendingWorkFlagLocked();
+        }
+        if (invalidOwner)
+        {
+            KillRuntime("face-texture polling was dispatched without single-flight ownership");
+            return;
         }
 
         const auto result = Util::NativeMainThreadQueue::Post([this, baseID, assignment = std::move(assignment), composite]
@@ -549,7 +614,7 @@ namespace Runtime
         {
             const std::scoped_lock lock{m_stateMutex};
             const auto found = m_bases.find(baseID);
-            if (found == m_bases.end() || found->second.status != BaseStatus::kCompositeQueued || found->second.assignment != assignment || found->second.faceTextureComposite != composite)
+            if (m_preparationOwnerBaseID != baseID || found == m_bases.end() || found->second.status != BaseStatus::kCompositeQueued || found->second.assignment != assignment || found->second.faceTextureComposite != composite)
             {
                 KillRuntime("face-texture readiness polling crossed an invalid base-state transition");
                 return;
@@ -578,7 +643,7 @@ namespace Runtime
         {
             const std::scoped_lock lock{m_stateMutex};
             const auto found = m_bases.find(baseID);
-            if (found == m_bases.end() || found->second.status != BaseStatus::kCompositeQueued || found->second.assignment != assignment || found->second.faceTextureComposite != composite)
+            if (m_preparationOwnerBaseID != baseID || found == m_bases.end() || found->second.status != BaseStatus::kCompositeQueued || found->second.assignment != assignment || found->second.faceTextureComposite != composite)
             {
                 invalidTransition = true;
             }
@@ -600,30 +665,59 @@ namespace Runtime
 
     void OverlayRuntime::RequeueBase(const RE::TESFormID baseID)
     {
-        const std::scoped_lock lock{m_stateMutex};
-        const auto found = m_bases.find(baseID);
-        if (found != m_bases.end() && found->second.status == BaseStatus::kQueued)
+        bool invalidOwner = false;
         {
-            found->second.status = BaseStatus::kPending;
+            const std::scoped_lock lock{m_stateMutex};
+            const auto found = m_bases.find(baseID);
+            if (found != m_bases.end() && found->second.status == BaseStatus::kQueued)
+            {
+                if (m_preparationOwnerBaseID != baseID)
+                {
+                    invalidOwner = true;
+                }
+                else
+                {
+                    found->second.status = BaseStatus::kPending;
+                }
+            }
+            UpdatePendingWorkFlagLocked();
         }
-        UpdatePendingWorkFlagLocked();
+        if (invalidOwner)
+        {
+            KillRuntime("render-source preparation was requeued without single-flight ownership");
+        }
     }
 
     void OverlayRuntime::RequeueComposite(const RE::TESFormID baseID)
     {
-        const std::scoped_lock lock{m_stateMutex};
-        const auto found = m_bases.find(baseID);
-        if (found != m_bases.end() && found->second.status == BaseStatus::kCompositeQueued)
+        bool invalidOwner = false;
         {
-            found->second.status = BaseStatus::kCompositePending;
+            const std::scoped_lock lock{m_stateMutex};
+            const auto found = m_bases.find(baseID);
+            if (found != m_bases.end() && found->second.status == BaseStatus::kCompositeQueued)
+            {
+                if (m_preparationOwnerBaseID != baseID)
+                {
+                    invalidOwner = true;
+                }
+                else
+                {
+                    found->second.status = BaseStatus::kCompositePending;
+                }
+            }
+            UpdatePendingWorkFlagLocked();
         }
-        UpdatePendingWorkFlagLocked();
+        if (invalidOwner)
+        {
+            KillRuntime("face-texture polling was requeued without single-flight ownership");
+        }
     }
 
     void OverlayRuntime::TryDispatchCompositeActivation(const RE::TESFormID baseID)
     {
         std::shared_ptr<const Config::PreparedAssignment> assignment;
         FaceTextureComposite *composite = nullptr;
+        bool invalidOwner = false;
         {
             const std::scoped_lock lock{m_stateMutex};
             const auto found = m_bases.find(baseID);
@@ -631,10 +725,22 @@ namespace Runtime
             {
                 return;
             }
-            found->second.status = BaseStatus::kCompositeActivationQueued;
-            assignment = found->second.assignment;
-            composite = found->second.faceTextureComposite;
+            if (m_preparationOwnerBaseID != baseID)
+            {
+                invalidOwner = true;
+            }
+            else
+            {
+                found->second.status = BaseStatus::kCompositeActivationQueued;
+                assignment = found->second.assignment;
+                composite = found->second.faceTextureComposite;
+            }
             UpdatePendingWorkFlagLocked();
+        }
+        if (invalidOwner)
+        {
+            KillRuntime("face-texture activation was dispatched without single-flight ownership");
+            return;
         }
 
         const auto result = Util::NativeMainThreadQueue::Post([this, baseID, assignment = std::move(assignment), composite]
@@ -670,7 +776,7 @@ namespace Runtime
         {
             const std::scoped_lock lock{m_stateMutex};
             const auto found = m_bases.find(baseID);
-            if (found == m_bases.end() || found->second.status != BaseStatus::kCompositeActivationQueued || found->second.assignment != assignment || found->second.faceTextureComposite != composite)
+            if (m_preparationOwnerBaseID != baseID || found == m_bases.end() || found->second.status != BaseStatus::kCompositeActivationQueued || found->second.assignment != assignment || found->second.faceTextureComposite != composite)
             {
                 KillRuntime("face-texture publication polling crossed an invalid base-state transition");
                 return;
@@ -719,17 +825,35 @@ namespace Runtime
             }
             RefreshWaitingReference(target, source, refID, *assignment);
         }
+        if (IsRuntimeOperational())
+        {
+            ReleasePreparationOwner(baseID);
+        }
     }
 
     void OverlayRuntime::RequeueCompositeActivation(const RE::TESFormID baseID)
     {
-        const std::scoped_lock lock{m_stateMutex};
-        const auto found = m_bases.find(baseID);
-        if (found != m_bases.end() && found->second.status == BaseStatus::kCompositeActivationQueued)
+        bool invalidOwner = false;
         {
-            found->second.status = BaseStatus::kCompositeFinalized;
+            const std::scoped_lock lock{m_stateMutex};
+            const auto found = m_bases.find(baseID);
+            if (found != m_bases.end() && found->second.status == BaseStatus::kCompositeActivationQueued)
+            {
+                if (m_preparationOwnerBaseID != baseID)
+                {
+                    invalidOwner = true;
+                }
+                else
+                {
+                    found->second.status = BaseStatus::kCompositeFinalized;
+                }
+            }
+            UpdatePendingWorkFlagLocked();
         }
-        UpdatePendingWorkFlagLocked();
+        if (invalidOwner)
+        {
+            KillRuntime("face-texture activation was requeued without single-flight ownership");
+        }
     }
 
     void OverlayRuntime::TryDispatchVanillaRefresh(const RE::TESFormID baseID)
@@ -739,6 +863,11 @@ namespace Runtime
             const auto found = m_bases.find(baseID);
             if (found == m_bases.end() || found->second.status != BaseStatus::kVanillaRefreshPending)
             {
+                return;
+            }
+            if (m_preparationOwnerBaseID != 0)
+            {
+                UpdatePendingWorkFlagLocked();
                 return;
             }
             found->second.status = BaseStatus::kVanillaRefreshQueued;
@@ -826,10 +955,11 @@ namespace Runtime
     void OverlayRuntime::DisableBaseBeforePublication(const RE::TESFormID baseID)
     {
         bool invalidTransition = false;
+        bool releasedOwner = false;
         {
             const std::scoped_lock lock{m_stateMutex};
             const auto found = m_bases.find(baseID);
-            if (found == m_bases.end() || found->second.status == BaseStatus::kReady)
+            if (m_preparationOwnerBaseID != baseID || found == m_bases.end() || found->second.status == BaseStatus::kReady)
             {
                 invalidTransition = true;
             }
@@ -838,12 +968,18 @@ namespace Runtime
                 found->second.status = BaseStatus::kDisabled;
                 found->second.waitingRefs.clear();
                 found->second.assignment.reset();
+                m_preparationOwnerBaseID = 0;
+                releasedOwner = true;
             }
             UpdatePendingWorkFlagLocked();
         }
         if (invalidTransition)
         {
             KillRuntime("pre-publication disablement crossed an invalid base-state transition");
+        }
+        else if (releasedOwner)
+        {
+            REX::DEBUG("[OverlayRuntime] single-flight preparation ownership released after disabling base=0x{:08X}", baseID);
         }
     }
 
@@ -859,7 +995,7 @@ namespace Runtime
             const std::scoped_lock lock{m_stateMutex};
             const auto found = m_bases.find(baseID);
             const auto expectedStatus = found != m_bases.end() && found->second.faceTextureComposite ? BaseStatus::kCompositeActivationQueued : BaseStatus::kQueued;
-            if (found == m_bases.end() || found->second.status != expectedStatus || found->second.assignment != assignment ||
+            if (m_preparationOwnerBaseID != baseID || found == m_bases.end() || found->second.status != expectedStatus || found->second.assignment != assignment ||
                 found->second.configuredBaseID != assignment->baseFormID ||
                 !canonical || !source || FindOwnedRenderSource(canonical) != source)
             {
@@ -882,12 +1018,48 @@ namespace Runtime
         return waitingRefs;
     }
 
+    void OverlayRuntime::ReleasePreparationOwner(const RE::TESFormID baseID)
+    {
+        bool invalidTransition = false;
+        {
+            const std::scoped_lock lock{m_stateMutex};
+            const auto found = m_bases.find(baseID);
+            if (m_preparationOwnerBaseID != baseID || found == m_bases.end() || found->second.status != BaseStatus::kReady)
+            {
+                invalidTransition = true;
+            }
+            else
+            {
+                m_preparationOwnerBaseID = 0;
+            }
+            UpdatePendingWorkFlagLocked();
+        }
+        if (invalidTransition)
+        {
+            KillRuntime("single-flight preparation ownership was released from an invalid base state");
+            return;
+        }
+
+        REX::DEBUG("[OverlayRuntime] single-flight preparation ownership released after activating base=0x{:08X}", baseID);
+    }
+
     void OverlayRuntime::UpdatePendingWorkFlagLocked()
     {
-        const auto hasPending = std::ranges::any_of(m_bases, [](const auto &entry)
-                                                    { return entry.second.status == BaseStatus::kPending || entry.second.status == BaseStatus::kCompositePending ||
-                                                             entry.second.status == BaseStatus::kVanillaRefreshPending ||
-                                                             entry.second.status == BaseStatus::kCompositeFinalized; });
+        bool hasPending = false;
+        if (m_preparationOwnerBaseID != 0)
+        {
+            const auto found = m_bases.find(m_preparationOwnerBaseID);
+            if (found != m_bases.end())
+            {
+                hasPending = found->second.status == BaseStatus::kPending || found->second.status == BaseStatus::kCompositePending ||
+                             found->second.status == BaseStatus::kCompositeFinalized;
+            }
+        }
+        else
+        {
+            hasPending = std::ranges::any_of(m_bases, [](const auto &entry)
+                                             { return entry.second.status == BaseStatus::kPending || entry.second.status == BaseStatus::kVanillaRefreshPending; });
+        }
         m_hasDispatchableBases.store(hasPending, std::memory_order_release);
     }
 

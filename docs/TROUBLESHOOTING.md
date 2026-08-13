@@ -87,6 +87,7 @@ Other relevant messages:
 - `render source ... pending while native queue is unavailable` or `preparation remains pending` - loading temporarily disabled the engine queue. This is expected by itself; the base remains pending and should dispatch when the queue becomes usable.
 - `render-source preparation dispatch ... queued` or `ran-inline` - the base-level preparation reached the verified native drain.
 - `submitted ... generated face-texture requests` - freckles, wrinkles, moles, complexion, and other post-blend layers reached the engine compositor. The source remains staged and invisible to world appearance reads until those asynchronous resources are ready.
+- `single-flight preparation ownership acquired` / `released after activating` - preparation is serialized across bases. Every AVM-bearing base must release ownership after activation before another base can log a compositor submission.
 - `face-texture composition completed and render source activated` - the generated resources were finalized into FaceDB before the source became visible, and the waiting actor refresh can consume them.
 - `face-texture composition timed out` - the engine did not finish its generated resources within 30 seconds. Appearance injection shuts down instead of publishing an incomplete face.
 - `waiting ref ... is no longer loaded or valid` - the actor unloaded before its one-time catch-up refresh. A later 3D build uses the published source directly.

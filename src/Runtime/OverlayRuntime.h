@@ -59,6 +59,7 @@ namespace Runtime
         void RequeueVanillaRefresh(RE::TESFormID baseID);
         void DisableBaseBeforePublication(RE::TESFormID baseID);
         std::vector<RE::TESFormID> CompletePublication(RE::TESFormID baseID, const std::shared_ptr<const Config::PreparedAssignment> &assignment, RE::TESNPC *canonical, RE::TESNPC *source);
+        void ReleasePreparationOwner(RE::TESFormID baseID);
         void UpdatePendingWorkFlagLocked();
 
         bool RefreshWaitingReference(RE::TESNPC *target, RE::TESNPC *source, RE::TESFormID actorRefID, const Config::PreparedAssignment &assignment);
@@ -66,6 +67,7 @@ namespace Runtime
 
         AssignmentMap m_configuredAssignments;
         std::unordered_map<RE::TESFormID, BaseState> m_bases;
+        RE::TESFormID m_preparationOwnerBaseID{0};
         mutable std::mutex m_stateMutex;
         std::atomic<bool> m_armed{false};
         std::atomic<bool> m_hasDispatchableBases{false};
