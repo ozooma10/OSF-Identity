@@ -36,7 +36,7 @@ namespace Runtime
         void PreparePendingBase(RE::TESFormID baseID, std::shared_ptr<const Config::PreparedAssignment> assignment);
         void RequeueBase(RE::TESFormID baseID);
         void DisableBaseBeforePublication(RE::TESFormID baseID);
-        std::vector<RE::TESFormID> CompletePublication(RE::TESFormID baseID);
+        std::vector<RE::TESFormID> CompletePublication(RE::TESFormID baseID, const std::shared_ptr<const Config::PreparedAssignment>& assignment);
         void UpdatePendingWorkFlagLocked();
 
         bool RefreshWaitingReference(RE::TESNPC* target, RE::TESNPC* source, RE::TESFormID actorRefID, const Config::PreparedAssignment& assignment);
@@ -45,7 +45,7 @@ namespace Runtime
         std::unordered_map<RE::TESFormID, BaseState> m_bases;
         mutable std::mutex m_stateMutex;
         std::atomic<bool> m_armed{ false };
-        std::atomic<bool> m_hasPendingBases{ false };
+        std::atomic<bool> m_hasDispatchableBases{ false };
         std::atomic<bool> m_preparationPumpRegistered{ false };
     };
 

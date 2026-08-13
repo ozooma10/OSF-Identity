@@ -14,11 +14,13 @@ namespace Runtime
     namespace
     {
         constexpr std::size_t kRegistryCapacity = 4096;
+        constexpr std::size_t kMaxPublishedSources = kRegistryCapacity / 2;
         constexpr std::size_t kRegistryMask = kRegistryCapacity - 1;
         constexpr std::uint8_t kPointerShift = 4;
         constexpr std::uint8_t kFoldShift = 33;
         constexpr std::uint64_t kHashMultiplier = 0xff51afd7ed558ccdULL;
         static_assert((kRegistryCapacity & kRegistryMask) == 0);
+        static_assert(kMaxPublishedSources < kRegistryCapacity);
 
         struct RegistrySlot
         {
@@ -59,6 +61,11 @@ namespace Runtime
             .pointerShift = kPointerShift,
             .foldShift = kFoldShift
         };
+    }
+
+    std::size_t MaxSupportedRenderSources() noexcept
+    {
+        return kMaxPublishedSources;
     }
 
     RE::TESNPC* ResolveRenderSource(RE::TESNPC* a_canonical) noexcept

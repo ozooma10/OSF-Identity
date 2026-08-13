@@ -30,6 +30,11 @@ namespace Runtime
             REX::WARN("[OverlayRuntime] Arm() called while already armed; immutable assignments were not replaced");
             return false;
         }
+        const auto sourceLimit = MaxSupportedRenderSources();
+        if (assignments.size() > sourceLimit) {
+            REX::WARN("[OverlayRuntime] {} assignments exceed the supported render-source limit of {}; overlay runtime remains disabled", assignments.size(), sourceLimit);
+            return false;
+        }
         if (!StartPreparationPump()) {
             REX::WARN("[OverlayRuntime] render-source preparation pump could not be started; overlay runtime remains disabled");
             return false;
@@ -88,7 +93,7 @@ namespace Runtime
                 state.waitingRefs.insert(refID);
                 if (state.status == BaseStatus::kDormant) {
                     state.status = BaseStatus::kPending;
-                    m_hasPendingBases.store(true, std::memory_order_release);
+                    m_hasDispatchableBases.store(true, std::memory_order_release);
                     dispatch = true;
                 }
             }
@@ -127,7 +132,7 @@ namespace Runtime
 
     void OverlayRuntime::PumpPendingBases()
     {
-        if (!m_hasPendingBases.load(std::memory_order_acquire) || !IsArmed() || !Util::NativeMainThreadQueue::IsAvailable()) {
+        if (!m_hasDispatchableBases.load(std::memory_order_acquire) || !IsArmed() || !Util::NativeMainThreadQueue::IsAvailable()) {
             return;
         }
 
@@ -152,11 +157,6 @@ namespace Runtime
 
     void OverlayRuntime::TryDispatchPendingBase(const RE::TESFormID baseID)
     {
-        if (!Util::NativeMainThreadQueue::IsAvailable()) {
-            REX::DEBUG("[OverlayRuntime] render source for base=0x{:08X} pending while native queue is unavailable", baseID);
-            return;
-        }
-
         std::shared_ptr<const Config::PreparedAssignment> assignment;
         {
             const std::scoped_lock lock{ m_stateMutex };
@@ -249,7 +249,7 @@ namespace Runtime
             source = published.source;
         }
 
-        auto waitingRefs = CompletePublication(baseID);
+        auto waitingRefs = CompletePublication(baseID, assignment);
         REX::DEBUG("[OverlayRuntime] detached render source published for base=0x{:08X} pack='{}' waitingRefs={} in {} us",
             baseID, assignment->packID, waitingRefs.size(), std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count());
 
@@ -273,41 +273,56 @@ namespace Runtime
 
     void OverlayRuntime::DisableBaseBeforePublication(const RE::TESFormID baseID)
     {
-        const std::scoped_lock lock{ m_stateMutex };
-        const auto found = m_bases.find(baseID);
-        if (found != m_bases.end()) {
-            found->second.status = BaseStatus::kDisabled;
-            found->second.waitingRefs.clear();
-            found->second.assignment.reset();
+        bool invalidTransition = false;
+        {
+            const std::scoped_lock lock{ m_stateMutex };
+            const auto found = m_bases.find(baseID);
+            if (found == m_bases.end() || found->second.status == BaseStatus::kReady) {
+                invalidTransition = true;
+            } else {
+                found->second.status = BaseStatus::kDisabled;
+                found->second.waitingRefs.clear();
+                found->second.assignment.reset();
+            }
+            UpdatePendingWorkFlagLocked();
         }
-        UpdatePendingWorkFlagLocked();
+        if (invalidTransition) {
+            KillRuntime("pre-publication disablement crossed an invalid base-state transition");
+        }
     }
 
-    std::vector<RE::TESFormID> OverlayRuntime::CompletePublication(const RE::TESFormID baseID)
+    std::vector<RE::TESFormID> OverlayRuntime::CompletePublication(
+        const RE::TESFormID baseID,
+        const std::shared_ptr<const Config::PreparedAssignment>& assignment)
     {
         std::vector<RE::TESFormID> waitingRefs;
-        const std::scoped_lock lock{ m_stateMutex };
-        const auto found = m_bases.find(baseID);
-        if (found == m_bases.end()) {
-            KillRuntime("a published render source had no owning base state");
-            return waitingRefs;
+        bool invalidTransition = false;
+        {
+            const std::scoped_lock lock{ m_stateMutex };
+            const auto found = m_bases.find(baseID);
+            if (found == m_bases.end() || found->second.status != BaseStatus::kQueued || found->second.assignment != assignment) {
+                invalidTransition = true;
+            } else {
+                auto& state = found->second;
+                waitingRefs.assign(state.waitingRefs.begin(), state.waitingRefs.end());
+                state.waitingRefs.clear();
+                state.assignment.reset();
+                state.status = BaseStatus::kReady;
+            }
+            UpdatePendingWorkFlagLocked();
         }
-
-        auto& state = found->second;
-        waitingRefs.assign(state.waitingRefs.begin(), state.waitingRefs.end());
-        state.waitingRefs.clear();
-        state.assignment.reset();
-        state.status = BaseStatus::kReady;
-        UpdatePendingWorkFlagLocked();
+        if (invalidTransition) {
+            KillRuntime("immutable publication crossed an invalid base-state transition");
+        }
         return waitingRefs;
     }
 
     void OverlayRuntime::UpdatePendingWorkFlagLocked()
     {
         const auto hasPending = std::ranges::any_of(m_bases, [](const auto& entry) {
-            return entry.second.status == BaseStatus::kPending || entry.second.status == BaseStatus::kQueued;
+            return entry.second.status == BaseStatus::kPending;
         });
-        m_hasPendingBases.store(hasPending, std::memory_order_release);
+        m_hasDispatchableBases.store(hasPending, std::memory_order_release);
     }
 
     bool OverlayRuntime::RefreshWaitingReference(RE::TESNPC* target, RE::TESNPC* source, const RE::TESFormID actorRefID, const Config::PreparedAssignment& assignment)

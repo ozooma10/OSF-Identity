@@ -28,6 +28,9 @@ namespace Runtime
     // The registry storage and its published canonical keys are process-lifetime stable.
     [[nodiscard]] RenderSourceRegistryReadView GetRenderSourceRegistryReadView() noexcept;
 
+    // Keeps the immutable hot-path table at or below its supported load factor.
+    [[nodiscard]] std::size_t MaxSupportedRenderSources() noexcept;
+
     // Reference implementation for native callers. Generated engine thunks mirror this lookup directly and must remain behaviorally identical to it.
     [[nodiscard]] RE::TESNPC* ResolveRenderSource(RE::TESNPC* a_canonical) noexcept;
 
