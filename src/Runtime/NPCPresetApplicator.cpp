@@ -21,21 +21,38 @@ namespace Runtime
             return ::_stricmp(Util::SafeText(a_left), Util::SafeText(a_right)) == 0;
         }
 
+        bool EnsureBodyMorphStorage(RE::TESNPC* a_target, const std::size_t a_count)
+        {
+            if (a_count == 0) {
+                return true;
+            }
+            if (a_count > std::numeric_limits<RE::BSTArray<float>::size_type>::max()) {
+                return false;
+            }
+
+            if (!a_target->bodyMorphValues) {
+                a_target->bodyMorphValues = new RE::BSTArray<float>();
+            }
+            a_target->bodyMorphValues->resize(static_cast<RE::BSTArray<float>::size_type>(a_count));
+            return a_target->bodyMorphValues->size() == a_count;
+        }
+
         void ApplyMorphs(RE::TESNPC* a_target, const Config::AppearancePreset& a_preset)
         {
-            if (a_preset.sourceFormat == Config::PresetSourceFormat::kCharGenJson) {
-                // CharGen JSON serializes only the saved entries. Replace the detached carrier's copied maps so unrelated morphs from the target cannot leak into the requested appearance.
-                if (a_target->shapeBlendData) {
-                    a_target->shapeBlendData->clear();
-                }
-                if (a_target->facialBoneValues) {
-                    a_target->facialBoneValues->clear();
-                }
-                if (a_target->facialBoneGroupValues) {
-                    for (auto& region : *a_target->facialBoneGroupValues) {
-                        if (region.value) {
-                            region.value->clear();
-                        }
+            // Both supported producer contracts describe a complete appearance.
+            // The detached source begins as an exact copy of the target only to
+            // obtain engine-owned storage; inherited target morph entries must
+            // not remain and blend with the preset.
+            if (a_target->shapeBlendData) {
+                a_target->shapeBlendData->clear();
+            }
+            if (a_target->facialBoneValues) {
+                a_target->facialBoneValues->clear();
+            }
+            if (a_target->facialBoneGroupValues) {
+                for (auto& region : *a_target->facialBoneGroupValues) {
+                    if (region.value) {
+                        region.value->clear();
                     }
                 }
             }
@@ -206,45 +223,43 @@ namespace Runtime
                 }
             }
 
-            if (a_preset.sourceFormat == Config::PresetSourceFormat::kCharGenJson) {
-                if (a_target->shapeBlendData) {
-                    for (const auto& actual : *a_target->shapeBlendData) {
-                        const auto expected = std::ranges::find_if(a_preset.facialMorphSliders, [&](const Config::PresetNamedMorph& a_morph) {
-                            return ::_stricmp(Util::SafeText(actual.key.c_str()), a_morph.name.c_str()) == 0;
-                        });
-                        if (expected == a_preset.facialMorphSliders.end()) {
-                            return false;
-                        }
+            if (a_target->shapeBlendData) {
+                for (const auto& actual : *a_target->shapeBlendData) {
+                    const auto expected = std::ranges::find_if(a_preset.facialMorphSliders, [&](const Config::PresetNamedMorph& a_morph) {
+                        return ::_stricmp(Util::SafeText(actual.key.c_str()), a_morph.name.c_str()) == 0;
+                    });
+                    if (expected == a_preset.facialMorphSliders.end()) {
+                        return false;
                     }
                 }
-                if (a_target->facialBoneValues) {
-                    for (const auto& actual : *a_target->facialBoneValues) {
-                        const bool expected = std::ranges::any_of(a_preset.facialBoneRegions, [&](const Config::PresetBoneRegion& a_region) {
-                            return std::ranges::any_of(a_region.sliders, [&](const Config::PresetBoneSlider& a_slider) {
-                                return a_slider.id != 0 && a_slider.id == actual.key;
-                            });
+            }
+            if (a_target->facialBoneValues) {
+                for (const auto& actual : *a_target->facialBoneValues) {
+                    const bool expected = std::ranges::any_of(a_preset.facialBoneRegions, [&](const Config::PresetBoneRegion& a_region) {
+                        return std::ranges::any_of(a_region.sliders, [&](const Config::PresetBoneSlider& a_slider) {
+                            return a_slider.id != 0 && a_slider.id == actual.key;
                         });
-                        if (!expected) {
-                            return false;
-                        }
+                    });
+                    if (!expected) {
+                        return false;
                     }
                 }
-                if (a_target->facialBoneGroupValues) {
-                    for (const auto& actualRegion : *a_target->facialBoneGroupValues) {
-                        if (!actualRegion.value) {
-                            continue;
+            }
+            if (a_target->facialBoneGroupValues) {
+                for (const auto& actualRegion : *a_target->facialBoneGroupValues) {
+                    if (!actualRegion.value) {
+                        continue;
+                    }
+                    for (const auto& actualSlider : *actualRegion.value) {
+                        const auto expectedRegion = std::ranges::find(a_preset.facialBoneRegions, actualRegion.key, &Config::PresetBoneRegion::regionID);
+                        if (expectedRegion == a_preset.facialBoneRegions.end()) {
+                            return false;
                         }
-                        for (const auto& actualSlider : *actualRegion.value) {
-                            const auto expectedRegion = std::ranges::find(a_preset.facialBoneRegions, actualRegion.key, &Config::PresetBoneRegion::regionID);
-                            if (expectedRegion == a_preset.facialBoneRegions.end()) {
-                                return false;
-                            }
-                            const auto expectedSlider = std::ranges::find_if(expectedRegion->sliders, [&](const Config::PresetBoneSlider& a_slider) {
-                                return a_slider.id == 0 && ::_stricmp(Util::SafeText(actualSlider.key.c_str()), a_slider.groupName.c_str()) == 0;
-                            });
-                            if (expectedSlider == expectedRegion->sliders.end()) {
-                                return false;
-                            }
+                        const auto expectedSlider = std::ranges::find_if(expectedRegion->sliders, [&](const Config::PresetBoneSlider& a_slider) {
+                            return a_slider.id == 0 && ::_stricmp(Util::SafeText(actualSlider.key.c_str()), a_slider.groupName.c_str()) == 0;
+                        });
+                        if (expectedSlider == expectedRegion->sliders.end()) {
+                            return false;
                         }
                     }
                 }
@@ -330,14 +345,26 @@ namespace Runtime
                 return nullptr;
             }
 
+            if (!EnsureBodyMorphStorage(source, a_preset.bodyMorphRegionValues.size())) {
+                REX::WARN("[NPCPresetApplicator] detached body-morph storage could not be sized to {} entries", a_preset.bodyMorphRegionValues.size());
+                DestroyUnpublishedRenderSource(source);
+                return nullptr;
+            }
+
             ApplyMorphs(source, a_preset);
             ApplyVisuals(source, a_preset, a_dependencies);
 
-            // AddChange(0x800) sets this internal rebuild bit. Set it only on the unregistered carrier; never notify or dirty the canonical form.
+            // Reproduce the source-local state produced by the formerly proven
+            // AddChange(0x800) + AddChange(0x4000) refresh path. Do not call
+            // AddChange on this unregistered carrier: that would cross into the
+            // engine change manager. These fields are consumed through the
+            // redirected TESNPC reads and never dirty the canonical form.
             source->actorData.actorBaseFlags = static_cast<RE::ACTOR_BASE_DATA::Flag>(source->actorData.actorBaseFlags.underlying() | 0x8000U);
+            source->changeFlags |= 0x4800;
 
             const bool presetValid = ValidateMorphs(source, a_preset) && ValidateVisuals(source, a_preset, a_dependencies);
-            const bool sourceInvariant = source->GetFormID() == 0 && source->QRefCount() == 0 && source->GetRace() == a_dependencies.race && (source->actorData.actorBaseFlags.underlying() & 0x8000U) != 0;
+            const bool sourceInvariant = source->GetFormID() == 0 && source->QRefCount() == 0 && source->GetRace() == a_dependencies.race &&
+                                         (source->actorData.actorBaseFlags.underlying() & 0x8000U) != 0 && (source->changeFlags & 0x4800) == 0x4800;
             const bool canonicalPreserved = CaptureOriginalNPCState(a_target) == canonicalState && CaptureVisualStorageState(a_target) == canonicalStorage;
             if (!presetValid || !sourceInvariant || !canonicalPreserved) {
                 REX::WARN("[NPCPresetApplicator] detached preset validation failed presetValid={} sourceInvariant={} canonicalPreserved={}", presetValid, sourceInvariant, canonicalPreserved);

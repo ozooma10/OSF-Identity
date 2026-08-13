@@ -1,5 +1,6 @@
 #include "OverlayRuntime.h"
 
+#include "FaceTextureCompositor.h"
 #include "NPCPresetApplicator.h"
 #include "NPCSnapshot.h"
 #include "RenderSourceNPC.h"
@@ -89,10 +90,11 @@ namespace Runtime
 
         auto* actor = a_ref ? a_ref->As<RE::Actor>() : nullptr;
         auto* base = actor ? actor->GetNPC() : nullptr;
-        if (!base || FindRenderSource(base)) {
+        if (!base) {
             return;
         }
 
+        auto* publishedSource = FindRenderSource(base);
         const auto baseID = base->GetFormID();
         const auto refID = actor->GetFormID();
         auto* configuredBase = GetConfiguredLeveledBase(actor);
@@ -111,6 +113,10 @@ namespace Runtime
                 }
             }
 
+            if (found == m_bases.end() && publishedSource) {
+                KillRuntime("a published render source had no owning base state");
+                return;
+            }
             if (found == m_bases.end() || found->second.status == BaseStatus::kDisabled) {
                 return;
             }
@@ -133,7 +139,7 @@ namespace Runtime
                 refID, configuredBaseID, baseID);
         }
         if (recheckReadyState) {
-            if (!FindRenderSource(base)) {
+            if (!publishedSource) {
                 KillRuntime("a base marked ready had no published render source");
             }
         } else if (dispatch) {
@@ -170,6 +176,7 @@ namespace Runtime
         }
 
         RE::TESFormID baseID = 0;
+        bool pollComposite = false;
         {
             const std::scoped_lock lock{ m_stateMutex };
             for (const auto& [candidateID, state] : m_bases) {
@@ -179,12 +186,25 @@ namespace Runtime
                 }
             }
             if (baseID == 0) {
+                for (const auto& [candidateID, state] : m_bases) {
+                    if (state.status == BaseStatus::kCompositePending) {
+                        baseID = candidateID;
+                        pollComposite = true;
+                        break;
+                    }
+                }
+            }
+            if (baseID == 0) {
                 UpdatePendingWorkFlagLocked();
             }
         }
 
         if (baseID != 0) {
-            TryDispatchPendingBase(baseID);
+            if (pollComposite) {
+                TryDispatchCompositePoll(baseID);
+            } else {
+                TryDispatchPendingBase(baseID);
+            }
         }
     }
 
@@ -252,9 +272,10 @@ namespace Runtime
         }
         const auto started = std::chrono::steady_clock::now();
         auto* source = FindRenderSource(target);
+        FaceTextureComposite* composite = nullptr;
         if (!source) {
-            auto* prepared = PrepareRenderSource(target, assignment->preset, assignment->dependencies);
-            if (!prepared) {
+            source = PrepareRenderSource(target, assignment->preset, assignment->dependencies);
+            if (!source) {
                 DisableBaseBeforePublication(baseID);
                 if (IsRuntimeOperational()) {
                     REX::WARN("[OverlayRuntime] detached render source could not be prepared for base=0x{:08X}; rendering vanilla and disabling that base", baseID);
@@ -262,22 +283,149 @@ namespace Runtime
                 return;
             }
 
-            const auto published = PublishRenderSource(target, prepared);
+            if (NeedsFaceTextureComposite(source)) {
+                composite = CreateFaceTextureComposite();
+                if (!composite) {
+                    DestroyUnpublishedRenderSource(source);
+                    DisableBaseBeforePublication(baseID);
+                    return;
+                }
+            }
+
+            const auto published = PublishRenderSource(target, source);
             if (!published.source) {
-                DestroyUnpublishedRenderSource(prepared);
+                DestroyUnstartedFaceTextureComposite(composite);
+                DestroyUnpublishedRenderSource(source);
                 DisableBaseBeforePublication(baseID);
                 KillRuntime("the immutable render-source registry could not publish a prepared carrier");
                 return;
             }
             if (!published.adopted) {
-                DestroyUnpublishedRenderSource(prepared);
+                DestroyUnpublishedRenderSource(source);
             }
             source = published.source;
         }
 
+        if (NeedsFaceTextureComposite(source)) {
+            if (!composite) {
+                composite = CreateFaceTextureComposite();
+                if (!composite) {
+                    KillRuntime("a face-texture output could not be created after immutable publication");
+                    return;
+                }
+            }
+
+            if (!StartFaceTextureComposite(composite, target, source)) {
+                DestroyUnstartedFaceTextureComposite(composite);
+                KillRuntime("the engine rejected face-texture composite submission after immutable publication");
+                return;
+            }
+
+            bool invalidTransition = false;
+            {
+                const std::scoped_lock lock{ m_stateMutex };
+                const auto found = m_bases.find(baseID);
+                if (found == m_bases.end() || found->second.status != BaseStatus::kQueued || found->second.assignment != assignment || found->second.faceTextureComposite) {
+                    invalidTransition = true;
+                } else {
+                    found->second.faceTextureComposite = composite;
+                    found->second.compositionStarted = std::chrono::steady_clock::now();
+                    found->second.status = BaseStatus::kCompositePending;
+                }
+                UpdatePendingWorkFlagLocked();
+            }
+            if (invalidTransition) {
+                KillRuntime("face-texture submission crossed an invalid base-state transition");
+                return;
+            }
+
+            REX::DEBUG("[OverlayRuntime] detached render source published and face-texture composition started for runtimeBase=0x{:08X} configuredBase=0x{:08X} pack='{}' in {} us",
+                baseID, assignment->baseFormID, assignment->packID, std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count());
+            return;
+        }
+
         auto waitingRefs = CompletePublication(baseID, assignment);
-        REX::DEBUG("[OverlayRuntime] detached render source published for runtimeBase=0x{:08X} configuredBase=0x{:08X} pack='{}' waitingRefs={} in {} us",
+        REX::DEBUG("[OverlayRuntime] detached render source published without post-blend layers for runtimeBase=0x{:08X} configuredBase=0x{:08X} pack='{}' waitingRefs={} in {} us",
             baseID, assignment->baseFormID, assignment->packID, waitingRefs.size(), std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count());
+
+        for (const auto refID : waitingRefs) {
+            if (!IsRuntimeOperational()) {
+                break;
+            }
+            RefreshWaitingReference(target, source, refID, *assignment);
+        }
+    }
+
+    void OverlayRuntime::TryDispatchCompositePoll(const RE::TESFormID baseID)
+    {
+        std::shared_ptr<const Config::PreparedAssignment> assignment;
+        FaceTextureComposite* composite = nullptr;
+        {
+            const std::scoped_lock lock{ m_stateMutex };
+            const auto found = m_bases.find(baseID);
+            if (found == m_bases.end() || found->second.status != BaseStatus::kCompositePending || !found->second.assignment || !found->second.faceTextureComposite) {
+                return;
+            }
+            found->second.status = BaseStatus::kCompositeQueued;
+            assignment = found->second.assignment;
+            composite = found->second.faceTextureComposite;
+            UpdatePendingWorkFlagLocked();
+        }
+
+        const auto result = Util::NativeMainThreadQueue::Post([this, baseID, assignment = std::move(assignment), composite] {
+            PollPendingComposite(baseID, assignment, composite);
+        },
+        "OverlayRuntime.PollFaceTextureComposite",
+        [this, baseID] {
+            RequeueComposite(baseID);
+            REX::WARN("[OverlayRuntime] face-texture readiness poll for base=0x{:08X} was dropped by the native queue; retained for retry", baseID);
+        });
+
+        if (result == Util::NativeMainThreadQueue::PostResult::kUnavailable) {
+            RequeueComposite(baseID);
+        }
+    }
+
+    void OverlayRuntime::PollPendingComposite(
+        const RE::TESFormID baseID,
+        const std::shared_ptr<const Config::PreparedAssignment> assignment,
+        FaceTextureComposite* composite)
+    {
+        auto* target = RE::TESForm::LookupByID<RE::TESNPC>(baseID);
+        auto* source = target ? FindRenderSource(target) : nullptr;
+        if (!target || !source || !assignment || !composite) {
+            KillRuntime("face-texture readiness polling lost its published source or ownership state");
+            return;
+        }
+
+        std::chrono::steady_clock::time_point started;
+        {
+            const std::scoped_lock lock{ m_stateMutex };
+            const auto found = m_bases.find(baseID);
+            if (found == m_bases.end() || found->second.status != BaseStatus::kCompositeQueued || found->second.assignment != assignment || found->second.faceTextureComposite != composite) {
+                KillRuntime("face-texture readiness polling crossed an invalid base-state transition");
+                return;
+            }
+            started = found->second.compositionStarted;
+        }
+
+        if (std::chrono::steady_clock::now() - started > std::chrono::seconds(30)) {
+            REX::CRITICAL("[OverlayRuntime] face-texture composition timed out for base=0x{:08X}; disabling appearance injection", baseID);
+            KillRuntime("face-texture composition did not complete within 30 seconds");
+            return;
+        }
+        if (!IsFaceTextureCompositeReady(composite)) {
+            RequeueComposite(baseID);
+            return;
+        }
+        if (!FinalizeFaceTextureComposite(composite)) {
+            KillRuntime("face-texture composite finalization failed after immutable publication");
+            return;
+        }
+
+        auto waitingRefs = CompletePublication(baseID, assignment);
+        REX::DEBUG("[OverlayRuntime] face-texture composition completed for runtimeBase=0x{:08X} configuredBase=0x{:08X} pack='{}' waitingRefs={} in {} ms",
+            baseID, assignment->baseFormID, assignment->packID, waitingRefs.size(), std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count());
 
         for (const auto refID : waitingRefs) {
             if (!IsRuntimeOperational()) {
@@ -293,6 +441,16 @@ namespace Runtime
         const auto found = m_bases.find(baseID);
         if (found != m_bases.end() && found->second.status == BaseStatus::kQueued) {
             found->second.status = BaseStatus::kPending;
+        }
+        UpdatePendingWorkFlagLocked();
+    }
+
+    void OverlayRuntime::RequeueComposite(const RE::TESFormID baseID)
+    {
+        const std::scoped_lock lock{ m_stateMutex };
+        const auto found = m_bases.find(baseID);
+        if (found != m_bases.end() && found->second.status == BaseStatus::kCompositeQueued) {
+            found->second.status = BaseStatus::kCompositePending;
         }
         UpdatePendingWorkFlagLocked();
     }
@@ -326,7 +484,8 @@ namespace Runtime
         {
             const std::scoped_lock lock{ m_stateMutex };
             const auto found = m_bases.find(baseID);
-            if (found == m_bases.end() || found->second.status != BaseStatus::kQueued || found->second.assignment != assignment) {
+            const auto expectedStatus = found != m_bases.end() && found->second.faceTextureComposite ? BaseStatus::kCompositeQueued : BaseStatus::kQueued;
+            if (found == m_bases.end() || found->second.status != expectedStatus || found->second.assignment != assignment) {
                 invalidTransition = true;
             } else {
                 auto& state = found->second;
@@ -346,7 +505,7 @@ namespace Runtime
     void OverlayRuntime::UpdatePendingWorkFlagLocked()
     {
         const auto hasPending = std::ranges::any_of(m_bases, [](const auto& entry) {
-            return entry.second.status == BaseStatus::kPending;
+            return entry.second.status == BaseStatus::kPending || entry.second.status == BaseStatus::kCompositePending;
         });
         m_hasDispatchableBases.store(hasPending, std::memory_order_release);
     }

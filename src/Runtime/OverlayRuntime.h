@@ -2,8 +2,12 @@
 
 #include "Config/PreparedAssignment.h"
 
+#include <chrono>
+
 namespace Runtime
 {
+    struct FaceTextureComposite;
+
     using AssignmentMap = Config::PreparedAssignmentMap;
 
     class OverlayRuntime
@@ -19,6 +23,8 @@ namespace Runtime
             kDormant,
             kPending,
             kQueued,
+            kCompositePending,
+            kCompositeQueued,
             kReady,
             kDisabled
         };
@@ -27,6 +33,8 @@ namespace Runtime
         {
             std::shared_ptr<const Config::PreparedAssignment> assignment;
             std::unordered_set<RE::TESFormID> waitingRefs;
+            FaceTextureComposite* faceTextureComposite{ nullptr };
+            std::chrono::steady_clock::time_point compositionStarted{};
             BaseStatus status{ BaseStatus::kDormant };
         };
 
@@ -35,6 +43,9 @@ namespace Runtime
         void TryDispatchPendingBase(RE::TESFormID baseID);
         void PreparePendingBase(RE::TESFormID baseID, std::shared_ptr<const Config::PreparedAssignment> assignment);
         void RequeueBase(RE::TESFormID baseID);
+        void TryDispatchCompositePoll(RE::TESFormID baseID);
+        void PollPendingComposite(RE::TESFormID baseID, std::shared_ptr<const Config::PreparedAssignment> assignment, FaceTextureComposite* composite);
+        void RequeueComposite(RE::TESFormID baseID);
         void DisableBaseBeforePublication(RE::TESFormID baseID);
         std::vector<RE::TESFormID> CompletePublication(RE::TESFormID baseID, const std::shared_ptr<const Config::PreparedAssignment>& assignment);
         void UpdatePendingWorkFlagLocked();

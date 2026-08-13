@@ -36,5 +36,10 @@ namespace Runtime
 
     [[nodiscard]] RE::TESNPC* FindRenderSource(RE::TESNPC* a_canonical) noexcept;
 
+    // Reverse lookup used only by the FaceDB texture-path thunks. It preserves
+    // the FormID-0 carrier everywhere except the three identity reads required
+    // to name generated face textures.
+    [[nodiscard]] RE::TESNPC* ResolveCanonicalForRenderSource(RE::TESNPC* a_source) noexcept;
+
     [[nodiscard]] RenderSourcePublishResult PublishRenderSource(RE::TESNPC* a_canonical, RE::TESNPC* a_source) noexcept;
 }

@@ -98,6 +98,21 @@ namespace Runtime
         return resolved != a_canonical ? resolved : nullptr;
     }
 
+    RE::TESNPC* ResolveCanonicalForRenderSource(RE::TESNPC* a_source) noexcept
+    {
+        if (!a_source || !IsRuntimeOperational()) {
+            return a_source;
+        }
+
+        for (const auto& slot : g_registry) {
+            if (slot.source.load(std::memory_order_acquire) == a_source) {
+                auto* canonical = slot.canonical.load(std::memory_order_acquire);
+                return canonical ? canonical : a_source;
+            }
+        }
+        return a_source;
+    }
+
     RenderSourcePublishResult PublishRenderSource(RE::TESNPC* a_canonical, RE::TESNPC* a_source) noexcept
     {
         if (!a_canonical || !a_source || a_canonical == a_source) {
