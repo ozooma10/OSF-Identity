@@ -47,6 +47,8 @@ namespace Runtime
         const void* tintStorage{ nullptr };
         std::size_t shapeBlendCount{ 0 };
         const void* shapeBlendStorage{ nullptr };
+
+        bool operator==(const VisualStorageState&) const = default;
     };
 
     struct OriginalNPCState
@@ -54,15 +56,16 @@ namespace Runtime
         NonVisualState nonVisual;
         RE::TESNPC*    faceNPC{ nullptr };
         std::uint32_t  actorFlags{ 0 };
+
+        bool operator==(const OriginalNPCState&) const = default;
     };
 
-    [[nodiscard]] NonVisualState CaptureNonVisualState(RE::TESNPC* a_npc);
-    [[nodiscard]] VisualStorageState CaptureVisualStorageState(RE::TESNPC* a_npc);
-    [[nodiscard]] OriginalNPCState CaptureOriginalNPCState(RE::TESNPC* a_npc);
+    NonVisualState CaptureNonVisualState(RE::TESNPC* a_npc);
+    VisualStorageState CaptureVisualStorageState(RE::TESNPC* a_npc);
+    OriginalNPCState CaptureOriginalNPCState(RE::TESNPC* a_npc);
 
-    [[nodiscard]] bool HasIndependentVisualStorage(const VisualStorageState& a_source, const VisualStorageState& a_donor);
+    bool HasIndependentVisualStorage(const VisualStorageState& a_source, const VisualStorageState& a_donor);
 
-    [[nodiscard]] bool SameExactVisualValues(RE::TESNPC* a_left, RE::TESNPC* a_right);
+    bool SameExactVisualValues(RE::TESNPC* a_left, RE::TESNPC* a_right);
 
-    [[nodiscard]] bool SameExactOriginalState(RE::TESNPC* a_target, RE::TESNPC* a_restoreDonor, const OriginalNPCState& a_original);
 }

@@ -1,7 +1,8 @@
 #include "NPCPresetApplicator.h"
 
 #include "NPCSnapshot.h"
-#include "TemporaryNPCDonor.h"
+#include "RenderSourceNPC.h"
+#include "RenderSourceRegistry.h"
 #include "Util/String.h"
 
 #include <vector>
@@ -234,65 +235,74 @@ namespace Runtime
         }
     }
 
-    PreparedAppearanceApplyResult ApplyPreparedAppearance(RE::TESNPC* a_target, const Config::AppearancePreset& a_preset, const Config::ResolvedAppearanceDependencies& a_dependencies, const OriginalNPCState& a_original)
+    RE::TESNPC* PrepareRenderSource(RE::TESNPC* a_target, const Config::AppearancePreset& a_preset, const Config::ResolvedAppearanceDependencies& a_dependencies)
     {
-        PreparedAppearanceApplyResult result;
         if (!a_target || !a_dependencies.Complete() || a_target->GetRace() != a_dependencies.race) {
-            return result;
+            return nullptr;
         }
 
-        const auto originalStorage = CaptureVisualStorageState(a_target);
-        auto donor = TemporaryNPCDonor::Create(NPCDonorPurpose::kPreset);
-        if (!donor) {
-            return result;
+        const auto canonicalState = CaptureOriginalNPCState(a_target);
+        const auto canonicalStorage = CaptureVisualStorageState(a_target);
+        auto* source = CreateRenderSourceNPC();
+        if (!source) {
+            return nullptr;
         }
-
-        result.donorReleased = false;
-        auto* donorNPC = donor->Get();
 
         try {
-            donorNPC->CopyAppearance(a_target, false);
-            const bool donorCopiedExactly = SameExactVisualValues(donorNPC, a_target);
-            const bool donorIndependent = HasIndependentVisualStorage(originalStorage, CaptureVisualStorageState(donorNPC));
-            const bool sourcePreserved = CaptureNonVisualState(a_target) == a_original.nonVisual && a_target->faceNPC == a_original.faceNPC && a_target->actorData.actorBaseFlags.underlying() == a_original.actorFlags;
-            if (donorCopiedExactly && donorIndependent && sourcePreserved) {
-                ApplyMorphs(donorNPC, a_preset);
-                ApplyVisuals(donorNPC, a_preset, a_dependencies);
+            // copy set of non-owned fields FaceDB consumes from TESNPC argument, then let engine deep-copy all owned appearance containers. The canonical source is only ever passed as a read source.
+            source->actorData = a_target->actorData;
+            source->formRace = a_target->formRace;
+            source->formSkin = a_target->formSkin;
+            source->originalRace = a_target->originalRace;
+            source->height = a_target->height;
+            source->heightMax = a_target->heightMax;
+            source->pronoun = a_target->pronoun;
+            source->CopyAppearance(a_target, false);
+            source->faceNPC = nullptr;
 
-                const bool donorValid = ValidateMorphs(donorNPC, a_preset) && ValidateVisuals(donorNPC, a_preset, a_dependencies);
-                if (donorValid) {
-                    a_target->morphWeight = donorNPC->morphWeight;
-                    for (std::size_t i = 0; i < a_preset.bodyMorphRegionValues.size(); ++i) {
-                        a_target->SetBodyMorph(static_cast<std::uint32_t>(i), static_cast<float>(a_preset.bodyMorphRegionValues[i]));
-                    }
-                    a_target->skinToneIndex = donorNPC->skinToneIndex;
-                    a_target->CopyOwnedAppearance(donorNPC, false);
-                    a_target->faceNPC = nullptr;
-
-                    result.applied = SameExactVisualValues(a_target, donorNPC) && HasIndependentVisualStorage(CaptureVisualStorageState(donorNPC), CaptureVisualStorageState(a_target)) &&
-                        CaptureNonVisualState(a_target) == a_original.nonVisual && a_target->actorData.actorBaseFlags.underlying() == a_original.actorFlags && a_target->faceNPC == nullptr;
-                }
+            const bool copiedExactly = SameExactVisualValues(source, a_target);
+            const bool independent = HasIndependentVisualStorage(canonicalStorage, CaptureVisualStorageState(source));
+            const bool canonicalPreservedAfterCopy = CaptureOriginalNPCState(a_target) == canonicalState && CaptureVisualStorageState(a_target) == canonicalStorage;
+            if (!copiedExactly || !independent || !canonicalPreservedAfterCopy) {
+                REX::WARN("[NPCPresetApplicator] detached baseline copy failed exact={} independent={} canonicalPreserved={}", copiedExactly, independent, canonicalPreservedAfterCopy);
+                DestroyUnpublishedRenderSource(source);
+                return nullptr;
             }
+
+            ApplyMorphs(source, a_preset);
+            ApplyVisuals(source, a_preset, a_dependencies);
+
+            // AddChange(0x800) sets this internal rebuild bit. Set it only on the unregistered carrier; never notify or dirty the canonical form.
+            source->actorData.actorBaseFlags = static_cast<RE::ACTOR_BASE_DATA::Flag>(source->actorData.actorBaseFlags.underlying() | 0x8000U);
+
+            const bool presetValid = ValidateMorphs(source, a_preset) && ValidateVisuals(source, a_preset, a_dependencies);
+            const bool sourceInvariant = source->GetFormID() == 0 && source->QRefCount() == 0 && source->GetRace() == a_dependencies.race && (source->actorData.actorBaseFlags.underlying() & 0x8000U) != 0;
+            const bool canonicalPreserved = CaptureOriginalNPCState(a_target) == canonicalState && CaptureVisualStorageState(a_target) == canonicalStorage;
+            if (!presetValid || !sourceInvariant || !canonicalPreserved) {
+                REX::WARN("[NPCPresetApplicator] detached preset validation failed presetValid={} sourceInvariant={} canonicalPreserved={}", presetValid, sourceInvariant, canonicalPreserved);
+                DestroyUnpublishedRenderSource(source);
+                return nullptr;
+            }
+
+            return source;
         } catch (const std::exception& error) {
-            REX::ERROR("[NPCPresetApplicator] prepared appearance apply threw before donor teardown: {}", error.what());
+            REX::ERROR("[NPCPresetApplicator] detached render-source preparation threw: {}", error.what());
         } catch (...) {
-            REX::ERROR("[NPCPresetApplicator] prepared appearance apply threw an unknown exception before donor teardown");
+            REX::ERROR("[NPCPresetApplicator] detached render-source preparation threw an unknown exception");
         }
 
-        result.donorReleased = donor->ReleaseAndVerify();
-        result.applied = result.applied && result.donorReleased;
-        return result;
+        DestroyUnpublishedRenderSource(source);
+        return nullptr;
     }
 
-    bool NotifyAndRefreshAppearance(RE::TESNPC* a_target, RE::Actor* a_actor, const RE::TESFormID a_actorRefID)
+    bool RefreshAppearanceFromRenderSource(RE::TESNPC* a_target, RE::TESNPC* a_source, RE::Actor* a_actor, const RE::TESFormID a_actorRefID)
     {
-        if (!a_target || !a_actor || a_actor->GetNPC() != a_target || a_actor->GetFormID() != a_actorRefID) {
+        if (!a_target || !a_source || !a_actor || a_source->GetFormID() != 0 || FindRenderSource(a_target) != a_source ||
+            a_actor->GetNPC() != a_target || a_actor->GetFormID() != a_actorRefID) {
             return false;
         }
 
-        static_cast<void>(a_target->AddChange(0x800));
-        static_cast<void>(a_target->AddChange(0x4000));
         a_actor->RefreshAppearance(false, 0x28, false);
-        return true;
+        return a_actor->GetNPC() == a_target && a_actor->GetFormID() == a_actorRefID;
     }
 }

@@ -21,7 +21,7 @@ namespace Runtime
         AssignmentMap m_assignments;
         std::atomic<bool> m_armed{ false };
 
-        bool ApplyTransientOverlay(RE::TESNPC* target, RE::Actor* actor, RE::TESFormID actorRefID, const Config::PreparedAssignment& assignment);
+        bool ApplyRenderSource(RE::TESNPC* target, RE::Actor* actor, RE::TESFormID actorRefID, const Config::PreparedAssignment& assignment);
         void DisableBase(RE::TESFormID baseID);
         void RecordSuccessfulApply(RE::TESFormID actorRefId);
 

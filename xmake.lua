@@ -11,6 +11,7 @@ add_rules("plugin.vsxmake.autoupdate")
 
 -- Structural JSON parsing and string decoding for the manifest/preset readers.
 add_requires("glaze v7.0.2")
+add_requires("xbyak v7.06")
 
 option("test_fixtures", function()
     set_default(false)
@@ -37,7 +38,7 @@ target("OSF Identity")
     set_pcxxheader("src/pch.h")
 
 
-    add_packages("glaze")
+    add_packages("glaze", "xbyak")
     add_defines("NOMINMAX", "WIN32_LEAN_AND_MEAN")
 
     if has_config("test_fixtures") then

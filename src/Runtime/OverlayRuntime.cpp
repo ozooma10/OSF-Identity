@@ -1,7 +1,9 @@
 #include "OverlayRuntime.h"
-#include "MutationSafety.h"
-#include "NPCRestorePoint.h"
 #include "NPCPresetApplicator.h"
+#include "NPCSnapshot.h"
+#include "RenderSourceNPC.h"
+#include "RenderSourceRegistry.h"
+#include "RuntimeSafety.h"
 
 #include <Util/NativeMainThreadQueue.h>
 
@@ -22,8 +24,8 @@ namespace Runtime
             REX::WARN("[OverlayRuntime] Arm() called with empty assignments; overlay runtime remains disabled");
             return false;
         }
-        if (!IsMutationOperational()) {
-            REX::WARN("[OverlayRuntime] Arm() called after mutation was disabled; overlay runtime remains disabled");
+        if (!IsRuntimeOperational()) {
+            REX::WARN("[OverlayRuntime] Arm() called after appearance injection was disabled; overlay runtime remains disabled");
             return false;
         }
 
@@ -43,7 +45,7 @@ namespace Runtime
 
     bool OverlayRuntime::IsArmed() const
     {
-        return m_armed.load(std::memory_order_acquire) && IsMutationOperational();
+        return m_armed.load(std::memory_order_acquire) && IsRuntimeOperational();
     }
 
     std::shared_ptr<const Config::PreparedAssignment> Runtime::OverlayRuntime::FindAssignment(RE::TESFormID baseID) const
@@ -84,7 +86,7 @@ namespace Runtime
 
     bool Runtime::OverlayRuntime::RememberPendingApply(RE::TESFormID baseID, RE::TESFormID refID, std::shared_ptr<const Config::PreparedAssignment> assignment)
     {
-        if (!IsMutationOperational() || !assignment) {
+        if (!IsRuntimeOperational() || !assignment) {
             return false;
         }
 
@@ -109,9 +111,9 @@ namespace Runtime
         return true;
     }
 
-    bool OverlayRuntime::ApplyTransientOverlay(RE::TESNPC *target, RE::Actor *actor, RE::TESFormID actorRefID, const Config::PreparedAssignment &assignment)
+    bool OverlayRuntime::ApplyRenderSource(RE::TESNPC *target, RE::Actor *actor, RE::TESFormID actorRefID, const Config::PreparedAssignment &assignment)
     {
-        if (!IsMutationOperational() || !target || !actor || actor->GetNPC() != target || actor->GetFormID() != actorRefID) {
+        if (!IsRuntimeOperational() || !target || !actor || actor->GetNPC() != target || actor->GetFormID() != actorRefID) {
             return false;
         }
 
@@ -123,68 +125,59 @@ namespace Runtime
         }
         if (!target->bodyMorphValues || target->bodyMorphValues->size() != assignment.preset.bodyMorphRegionValues.size()) {
             DisableBase(baseID);
-            REX::WARN("[OverlayRuntime] base=0x{:08X} does not have canonical body-morph storage; overlay disabled before mutation", baseID);
+            REX::WARN("[OverlayRuntime] base=0x{:08X} does not have the expected body-morph storage; detached render source was not created", baseID);
             return false;
         }
 
         const auto started = std::chrono::steady_clock::now();
-        auto restorePoint = NPCRestorePoint::Capture(target);
-        if (!restorePoint) {
-            if (IsMutationOperational()) {
-                DisableBase(baseID);
-                REX::WARN("[OverlayRuntime] could not capture an exact restore point for base=0x{:08X}; overlay disabled for that base", baseID);
+        auto* source = FindRenderSource(target);
+        if (!source) {
+            auto* prepared = PrepareRenderSource(target, assignment.preset, assignment.dependencies);
+            if (!prepared) {
+                if (IsRuntimeOperational()) {
+                    DisableBase(baseID);
+                    REX::WARN("[OverlayRuntime] detached render source could not be prepared for base=0x{:08X}; rendering vanilla and disabling that base", baseID);
+                }
+                return false;
             }
-            return false;
+
+            const auto published = PublishRenderSource(target, prepared);
+            if (!published.source) {
+                DestroyUnpublishedRenderSource(prepared);
+                KillRuntime("the immutable render-source registry could not publish a prepared carrier");
+                return false;
+            }
+            if (!published.adopted) {
+                DestroyUnpublishedRenderSource(prepared);
+            }
+            source = published.source;
         }
 
-        const auto& originalState = restorePoint->OriginalState();
-        bool appearanceApplied = false;
-        bool presetDonorReleased = true;
+        const auto canonicalState = CaptureOriginalNPCState(target);
+        const auto canonicalStorage = CaptureVisualStorageState(target);
         bool actorRefreshed = false;
         try {
-            const auto applyResult = ApplyPreparedAppearance(target, assignment.preset, assignment.dependencies, originalState);
-            appearanceApplied = applyResult.applied;
-            presetDonorReleased = applyResult.donorReleased;
-            if (appearanceApplied) {
-                actorRefreshed = NotifyAndRefreshAppearance(target, actor, actorRefID);
-            }
+            actorRefreshed = RefreshAppearanceFromRenderSource(target, source, actor, actorRefID);
         } catch (const std::exception& error) {
-            REX::ERROR("[OverlayRuntime] transient apply for base=0x{:08X} ref=0x{:08X} threw before restore: {}", baseID, actorRefID, error.what());
+            REX::ERROR("[OverlayRuntime] detached refresh for base=0x{:08X} ref=0x{:08X} threw: {}", baseID, actorRefID, error.what());
         } catch (...) {
-            REX::ERROR("[OverlayRuntime] transient apply for base=0x{:08X} ref=0x{:08X} threw an unknown exception before restore", baseID, actorRefID);
+            REX::ERROR("[OverlayRuntime] detached refresh for base=0x{:08X} ref=0x{:08X} threw an unknown exception", baseID, actorRefID);
         }
 
-        bool restored = false;
-        try {
-            restored = restorePoint->RestoreExact(target);
-        } catch (const std::exception& error) {
-            REX::CRITICAL("[OverlayRuntime] exact restore for base=0x{:08X} ref=0x{:08X} threw: {}", baseID, actorRefID, error.what());
-        } catch (...) {
-            REX::CRITICAL("[OverlayRuntime] exact restore for base=0x{:08X} ref=0x{:08X} threw an unknown exception", baseID, actorRefID);
-        }
-
-        bool restorePointReleased = false;
-        try {
-            restorePointReleased = restorePoint->ReleaseAndVerify();
-        } catch (const std::exception& error) {
-            REX::CRITICAL("[OverlayRuntime] restore-point teardown for base=0x{:08X} ref=0x{:08X} threw: {}", baseID, actorRefID, error.what());
-        } catch (...) {
-            REX::CRITICAL("[OverlayRuntime] restore-point teardown for base=0x{:08X} ref=0x{:08X} threw an unknown exception", baseID, actorRefID);
-        }
-
-        if (!restored || !restorePointReleased || !presetDonorReleased) {
-            KillMutation(!restored ? "an in-window restore failed" : !restorePointReleased ? "a restore donor did not unregister" : "a preset donor did not unregister");
+        const bool canonicalPreserved = CaptureOriginalNPCState(target) == canonicalState && CaptureVisualStorageState(target) == canonicalStorage;
+        if (!canonicalPreserved) {
+            KillRuntime("the canonical TESNPC changed during a detached appearance refresh");
             return false;
         }
 
-        if (!appearanceApplied || !actorRefreshed) {
+        if (!actorRefreshed) {
             DisableBase(baseID);
-            REX::WARN("[OverlayRuntime] transient overlay failed safely for base=0x{:08X} ref=0x{:08X} applied={} refreshed={}; rendering vanilla and disabling that base", baseID, actorRefID, appearanceApplied, actorRefreshed);
+            REX::WARN("[OverlayRuntime] detached refresh failed safely for base=0x{:08X} ref=0x{:08X}; rendering vanilla and disabling that base", baseID, actorRefID);
             return false;
         }
 
         RecordSuccessfulApply(actorRefID);
-        REX::DEBUG("[OverlayRuntime] transient overlay completed for base=0x{:08X} ref=0x{:08X} pack='{}' in {} us", baseID, actorRefID, assignment.packID, std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count());
+        REX::DEBUG("[OverlayRuntime] detached render-source refresh completed for base=0x{:08X} ref=0x{:08X} pack='{}' in {} us", baseID, actorRefID, assignment.packID, std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count());
         return true;
     }
 
@@ -279,7 +272,7 @@ namespace Runtime
                 auto* target = RE::TESForm::LookupByID<RE::TESNPC>(baseID);
 
                 if (actor && target && actor->GetNPC() == target && HasLoaded3D(actor)) {
-                    ApplyTransientOverlay(target, actor, refID, *assignment);
+                    ApplyRenderSource(target, actor, refID, *assignment);
                 } else {
                     REX::DEBUG("[OverlayRuntime] pending overlay for ref=0x{:08X} is no longer loaded or valid; discarding", refID);
                 }

@@ -1,5 +1,6 @@
 #include "Config/PackScanner.h"
 #include "Runtime/OverlayRuntime.h"
+#include "Runtime/RenderSourceHooks.h"
 #include "Events/ReferenceSet3dEvent.h"
 
 namespace
@@ -49,8 +50,14 @@ namespace
 SFSE_PLUGIN_LOAD(const SFSE::LoadInterface* a_sfse)
 {
     SFSE::Init(a_sfse, SFSE::InitInfo{
-        .logLevel = REX::ELogLevel::Debug
+        .logLevel = REX::ELogLevel::Debug,
+        .trampoline = true,
+        .trampolineSize = 16 * 1024
     });
+    if (!Runtime::InstallRenderSourceHooks()) {
+        REX::CRITICAL("[OSF Identity] render-source hooks failed closed; refusing to load the plugin");
+        return false;
+    }
     SFSE::GetMessagingInterface()->RegisterListener(OnSFSEMessage);
     return true;
 }

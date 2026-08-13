@@ -230,13 +230,4 @@ namespace Runtime
         return true;
     }
 
-    bool SameExactOriginalState(
-        RE::TESNPC* a_target,
-        RE::TESNPC* a_restoreDonor,
-        const OriginalNPCState& a_original)
-    {
-        return a_target && a_restoreDonor && SameExactVisualValues(a_target, a_restoreDonor) &&
-               a_target->faceNPC == a_original.faceNPC && 
-               a_target->actorData.actorBaseFlags.underlying() == a_original.actorFlags && CaptureNonVisualState(a_target) == a_original.nonVisual;
-    }
 }
