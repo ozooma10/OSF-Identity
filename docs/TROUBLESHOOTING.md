@@ -86,6 +86,7 @@ Other relevant messages:
 - `dropped by the native queue; retained for retry` - the task was rejected by the drain safety check and will retry. Repeated drops without a later successful application should be reported.
 - `rendering vanilla and disabling that base` - detached preparation failed before publication. That NPC remains vanilla for the rest of the session.
 - `catch-up refresh failed for published base` - publication already succeeded, so the base is not disabled. A later 3D build can still render from its source.
+- `assignments exceed the supported render-source limit` - more than 2048 winning assignments were discovered. The runtime refuses the complete set before creating or publishing any source.
 - `appearance injection disabled for the process` - terminal safety shutdown also makes the installed hooks return canonical NPCs instead of published sources.
 - `byte gate failed` or `failed closed; refusing to load the plugin` - the installed Starfield executable does not match the supported appearance-read contract. Do not bypass this check; use a matching OSF Identity build.
 

@@ -10,6 +10,7 @@ SFSE plugin load
 
 SFSE kPostPostDataLoad
   -> discover, parse, resolve, and select pack assignments
+  -> register the ReferenceSet3d sink
   -> publish immutable PreparedAssignments to OverlayRuntime
 
 Starfield ReferenceSet3d event
@@ -47,6 +48,7 @@ The main appearance APIs are `TESNPC::CopyAppearance`, the headpart/morph/AVM se
 4. `Preset` parses the CK/CharGenMenu export, and `Resolver` resolves its race, headparts, morphs, colors, and AVM data against loaded game forms.
 5. If several valid packs resolve to the same NPC base, the alphabetically earliest pack folder wins.
 6. The parsed preset and resolved dependencies are stored in an immutable `PreparedAssignment`, keyed by the target's runtime base FormID.
+7. `OverlayRuntime::Arm` refuses assignment sets above the supported render-source limit before accepting any runtime work.
 
 ## Hook installation and failure boundary
 
@@ -74,9 +76,9 @@ CommonLibSF's `TESNPC::CreateUnregistered` allocates engine memory and directly 
 4. Validates the complete prepared result and rechecks the canonical base's state and storage identity.
 5. Sets the appearance-rebuild bit only on the detached object.
 
-A failed or duplicate unpublished source is destroyed immediately. 
-A published source is intentionally process-lifetime: asynchronous FaceDB nodes can reread the actor base after the initiating task has returned, so reclaiming or replacing a published source would create a use-after-free boundary. 
-The immutable registry is bounded to 4096 canonical bases and performs lock-free, allocation-free reads from FaceDB threads.
+A failed or duplicate unpublished source is destroyed immediately.
+A published source is intentionally process-lifetime: asynchronous FaceDB nodes can reread the actor base after the initiating task has returned, so reclaiming or replacing a published source would create a use-after-free boundary.
+The immutable registry has 4096 slots and admits at most 2048 assigned sources, keeping the hot-path table at or below a 50% load factor. Reads from FaceDB threads remain lock-free and allocation-free.
 
 ## Runtime event and queue path
 
@@ -88,6 +90,6 @@ The immutable registry is bounded to 4096 canonical bases and performs lock-free
 - Successful immutable publication moves the base to `ready`; later 3D builds use the source directly through the hooks.
 - Failure before publication moves the base to `disabled`, clears its waiters, and leaves it vanilla.
 
-Additional references encountered while a base is pending or queued join its temporary waiter set. If the native queue is unavailable or drops the guarded task, the base returns to pending. The permanent SFSE task retries pending bases once the queue is usable and becomes an atomic no-op when no preparation work remains.
+Additional references encountered while a base is pending or queued join its temporary waiter set. If the native queue is unavailable or drops the guarded task, the base returns to pending. The permanent SFSE task retries pending bases once the queue is usable and becomes an atomic no-op while no base is dispatchable, including while the native queue already owns the only outstanding job.
 
-Publication is irreversible because asynchronous FaceDB work can retain access to the source. After publication, each still-loaded waiting reference receives one `Actor::RefreshAppearance(false, 0x28, false)` catch-up call. A catch-up failure does not falsely disable the published base; future 3D builds can still use its source. 
+Publication is irreversible because asynchronous FaceDB work can retain access to the source. The runtime therefore requires the owning base to make the exact `queued -> ready` transition with the same prepared assignment; an impossible transition disables appearance injection process-wide. After publication, each still-loaded waiting reference receives one `Actor::RefreshAppearance(false, 0x28, false)` catch-up call. A catch-up failure does not falsely disable the published base; future 3D builds can still use its source.

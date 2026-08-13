@@ -131,7 +131,8 @@ namespace Config
                 PresetTintLayer decoded{
                     .name = item.Name,
                     .value = item.Value.Value,
-                    .modulationValue = item.ModulationValue.Value };
+                    .modulationValue = item.ModulationValue.Value,
+                    .customColor = std::nullopt };
 
                 if (item.ModulationValue.CustomColorValue) {
                     const auto& color = *item.ModulationValue.CustomColorValue;
