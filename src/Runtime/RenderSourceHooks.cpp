@@ -129,7 +129,7 @@ namespace Runtime
 
         void ValidateReadView(const RenderSourceRegistryReadView& a_view)
         {
-            if (!a_view.slots || !IsPowerOfTwo(a_view.capacity) || !IsPowerOfTwo(a_view.slotSize) || a_view.slotSize < sizeof(RE::TESNPC*)) {
+            if (!a_view.runtimeOperational || !a_view.slots || !IsPowerOfTwo(a_view.capacity) || !IsPowerOfTwo(a_view.slotSize) || a_view.slotSize < sizeof(RE::TESNPC*)) {
                 throw std::runtime_error("render-source registry has an invalid generated-reader layout");
             }
             if (a_view.capacity > std::numeric_limits<std::size_t>::max() / a_view.slotSize) {
@@ -196,6 +196,11 @@ namespace Runtime
                 // Preserve the exact contract of the replaced MOV: only the result register changes, and a null canonical pointer remains null.
                 mov(result, ptr[actor + 0x98]);
                 test(result, result);
+                jz(done, T_NEAR);
+
+                // Terminal runtime shutdown must bypass sources already published in the immutable registry.
+                mov(table, reinterpret_cast<std::uintptr_t>(a_view.runtimeOperational));
+                cmp(byte[table], 0);
                 jz(done, T_NEAR);
 
                 // Mirror StartIndex without crossing the C++ ABI. The registry is immutable after publication, and aligned x86-64 loads provide the acquire ordering required after observing the canonical key.

@@ -7,6 +7,7 @@ namespace Runtime
 {
     struct RenderSourceRegistryReadView
     {
+        const void* runtimeOperational{ nullptr };
         const void* slots{ nullptr };
         std::size_t capacity{ 0 };
         std::size_t slotSize{ 0 };

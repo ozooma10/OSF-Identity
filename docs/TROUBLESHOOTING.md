@@ -71,34 +71,38 @@ The preset and target must have the same race and sex. Race conversion, sex conv
 
 ## The actor still looks vanilla
 
-Search the log for the actor's reference FormID. A successful application ends with:
+Search the log for the actor's base and reference FormIDs. First publication and catch-up end with:
 
 ```text
-[OverlayRuntime] transient overlay completed ...
+[OverlayRuntime] detached render source published ...
+[OverlayRuntime] detached catch-up refresh completed ...
 ```
 
 Other relevant messages:
 
-- `pending while native queue is unavailable` or `apply remains pending` - loading temporarily disabled the engine queue. This is expected by itself; the request is retained and should dispatch when the queue becomes usable.
-- `overlay apply dispatch ... queued` or `ran-inline` - the retained request reached the verified native drain.
-- `pending overlay ... is no longer loaded or valid; discarding` - the actor unloaded before the retry ran. A later 3D build can create a fresh request.
+- `render source ... pending while native queue is unavailable` or `preparation remains pending` - loading temporarily disabled the engine queue. This is expected by itself; the base remains pending and should dispatch when the queue becomes usable.
+- `render-source preparation dispatch ... queued` or `ran-inline` - the base-level preparation reached the verified native drain.
+- `waiting ref ... is no longer loaded or valid` - the actor unloaded before its one-time catch-up refresh. A later 3D build uses the published source directly.
 - `dropped by the native queue; retained for retry` - the task was rejected by the drain safety check and will retry. Repeated drops without a later successful application should be reported.
-- `rendering vanilla and disabling that base` - application failed safely after restoration. That NPC remains vanilla for the rest of the session.
+- `rendering vanilla and disabling that base` - detached preparation failed before publication. That NPC remains vanilla for the rest of the session.
+- `catch-up refresh failed for published base` - publication already succeeded, so the base is not disabled. A later 3D build can still render from its source.
+- `appearance injection disabled for the process` - terminal safety shutdown also makes the installed hooks return canonical NPCs instead of published sources.
+- `byte gate failed` or `failed closed; refusing to load the plugin` - the installed Starfield executable does not match the supported appearance-read contract. Do not bypass this check; use a matching OSF Identity build.
 
 If the actor only changes after leaving and re-entering the cell, include the
 initial-load and re-entry sections of the log in a bug report.
 
 ## Native queue drop
 
-This critical message means the guarded payload was not allowed to mutate the actor because it reached the wrong drain thread:
+This critical message means the guarded preparation payload did not run because it reached the wrong drain thread:
 
 ```text
 [NativeMainThreadQueue] DROP
 ```
 
-The rejected request remains pending, so one drop followed by a successful `transient overlay completed` message is recoverable. 
-Repeated drops without a later success indicate a queue compatibility problem; preserve the complete log and report it. 
-Because the rejected payload did not run, this message alone does not indicate that the NPC base was modified.
+The rejected base remains pending, so one drop followed by a successful `detached render source published` message is recoverable.
+Repeated drops without a later success indicate a queue compatibility problem; preserve the complete log and report it.
+Because the rejected payload did not run, this message alone does not indicate that a render source was prepared or published.
 
 ## A removed pack still applies
 

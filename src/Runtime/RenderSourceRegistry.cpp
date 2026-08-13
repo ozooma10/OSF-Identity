@@ -1,5 +1,7 @@
 #include "RenderSourceRegistry.h"
 
+#include "RuntimeSafety.h"
+
 #include <array>
 #include <atomic>
 #include <cstddef>
@@ -47,6 +49,7 @@ namespace Runtime
     RenderSourceRegistryReadView GetRenderSourceRegistryReadView() noexcept
     {
         return RenderSourceRegistryReadView{
+            .runtimeOperational = RuntimeOperationalFlagAddress(),
             .slots = g_registry.data(),
             .capacity = kRegistryCapacity,
             .slotSize = sizeof(RegistrySlot),
@@ -62,6 +65,9 @@ namespace Runtime
     {
         if (!a_canonical) {
             return nullptr;
+        }
+        if (!IsRuntimeOperational()) {
+            return a_canonical;
         }
 
         const auto start = StartIndex(a_canonical);
