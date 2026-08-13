@@ -15,6 +15,7 @@ namespace Runtime
     namespace
     {
         constexpr std::size_t kOutputSize = 0x48;
+        constexpr std::size_t kOwnerReferenceCountOffset = 0x0;
         constexpr std::size_t kRequestCountOffset = 0x38;
 
         struct ContractSite
@@ -27,8 +28,9 @@ namespace Runtime
         };
 
         // 1.16.244: the original CharGen state machine proves the submission argument order, output layout, readiness/finalization entry points, and output cleanup routine used below.
-        constexpr std::array<ContractSite, 6> kContractSites{
+        constexpr std::array<ContractSite, 7> kContractSites{
             ContractSite{ "CharGen.submitCall", REL::ID(69553), 0x1CB, { 0x45, 0x33, 0xC9, 0x4C, 0x8D, 0x05, 0x3B, 0x71, 0x17, 0x05, 0x48, 0x8B, 0x97, 0x28, 0x5B, 0x00, 0x00, 0x49, 0x8B, 0xCA, 0xE8, 0xBC, 0x33, 0x00, 0x00 }, 25 },
+            ContractSite{ "CharGen.publicationBarrier", REL::ID(69553), 0x380, { 0x40, 0x38, 0x2D, 0xC9, 0x6F, 0x17, 0x05 }, 7 },
             ContractSite{ "CharGen.outputConstructorCall", REL::ID(69538), 0xA7, { 0x48, 0x8D, 0x8F, 0x90, 0x5B, 0x00, 0x00, 0xE8, 0x6D, 0xD2, 0x00, 0x00 }, 12 },
             ContractSite{ "FaceTextureComposite.ready", REL::ID(69633), 0x0, { 0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x7C, 0x24, 0x10, 0x48, 0x8B, 0x41, 0x30, 0x41, 0xB3 }, 16 },
             ContractSite{ "FaceTextureComposite.finalize", REL::ID(69634), 0x0, { 0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x18, 0x57, 0x48, 0x81, 0xEC, 0xB0, 0x00 }, 16 },
@@ -56,6 +58,8 @@ namespace Runtime
         }
 
         [[nodiscard]] std::uint32_t RequestCount(const FaceTextureComposite* a_composite) noexcept;
+        [[nodiscard]] std::uint32_t OwnerReferenceCount(const FaceTextureComposite* a_composite) noexcept;
+
     }
 
     struct alignas(16) FaceTextureComposite
@@ -74,6 +78,15 @@ namespace Runtime
             std::uint32_t count = 0;
             if (a_composite) {
                 std::memcpy(&count, a_composite->storage.data() + kRequestCountOffset, sizeof(count));
+            }
+            return count;
+        }
+
+        std::uint32_t OwnerReferenceCount(const FaceTextureComposite* a_composite) noexcept
+        {
+            std::uint32_t count = 0;
+            if (a_composite) {
+                std::memcpy(&count, a_composite->storage.data() + kOwnerReferenceCountOffset, sizeof(count));
             }
             return count;
         }
@@ -112,12 +125,16 @@ namespace Runtime
 
         static REL::Relocation<ConstructOutput> construct{ REL::ID(69637) };
         construct(composite->storage.data());
-        if (RequestCount(composite) != 0) {
-            REX::CRITICAL("[FaceTextureCompositor] newly constructed output carrier was not empty");
+        if (OwnerReferenceCount(composite) != 0 || RequestCount(composite) != 0) {
+            REX::CRITICAL("[FaceTextureCompositor] newly constructed output carrier violated its empty unowned state");
             delete composite;
             KillRuntime("the engine face-texture output constructor violated its empty-state contract");
             return nullptr;
         }
+
+        // The engine constructor creates an unowned carrier. CharGen acquires one owner reference immediately after construction, and heap carriers are destroyed when this count transitions from one to zero.
+        constexpr std::uint32_t ownerReference = 1;
+        std::memcpy(composite->storage.data() + kOwnerReferenceCountOffset, &ownerReference, sizeof(ownerReference));
         return composite;
     }
 
@@ -143,7 +160,7 @@ namespace Runtime
     bool StartFaceTextureComposite(FaceTextureComposite* a_composite, RE::TESNPC* a_canonical, RE::TESNPC* a_source) noexcept
     {
         if (!a_composite || a_composite->submitted || a_composite->finalized || !a_canonical || !a_source ||
-            a_source->GetFormID() != 0 || ResolveCanonicalForRenderSource(a_source) != a_canonical ||
+            a_source->GetFormID() != 0 || ResolveRuntimeFormIDForRenderSource(a_source) != a_canonical->GetFormID() ||
             !NeedsFaceTextureComposite(a_source) || !IsRuntimeOperational() || !InsideNativeDrain("submission")) {
             return false;
         }
@@ -159,8 +176,10 @@ namespace Runtime
         }
 
         a_composite->submitted = true;
-        REX::DEBUG("[FaceTextureCompositor] submitted {} generated face-texture requests for base=0x{:08X} layers={}",
-            requestCount, a_canonical->GetFormID(), a_source->tintAVMData.size());
+        const auto canonicalOwnerIndex = a_canonical->loadOrderIndex;
+        const auto compositeOwnerIndex = canonicalOwnerIndex == 0xFFFF ? 0 : canonicalOwnerIndex;
+        REX::DEBUG("[FaceTextureCompositor] submitted {} generated face-texture requests for base=0x{:08X} layers={} canonicalOwnerIndex=0x{:04X} compositeOwnerIndex=0x{:04X} ownerReferences={}",
+            requestCount, a_canonical->GetFormID(), a_source->tintAVMData.size(), canonicalOwnerIndex, compositeOwnerIndex, OwnerReferenceCount(a_composite));
         return true;
     }
 
@@ -183,6 +202,17 @@ namespace Runtime
         static REL::Relocation<FinalizeComposite> finalize{ REL::ID(69634) };
         finalize(a_composite->storage.data());
         a_composite->finalized = true;
+        REX::DEBUG("[FaceTextureCompositor] finalized generated face textures with ownerReferences={}", OwnerReferenceCount(a_composite));
         return true;
+    }
+
+    bool IsFaceTexturePublicationIdle() noexcept
+    {
+        if (!IsRuntimeOperational() || !InsideNativeDrain("publication-barrier poll")) {
+            return false;
+        }
+
+        static REL::Relocation<std::uint8_t*> publicationBusy{ REL::ID(1141378) };
+        return *publicationBusy == 0;
     }
 }

@@ -14,4 +14,5 @@ namespace Runtime
     [[nodiscard]] bool StartFaceTextureComposite(FaceTextureComposite* a_composite, RE::TESNPC* a_canonical, RE::TESNPC* a_source) noexcept;
     [[nodiscard]] bool IsFaceTextureCompositeReady(FaceTextureComposite* a_composite) noexcept;
     [[nodiscard]] bool FinalizeFaceTextureComposite(FaceTextureComposite* a_composite) noexcept;
+    [[nodiscard]] bool IsFaceTexturePublicationIdle() noexcept;
 }

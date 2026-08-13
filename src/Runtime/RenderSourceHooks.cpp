@@ -50,28 +50,28 @@ namespace Runtime
 
         // 1.16.244: direct actor->base read that feeds the appearance builder or its FaceDB work graph.
         constexpr std::array<InlineBaseReadSite, 15> kBaseReadSites{
-            InlineBaseReadSite{ "ActorAppearanceBuilder.initialBase", REL::ID{ 102205 }, 0x1A7, { 0x49, 0x8B, 0xBE, 0x98, 0x00, 0x00, 0x00 }, Gpr::kR14, Gpr::kRdi },
-            InlineBaseReadSite{ "ActorAppearanceBuilder.faceResourceBase", REL::ID{ 102205 }, 0x270, { 0x4D, 0x8B, 0x86, 0x98, 0x00, 0x00, 0x00 }, Gpr::kR14, Gpr::kR8 },
-            InlineBaseReadSite{ "ActorAppearanceBuilder.geometryBase", REL::ID{ 102205 }, 0x8A2, { 0x49, 0x8B, 0x8E, 0x98, 0x00, 0x00, 0x00 }, Gpr::kR14, Gpr::kRcx },
-            InlineBaseReadSite{ "ActorAppearanceBuilder.changeBase", REL::ID{ 102205 }, 0xF42, { 0x49, 0x8B, 0x8E, 0x98, 0x00, 0x00, 0x00 }, Gpr::kR14, Gpr::kRcx },
-            InlineBaseReadSite{ "FaceCustomizationTextures.base", REL::ID{ 40889 }, 0x30, { 0x48, 0x8B, 0xB1, 0x98, 0x00, 0x00, 0x00 }, Gpr::kRcx, Gpr::kRsi },
-            InlineBaseReadSite{ "EyeCustomization.base", REL::ID{ 40892 }, 0x61, { 0x4D, 0x8B, 0xAD, 0x98, 0x00, 0x00, 0x00 }, Gpr::kR13, Gpr::kR13 },
-            InlineBaseReadSite{ "HairCustomization.base", REL::ID{ 40901 }, 0x101, { 0x48, 0x8B, 0x88, 0x98, 0x00, 0x00, 0x00 }, Gpr::kRax, Gpr::kRcx },
-            InlineBaseReadSite{ "TeethCustomization.base", REL::ID{ 40904 }, 0xF7, { 0x48, 0x8B, 0x88, 0x98, 0x00, 0x00, 0x00 }, Gpr::kRax, Gpr::kRcx },
-            InlineBaseReadSite{ "JewelryCustomization.base", REL::ID{ 40908 }, 0xF7, { 0x48, 0x8B, 0x88, 0x98, 0x00, 0x00, 0x00 }, Gpr::kRax, Gpr::kRcx },
-            InlineBaseReadSite{ "ReplaceHeadPartPostprocess.base", REL::ID{ 40916 }, 0xBE, { 0x48, 0x8B, 0x86, 0x98, 0x00, 0x00, 0x00 }, Gpr::kRsi, Gpr::kRax },
-            InlineBaseReadSite{ "ReplaceHeadPartGraph.raceBase", REL::ID{ 40923 }, 0x6FB, { 0x48, 0x8B, 0xBB, 0x98, 0x00, 0x00, 0x00 }, Gpr::kRbx, Gpr::kRdi },
-            InlineBaseReadSite{ "ReplaceHeadPartGraph.customizationBase", REL::ID{ 40923 }, 0x7F9, { 0x48, 0x8B, 0xB1, 0x98, 0x00, 0x00, 0x00 }, Gpr::kRcx, Gpr::kRsi },
-            InlineBaseReadSite{ "AttachHeadControl.base", REL::ID{ 40926 }, 0x16, { 0x48, 0x8B, 0xA8, 0x98, 0x00, 0x00, 0x00 }, Gpr::kRax, Gpr::kRbp },
-            InlineBaseReadSite{ "AttachHeadCallback.base", REL::ID{ 40927 }, 0x4A, { 0x49, 0x8B, 0xB8, 0x98, 0x00, 0x00, 0x00 }, Gpr::kR8, Gpr::kRdi },
-            InlineBaseReadSite{ "FaceResourceControl.rootFaceBase", REL::ID{ 40933 }, 0x14, { 0x48, 0x8B, 0xB8, 0x98, 0x00, 0x00, 0x00 }, Gpr::kRax, Gpr::kRdi }
-        };
+            InlineBaseReadSite{"ActorAppearanceBuilder.initialBase", REL::ID{102205}, 0x1A7, {0x49, 0x8B, 0xBE, 0x98, 0x00, 0x00, 0x00}, Gpr::kR14, Gpr::kRdi},
+            InlineBaseReadSite{"ActorAppearanceBuilder.faceResourceBase", REL::ID{102205}, 0x270, {0x4D, 0x8B, 0x86, 0x98, 0x00, 0x00, 0x00}, Gpr::kR14, Gpr::kR8},
+            InlineBaseReadSite{"ActorAppearanceBuilder.geometryBase", REL::ID{102205}, 0x8A2, {0x49, 0x8B, 0x8E, 0x98, 0x00, 0x00, 0x00}, Gpr::kR14, Gpr::kRcx},
+            InlineBaseReadSite{"ActorAppearanceBuilder.changeBase", REL::ID{102205}, 0xF42, {0x49, 0x8B, 0x8E, 0x98, 0x00, 0x00, 0x00}, Gpr::kR14, Gpr::kRcx},
+            InlineBaseReadSite{"FaceCustomizationTextures.base", REL::ID{40889}, 0x30, {0x48, 0x8B, 0xB1, 0x98, 0x00, 0x00, 0x00}, Gpr::kRcx, Gpr::kRsi},
+            InlineBaseReadSite{"EyeCustomization.base", REL::ID{40892}, 0x61, {0x4D, 0x8B, 0xAD, 0x98, 0x00, 0x00, 0x00}, Gpr::kR13, Gpr::kR13},
+            InlineBaseReadSite{"HairCustomization.base", REL::ID{40901}, 0x101, {0x48, 0x8B, 0x88, 0x98, 0x00, 0x00, 0x00}, Gpr::kRax, Gpr::kRcx},
+            InlineBaseReadSite{"TeethCustomization.base", REL::ID{40904}, 0xF7, {0x48, 0x8B, 0x88, 0x98, 0x00, 0x00, 0x00}, Gpr::kRax, Gpr::kRcx},
+            InlineBaseReadSite{"JewelryCustomization.base", REL::ID{40908}, 0xF7, {0x48, 0x8B, 0x88, 0x98, 0x00, 0x00, 0x00}, Gpr::kRax, Gpr::kRcx},
+            InlineBaseReadSite{"ReplaceHeadPartPostprocess.base", REL::ID{40916}, 0xBE, {0x48, 0x8B, 0x86, 0x98, 0x00, 0x00, 0x00}, Gpr::kRsi, Gpr::kRax},
+            InlineBaseReadSite{"ReplaceHeadPartGraph.raceBase", REL::ID{40923}, 0x6FB, {0x48, 0x8B, 0xBB, 0x98, 0x00, 0x00, 0x00}, Gpr::kRbx, Gpr::kRdi},
+            InlineBaseReadSite{"ReplaceHeadPartGraph.customizationBase", REL::ID{40923}, 0x7F9, {0x48, 0x8B, 0xB1, 0x98, 0x00, 0x00, 0x00}, Gpr::kRcx, Gpr::kRsi},
+            InlineBaseReadSite{"AttachHeadControl.base", REL::ID{40926}, 0x16, {0x48, 0x8B, 0xA8, 0x98, 0x00, 0x00, 0x00}, Gpr::kRax, Gpr::kRbp},
+            InlineBaseReadSite{"AttachHeadCallback.base", REL::ID{40927}, 0x4A, {0x49, 0x8B, 0xB8, 0x98, 0x00, 0x00, 0x00}, Gpr::kR8, Gpr::kRdi},
+            InlineBaseReadSite{"FaceResourceControl.rootFaceBase", REL::ID{40933}, 0x14, {0x48, 0x8B, 0xB8, 0x98, 0x00, 0x00, 0x00}, Gpr::kRax, Gpr::kRdi}};
 
         enum class TextureIdentityKind : std::uint8_t
         {
             kFormIDThenLookup,
             kOwnerFileLookup,
             kMaskedFormID,
+            kCompositeOwnerIndex,
             kCompositeMaskedFormID
         };
 
@@ -86,15 +86,14 @@ namespace Runtime
             REL::ID tailTarget;
         };
 
-        // 1.16.244: FaceDB uses these identity reads only to derive the generated
-        // face-texture path. Resolve the published source back to its canonical
-        // base here without giving the FormID-0 source a global alias.
-        constexpr std::array<InlineTextureIdentitySite, 4> kTextureIdentitySites{
-            InlineTextureIdentitySite{ "FaceTexturePath.emptyTintFormID", REL::ID{ 40886 }, 0x107, { 0x8B, 0x56, 0x28, 0xE8, 0x51, 0x4F, 0x1A, 0x00 }, 8, TextureIdentityKind::kFormIDThenLookup, REL::ID{ 1015183 } },
-            InlineTextureIdentitySite{ "FaceTexturePath.ownerFile", REL::ID{ 40886 }, 0x1CC, { 0x48, 0x8B, 0xCE, 0xE8, 0xCC, 0xF8, 0x1C, 0x00 }, 8, TextureIdentityKind::kOwnerFileLookup, REL::ID{ 47437 } },
-            InlineTextureIdentitySite{ "FaceTexturePath.maskedFormID", REL::ID{ 40886 }, 0x204, { 0xB8, 0xFF, 0xFF, 0xFF, 0x00, 0x8B, 0x56, 0x28, 0x8B, 0xDA, 0x23, 0xD8 }, 12, TextureIdentityKind::kMaskedFormID, REL::ID{ 0 } },
-            InlineTextureIdentitySite{ "FaceTextureComposite.maskedFormID", REL::ID{ 69597 }, 0x191, { 0x8B, 0x7E, 0x28, 0x23, 0xF8 }, 5, TextureIdentityKind::kCompositeMaskedFormID, REL::ID{ 0 } }
-        };
+        // 1.16.244: FaceDB uses these identity reads only to derive the generated face-texture path. 
+        // Resolve the published source back to its canonical base here without giving the FormID-0 source a global alias.
+        constexpr std::array<InlineTextureIdentitySite, 5> kTextureIdentitySites{
+            InlineTextureIdentitySite{"FaceTexturePath.emptyTintFormID", REL::ID{40886}, 0x107, {0x8B, 0x56, 0x28, 0xE8, 0x51, 0x4F, 0x1A, 0x00}, 8, TextureIdentityKind::kFormIDThenLookup, REL::ID{1015183}},
+            InlineTextureIdentitySite{"FaceTexturePath.ownerFile", REL::ID{40886}, 0x1CC, {0x48, 0x8B, 0xCE, 0xE8, 0xCC, 0xF8, 0x1C, 0x00}, 8, TextureIdentityKind::kOwnerFileLookup, REL::ID{47437}},
+            InlineTextureIdentitySite{"FaceTexturePath.maskedFormID", REL::ID{40886}, 0x209, {0x8B, 0x56, 0x28, 0x8B, 0xDA, 0x23, 0xD8}, 7, TextureIdentityKind::kMaskedFormID, REL::ID{0}},
+            InlineTextureIdentitySite{"FaceTextureComposite.ownerIndex", REL::ID{69597}, 0x112, {0x0F, 0xB7, 0x56, 0x30, 0x41, 0xBA, 0xFF, 0xFF, 0x00, 0x00}, 10, TextureIdentityKind::kCompositeOwnerIndex, REL::ID{0}},
+            InlineTextureIdentitySite{"FaceTextureComposite.maskedFormID", REL::ID{69597}, 0x191, {0x8B, 0x7E, 0x28, 0x23, 0xF8}, 5, TextureIdentityKind::kCompositeMaskedFormID, REL::ID{0}}};
 
         constexpr std::size_t kMaxThunkSize = 512;
         constexpr std::size_t kMaxPatchSize = 12;
@@ -104,32 +103,33 @@ namespace Runtime
             Gpr::kRcx,
             Gpr::kRdx,
             Gpr::kR10,
-            Gpr::kR11
-        };
+            Gpr::kR11};
 
         struct GeneratedThunk
         {
-            std::uintptr_t address{ 0 };
-            std::size_t size{ 0 };
+            std::uintptr_t address{0};
+            std::size_t size{0};
         };
 
         struct PreparedPatch
         {
-            std::uintptr_t address{ 0 };
+            std::uintptr_t address{0};
             std::array<std::uint8_t, kMaxPatchSize> bytes{};
-            std::size_t size{ 0 };
+            std::size_t size{0};
         };
 
-        std::atomic<bool> g_installed{ false };
+        std::atomic<bool> g_installed{false};
 
         std::string BytesAt(const std::uintptr_t a_address, const std::size_t a_count)
         {
-            constexpr std::string_view digits{ "0123456789ABCDEF" };
-            const auto* bytes = reinterpret_cast<const std::uint8_t*>(a_address);
+            constexpr std::string_view digits{"0123456789ABCDEF"};
+            const auto *bytes = reinterpret_cast<const std::uint8_t *>(a_address);
             std::string result;
             result.reserve(a_count * 3);
-            for (std::size_t i = 0; i < a_count; ++i) {
-                if (i != 0) {
+            for (std::size_t i = 0; i < a_count; ++i)
+            {
+                if (i != 0)
+                {
                     result.push_back(' ');
                 }
                 result.push_back(digits[bytes[i] >> 4]);
@@ -138,32 +138,36 @@ namespace Runtime
             return result;
         }
 
-        bool PreflightSites(std::array<std::uintptr_t, kBaseReadSites.size()>& a_addresses)
+        bool PreflightSites(std::array<std::uintptr_t, kBaseReadSites.size()> &a_addresses)
         {
             bool valid = true;
-            for (std::size_t i = 0; i < kBaseReadSites.size(); ++i) {
-                const auto& site = kBaseReadSites[i];
-                const REL::Relocation<std::uintptr_t> location{ site.functionID, site.offset };
+            for (std::size_t i = 0; i < kBaseReadSites.size(); ++i)
+            {
+                const auto &site = kBaseReadSites[i];
+                const REL::Relocation<std::uintptr_t> location{site.functionID, site.offset};
                 a_addresses[i] = location.address();
-                if (std::memcmp(reinterpret_cast<const void*>(location.address()), site.expectedInstruction.data(), site.expectedInstruction.size()) != 0) {
+                if (std::memcmp(reinterpret_cast<const void *>(location.address()), site.expectedInstruction.data(), site.expectedInstruction.size()) != 0)
+                {
                     REX::CRITICAL("[RenderSourceHooks] byte gate failed at '{}' (Address Library ID {} + 0x{:X}); expected canonical TESNPC load, found [{}]",
-                        site.name, site.functionID.id(), site.offset, BytesAt(location.address(), site.expectedInstruction.size()));
+                                  site.name, site.functionID.id(), site.offset, BytesAt(location.address(), site.expectedInstruction.size()));
                     valid = false;
                 }
             }
             return valid;
         }
 
-        bool PreflightTextureIdentitySites(std::array<std::uintptr_t, kTextureIdentitySites.size()>& a_addresses)
+        bool PreflightTextureIdentitySites(std::array<std::uintptr_t, kTextureIdentitySites.size()> &a_addresses)
         {
             bool valid = true;
-            for (std::size_t i = 0; i < kTextureIdentitySites.size(); ++i) {
-                const auto& site = kTextureIdentitySites[i];
-                const REL::Relocation<std::uintptr_t> location{ site.functionID, site.offset };
+            for (std::size_t i = 0; i < kTextureIdentitySites.size(); ++i)
+            {
+                const auto &site = kTextureIdentitySites[i];
+                const REL::Relocation<std::uintptr_t> location{site.functionID, site.offset};
                 a_addresses[i] = location.address();
-                if (std::memcmp(reinterpret_cast<const void*>(location.address()), site.expectedInstructions.data(), site.instructionSize) != 0) {
+                if (std::memcmp(reinterpret_cast<const void *>(location.address()), site.expectedInstructions.data(), site.instructionSize) != 0)
+                {
                     REX::CRITICAL("[RenderSourceHooks] byte gate failed at '{}' (Address Library ID {} + 0x{:X}); expected face-texture identity sequence, found [{}]",
-                        site.name, site.functionID.id(), site.offset, BytesAt(location.address(), site.instructionSize));
+                                  site.name, site.functionID.id(), site.offset, BytesAt(location.address(), site.instructionSize));
                     valid = false;
                 }
             }
@@ -175,25 +179,33 @@ namespace Runtime
             return a_value != 0 && (a_value & (a_value - 1)) == 0;
         }
 
-        void ValidateReadView(const RenderSourceRegistryReadView& a_view)
+        void ValidateReadView(const RenderSourceRegistryReadView &a_view)
         {
-            if (!a_view.runtimeOperational || !a_view.slots || !IsPowerOfTwo(a_view.capacity) || !IsPowerOfTwo(a_view.slotSize) || a_view.slotSize < sizeof(RE::TESNPC*)) {
+            if (!a_view.runtimeOperational || !a_view.slots || !IsPowerOfTwo(a_view.capacity) || !IsPowerOfTwo(a_view.slotSize) || a_view.slotSize < sizeof(RE::TESNPC *))
+            {
                 throw std::runtime_error("render-source registry has an invalid generated-reader layout");
             }
-            if (a_view.capacity > std::numeric_limits<std::size_t>::max() / a_view.slotSize) {
+            if (a_view.capacity > std::numeric_limits<std::size_t>::max() / a_view.slotSize)
+            {
                 throw std::runtime_error("render-source registry byte span overflowed");
             }
 
             const auto byteSpan = a_view.capacity * a_view.slotSize;
-            if (!IsPowerOfTwo(byteSpan) || byteSpan - 1 > static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max())) {
+            if (!IsPowerOfTwo(byteSpan) || byteSpan - 1 > static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max()))
+            {
                 throw std::runtime_error("render-source registry byte span cannot be encoded by the generated reader");
             }
-            if (a_view.canonicalOffset > a_view.slotSize - sizeof(RE::TESNPC*) ||  a_view.sourceOffset > a_view.slotSize - sizeof(RE::TESNPC*) ||
-                a_view.canonicalOffset > static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max()) ||  a_view.sourceOffset > static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max()) ||
-                a_view.canonicalOffset % alignof(RE::TESNPC*) != 0 || a_view.sourceOffset % alignof(RE::TESNPC*) != 0 || reinterpret_cast<std::uintptr_t>(a_view.slots) % alignof(RE::TESNPC*) != 0) {
-                throw std::runtime_error("render-source registry pointer offsets are invalid");
+            //i cry but :shrug:
+            if (a_view.formIDOffset > a_view.slotSize - sizeof(std::uint64_t) || a_view.sourceOffset > a_view.slotSize - sizeof(RE::TESNPC *) ||
+                a_view.activeOffset > a_view.slotSize - sizeof(std::uint64_t) || a_view.formIDOffset > static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max()) ||
+                a_view.sourceOffset > static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max()) || a_view.activeOffset > static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max()) ||
+                a_view.formIDOffset % alignof(std::uint64_t) != 0 || a_view.sourceOffset % alignof(RE::TESNPC *) != 0 ||
+                a_view.activeOffset % alignof(std::uint64_t) != 0 || reinterpret_cast<std::uintptr_t>(a_view.slots) % alignof(RE::TESNPC *) != 0)
+            {
+                throw std::runtime_error("render-source registry field offsets are invalid");
             }
-            if (a_view.pointerShift >= 64 || a_view.foldShift >= 64 || a_view.hashMultiplier == 0) {
+            if (a_view.foldShift >= 64 || a_view.hashMultiplier == 0)
+            {
                 throw std::runtime_error("render-source registry hash parameters are invalid");
             }
         }
@@ -202,10 +214,13 @@ namespace Runtime
         {
             std::array<Gpr, kScratchRegisterCount> selected{};
             std::size_t count = 0;
-            for (const auto candidate : kScratchCandidates) {
-                if (candidate != a_result) {
+            for (const auto candidate : kScratchCandidates)
+            {
+                if (candidate != a_result)
+                {
                     selected[count++] = candidate;
-                    if (count == selected.size()) {
+                    if (count == selected.size())
+                    {
                         return selected;
                     }
                 }
@@ -216,19 +231,23 @@ namespace Runtime
         class BaseReadThunk final : public Xbyak::CodeGenerator
         {
         public:
-            BaseReadThunk(const InlineBaseReadSite& a_site, const RenderSourceRegistryReadView& a_view) : Xbyak::CodeGenerator(kMaxThunkSize)
+            BaseReadThunk(
+                const InlineBaseReadSite &a_site,
+                const RenderSourceRegistryReadView &a_view) : Xbyak::CodeGenerator(kMaxThunkSize)
             {
-                if (a_site.actorRegister == Gpr::kRsp || a_site.resultRegister == Gpr::kRsp) {
+                if (a_site.actorRegister == Gpr::kRsp || a_site.resultRegister == Gpr::kRsp)
+                {
                     throw std::runtime_error("render-source thunk cannot use RSP as an actor or result register");
                 }
 
-                const Xbyak::Reg64 actor{ static_cast<int>(a_site.actorRegister) };
-                const Xbyak::Reg64 result{ static_cast<int>(a_site.resultRegister) };
+                const Xbyak::Reg64 actor{static_cast<int>(a_site.actorRegister)};
+                const Xbyak::Reg64 result{static_cast<int>(a_site.resultRegister)};
                 const auto scratchRegisters = SelectScratchRegisters(a_site.resultRegister);
-                const Xbyak::Reg64 byteOffset{ static_cast<int>(scratchRegisters[0]) };
-                const Xbyak::Reg64 table{ static_cast<int>(scratchRegisters[1]) };
-                const Xbyak::Reg64 loaded{ static_cast<int>(scratchRegisters[2]) };
-                const Xbyak::Reg64 remaining{ static_cast<int>(scratchRegisters[3]) };
+                const Xbyak::Reg64 byteOffset{static_cast<int>(scratchRegisters[0])};
+                const Xbyak::Reg64 table{static_cast<int>(scratchRegisters[1])};
+                const Xbyak::Reg64 key{static_cast<int>(scratchRegisters[2])};
+                const Xbyak::Reg32 key32{static_cast<int>(scratchRegisters[2])};
+                const Xbyak::Reg64 remaining{static_cast<int>(scratchRegisters[3])};
                 const auto byteSpan = a_view.capacity * a_view.slotSize;
                 const auto slotShift = static_cast<std::uint8_t>(std::countr_zero(a_view.slotSize));
 
@@ -237,8 +256,9 @@ namespace Runtime
                 Xbyak::Label done;
 
                 pushfq();
-                for (const auto scratch : scratchRegisters) {
-                    push(Xbyak::Reg64{ static_cast<int>(scratch) });
+                for (const auto scratch : scratchRegisters)
+                {
+                    push(Xbyak::Reg64{static_cast<int>(scratch)});
                 }
 
                 // Preserve the exact contract of the replaced MOV: only the result register changes, and a null canonical pointer remains null.
@@ -251,17 +271,18 @@ namespace Runtime
                 cmp(byte[table], 0);
                 jz(done, T_NEAR);
 
-                // Mirror StartIndex without crossing the C++ ABI. The registry is immutable after publication, and aligned x86-64 loads provide the acquire ordering required after observing the canonical key.
-                mov(byteOffset, result);
-                shr(byteOffset, a_view.pointerShift);
-                mov(loaded, byteOffset);
-                shr(loaded, a_view.foldShift);
-                xor_(byteOffset, loaded);
-                mov(loaded, a_view.hashMultiplier);
-                imul(byteOffset, loaded);
-                mov(loaded, byteOffset);
-                shr(loaded, a_view.foldShift);
-                xor_(byteOffset, loaded);
+                // Key by the runtime FormID rather than the TESNPC pointer. Save loading may replace a dynamic leveled TESNPC object while preserving its FormID, so this binding survives that rebuild.
+                mov(key32, dword[result + 0x28]);
+                test(key32, key32);
+                jz(done, T_NEAR);
+
+                // Mirror StartIndex without crossing the C++ ABI. FormID keys are append-only, and aligned x86-64 loads provide the acquire ordering required after observing a published key.
+                mov(byteOffset, key);
+                mov(table, a_view.hashMultiplier);
+                imul(byteOffset, table);
+                mov(table, byteOffset);
+                shr(table, a_view.foldShift);
+                xor_(byteOffset, table);
                 and_(byteOffset, static_cast<std::uint32_t>(a_view.capacity - 1));
                 shl(byteOffset, slotShift);
 
@@ -269,10 +290,9 @@ namespace Runtime
                 mov(remaining, static_cast<std::uint64_t>(a_view.capacity));
 
                 L(probe);
-                mov(loaded, ptr[table + byteOffset + static_cast<int>(a_view.canonicalOffset)]);
-                cmp(loaded, result);
+                cmp(qword[table + byteOffset + static_cast<int>(a_view.formIDOffset)], key);
                 je(found, T_NEAR);
-                test(loaded, loaded);
+                cmp(qword[table + byteOffset + static_cast<int>(a_view.formIDOffset)], 0);
                 jz(done, T_NEAR);
 
                 add(byteOffset, static_cast<std::uint32_t>(a_view.slotSize));
@@ -282,19 +302,25 @@ namespace Runtime
                 jmp(done, T_NEAR);
 
                 L(found);
-                mov(loaded, ptr[table + byteOffset + static_cast<int>(a_view.sourceOffset)]);
-                test(loaded, loaded);
-                cmovnz(result, loaded);
+                mov(key, ptr[table + byteOffset + static_cast<int>(a_view.activeOffset)]);
+                test(key, key);
+                jz(done, T_NEAR);
+                mov(key, ptr[table + byteOffset + static_cast<int>(a_view.sourceOffset)]);
+                test(key, key);
+                jz(done, T_NEAR);
+                mov(result, key);
 
                 L(done);
-                for (auto it = scratchRegisters.rbegin(); it != scratchRegisters.rend(); ++it) {
-                    pop(Xbyak::Reg64{ static_cast<int>(*it) });
+                for (auto it = scratchRegisters.rbegin(); it != scratchRegisters.rend(); ++it)
+                {
+                    pop(Xbyak::Reg64{static_cast<int>(*it)});
                 }
                 popfq();
                 ret();
                 ready();
 
-                if (getSize() > kMaxThunkSize) {
+                if (getSize() > kMaxThunkSize)
+                {
                     throw std::runtime_error("base-read thunk exceeded its generation limit");
                 }
             }
@@ -305,20 +331,23 @@ namespace Runtime
         public:
             explicit TextureFormIDLookupThunk(const std::uintptr_t a_tailTarget) : Xbyak::CodeGenerator(kMaxThunkSize)
             {
-                // Preserve the manager pointer already in RCX, reverse the RSI render source to its canonical base, reproduce the FormID load, then tail-call the engine lookup from the stolen block.
+                // Preserve the manager pointer already in RCX, recover the runtime FormID for RSI, then tail-call the specialized FaceDB lookup from the stolen block.
                 push(rcx);
                 sub(rsp, 0x20);
                 mov(rcx, rsi);
-                mov(rax, reinterpret_cast<std::uintptr_t>(&ResolveCanonicalForRenderSource));
+                // FaceDB selection lookup, not final texture naming.
+                // Keep tied to the runtime base; substituting the configured FormID selects an unrelated entry from this specialized table.
+                mov(rax, reinterpret_cast<std::uintptr_t>(&ResolveRuntimeFormIDForRenderSource));
                 call(rax);
-                mov(edx, dword[rax + 0x28]);
+                mov(edx, eax);
                 add(rsp, 0x20);
                 pop(rcx);
                 mov(rax, a_tailTarget);
                 jmp(rax);
                 ready();
 
-                if (getSize() > kMaxThunkSize) {
+                if (getSize() > kMaxThunkSize)
+                {
                     throw std::runtime_error("face-texture FormID lookup thunk exceeded its generation limit");
                 }
             }
@@ -330,10 +359,10 @@ namespace Runtime
             explicit TextureOwnerFileThunk(const std::uintptr_t a_tailTarget) : Xbyak::CodeGenerator(kMaxThunkSize)
             {
                 // The stolen sequence sets RCX to the NPC and calls GetFile.
-                // Substitute the canonical base only for that identity call.
+                // Substitute the stable configured texture identity only for that call.
                 sub(rsp, 0x28);
                 mov(rcx, rsi);
-                mov(rax, reinterpret_cast<std::uintptr_t>(&ResolveCanonicalForRenderSource));
+                mov(rax, reinterpret_cast<std::uintptr_t>(&ResolveFaceTextureIdentityForRenderSource));
                 call(rax);
                 add(rsp, 0x28);
                 mov(rcx, rax);
@@ -341,7 +370,8 @@ namespace Runtime
                 jmp(rax);
                 ready();
 
-                if (getSize() > kMaxThunkSize) {
+                if (getSize() > kMaxThunkSize)
+                {
                     throw std::runtime_error("face-texture owner-file thunk exceeded its generation limit");
                 }
             }
@@ -352,31 +382,33 @@ namespace Runtime
         public:
             TextureMaskedFormIDThunk() : Xbyak::CodeGenerator(kMaxThunkSize)
             {
-                // This stolen block has no call, so preserve every volatile register it originally left untouched across the C++ reverse lookup. 
-                // EAX, EDX, EBX, and flags retain the original block's final machine-state contract.
+                // Both owner-file branches converge here with their plugin-tier FormID mask in EAX.
+                // Preserve that mask and every volatile register the stolen block left untouched across the C++ reverse lookup, then reproduce `EDX = FormID; EBX = EDX & EAX`.
+                push(rax);
                 push(rcx);
                 push(r8);
                 push(r9);
                 push(r10);
                 push(r11);
-                sub(rsp, 0x20);
+                sub(rsp, 0x28);
                 mov(rcx, rsi);
-                mov(rax, reinterpret_cast<std::uintptr_t>(&ResolveCanonicalForRenderSource));
+                mov(rax, reinterpret_cast<std::uintptr_t>(&ResolveFaceTextureIdentityForRenderSource));
                 call(rax);
                 mov(edx, dword[rax + 0x28]);
-                add(rsp, 0x20);
+                add(rsp, 0x28);
                 pop(r11);
                 pop(r10);
                 pop(r9);
                 pop(r8);
                 pop(rcx);
-                mov(eax, 0x00FFFFFF);
+                pop(rax);
                 mov(ebx, edx);
                 and_(ebx, eax);
                 ret();
                 ready();
 
-                if (getSize() > kMaxThunkSize) {
+                if (getSize() > kMaxThunkSize)
+                {
                     throw std::runtime_error("face-texture masked-FormID thunk exceeded its generation limit");
                 }
             }
@@ -387,7 +419,7 @@ namespace Runtime
         public:
             CompositeMaskedFormIDThunk() : Xbyak::CodeGenerator(kMaxThunkSize)
             {
-                // The compositor has the FormID mask in EAX and the detached TESNPC in RSI. 
+                // The compositor has the FormID mask in EAX and the detached TESNPC in RSI.
                 // Preserve every other volatile register, then reproduce the stolen `FormID & mask` result in EDI.
                 push(rax);
                 push(rcx);
@@ -398,7 +430,7 @@ namespace Runtime
                 push(r11);
                 sub(rsp, 0x20);
                 mov(rcx, rsi);
-                mov(rax, reinterpret_cast<std::uintptr_t>(&ResolveCanonicalForRenderSource));
+                mov(rax, reinterpret_cast<std::uintptr_t>(&ResolveFaceTextureIdentityForRenderSource));
                 call(rax);
                 mov(edi, dword[rax + 0x28]);
                 add(rsp, 0x20);
@@ -413,47 +445,100 @@ namespace Runtime
                 ret();
                 ready();
 
-                if (getSize() > kMaxThunkSize) {
+                if (getSize() > kMaxThunkSize)
+                {
                     throw std::runtime_error("face-texture compositor FormID thunk exceeded its generation limit");
                 }
             }
         };
 
-        GeneratedThunk CopyThunk(REL::Trampoline& a_trampoline, const Xbyak::CodeGenerator& a_thunk)
+        class CompositeOwnerIndexThunk final : public Xbyak::CodeGenerator
+        {
+        public:
+            CompositeOwnerIndexThunk() : Xbyak::CodeGenerator(kMaxThunkSize)
+            {
+                // The compositor uses the TESNPC load-order index to select the owner filename embedded in its output cache key.
+                // A detached source and its dynamic runtime base have no registered owner.
+                // Use the configured NPC's real plugin owner for a stable generated-texture key.
+                Xbyak::Label ownerReady;
+
+                pushfq();
+                push(rax);
+                push(rcx);
+                push(r8);
+                push(r9);
+                push(r11);
+                sub(rsp, 0x28);
+                mov(rcx, rsi);
+                mov(rax, reinterpret_cast<std::uintptr_t>(&ResolveFaceTextureIdentityForRenderSource));
+                call(rax);
+                movzx(edx, word[rax + 0x30]);
+                mov(r10d, 0xFFFF);
+                cmp(dx, r10w);
+                jne(ownerReady);
+                xor_(edx, edx);
+                L(ownerReady);
+                add(rsp, 0x28);
+                pop(r11);
+                pop(r9);
+                pop(r8);
+                pop(rcx);
+                pop(rax);
+                popfq();
+                ret();
+                ready();
+
+                if (getSize() > kMaxThunkSize)
+                {
+                    throw std::runtime_error("face-texture compositor owner-index thunk exceeded its generation limit");
+                }
+            }
+        };
+
+        GeneratedThunk CopyThunk(REL::Trampoline &a_trampoline, const Xbyak::CodeGenerator &a_thunk)
         {
             const auto size = a_thunk.getSize();
-            auto* memory = a_trampoline.allocate(size);
+            auto *memory = a_trampoline.allocate(size);
             std::memcpy(memory, a_thunk.getCode(), size);
             return GeneratedThunk{
                 .address = reinterpret_cast<std::uintptr_t>(memory),
-                .size = size
-            };
+                .size = size};
         }
 
-        GeneratedThunk GenerateThunk(REL::Trampoline& a_trampoline, const InlineBaseReadSite& a_site, const RenderSourceRegistryReadView& a_view)
+        GeneratedThunk GenerateThunk(REL::Trampoline &a_trampoline, const InlineBaseReadSite &a_site, const RenderSourceRegistryReadView &a_view)
         {
-            BaseReadThunk thunk{ a_site, a_view };
+            BaseReadThunk thunk{a_site, a_view};
             return CopyThunk(a_trampoline, thunk);
         }
 
-        GeneratedThunk GenerateTextureIdentityThunk(REL::Trampoline& a_trampoline, const InlineTextureIdentitySite& a_site)
+        GeneratedThunk GenerateTextureIdentityThunk(REL::Trampoline &a_trampoline, const InlineTextureIdentitySite &a_site)
         {
-            switch (a_site.kind) {
-            case TextureIdentityKind::kFormIDThenLookup: {
-                const REL::Relocation<std::uintptr_t> target{ a_site.tailTarget };
-                TextureFormIDLookupThunk thunk{ target.address() };
+            switch (a_site.kind)
+            {
+            case TextureIdentityKind::kFormIDThenLookup:
+            {
+                const REL::Relocation<std::uintptr_t> target{a_site.tailTarget};
+                TextureFormIDLookupThunk thunk{target.address()};
                 return CopyThunk(a_trampoline, thunk);
             }
-            case TextureIdentityKind::kOwnerFileLookup: {
-                const REL::Relocation<std::uintptr_t> target{ a_site.tailTarget };
-                TextureOwnerFileThunk thunk{ target.address() };
+            case TextureIdentityKind::kOwnerFileLookup:
+            {
+                const REL::Relocation<std::uintptr_t> target{a_site.tailTarget};
+                TextureOwnerFileThunk thunk{target.address()};
                 return CopyThunk(a_trampoline, thunk);
             }
-            case TextureIdentityKind::kMaskedFormID: {
+            case TextureIdentityKind::kMaskedFormID:
+            {
                 TextureMaskedFormIDThunk thunk;
                 return CopyThunk(a_trampoline, thunk);
             }
-            case TextureIdentityKind::kCompositeMaskedFormID: {
+            case TextureIdentityKind::kCompositeOwnerIndex:
+            {
+                CompositeOwnerIndexThunk thunk;
+                return CopyThunk(a_trampoline, thunk);
+            }
+            case TextureIdentityKind::kCompositeMaskedFormID:
+            {
                 CompositeMaskedFormIDThunk thunk;
                 return CopyThunk(a_trampoline, thunk);
             }
@@ -461,14 +546,16 @@ namespace Runtime
             throw std::runtime_error("unknown face-texture identity thunk kind");
         }
 
-        bool PrepareCallPatch(PreparedPatch& a_patch, const std::uintptr_t a_address, const GeneratedThunk& a_thunk, const std::size_t a_size, const std::string_view a_name)
+        bool PrepareCallPatch(PreparedPatch &a_patch, const std::uintptr_t a_address, const GeneratedThunk &a_thunk, const std::size_t a_size, const std::string_view a_name)
         {
-            if (a_size < 5 || a_size > a_patch.bytes.size()) {
+            if (a_size < 5 || a_size > a_patch.bytes.size())
+            {
                 throw std::runtime_error("invalid inline patch size");
             }
 
             const auto displacement64 = static_cast<std::int64_t>(a_thunk.address) - static_cast<std::int64_t>(a_address + 5);
-            if (displacement64 < std::numeric_limits<std::int32_t>::min() || displacement64 > std::numeric_limits<std::int32_t>::max()) {
+            if (displacement64 < std::numeric_limits<std::int32_t>::min() || displacement64 > std::numeric_limits<std::int32_t>::max())
+            {
                 REX::CRITICAL("[RenderSourceHooks] trampoline for '{}' is outside rel32 range; no engine code was patched", a_name);
                 return false;
             }
@@ -481,18 +568,22 @@ namespace Runtime
             std::memcpy(a_patch.bytes.data() + 1, &displacement, sizeof(displacement));
             return true;
         }
+
     }
 
     bool InstallRenderSourceHooks() noexcept
     {
-        if (g_installed.load(std::memory_order_acquire)) {
+        if (g_installed.load(std::memory_order_acquire))
+        {
             return true;
         }
 
-        try {
+        try
+        {
             std::array<std::uintptr_t, kBaseReadSites.size()> addresses{};
             std::array<std::uintptr_t, kTextureIdentitySites.size()> textureIdentityAddresses{};
-            if (!PreflightFaceTextureCompositorContract() || !PreflightSites(addresses) || !PreflightTextureIdentitySites(textureIdentityAddresses)) {
+            if (!PreflightFaceTextureCompositorContract() || !PreflightSites(addresses) || !PreflightTextureIdentitySites(textureIdentityAddresses))
+            {
                 REX::CRITICAL("[RenderSourceHooks] one or more appearance or compositor sites did not match; no engine code was patched");
                 return false;
             }
@@ -500,39 +591,48 @@ namespace Runtime
             const auto readView = GetRenderSourceRegistryReadView();
             ValidateReadView(readView);
 
-            auto& trampoline = REL::GetTrampoline();
+            auto &trampoline = REL::GetTrampoline();
             std::array<PreparedPatch, kBaseReadSites.size()> patches{};
             std::array<PreparedPatch, kTextureIdentitySites.size()> textureIdentityPatches{};
             std::size_t generatedBytes = 0;
-            for (std::size_t i = 0; i < kBaseReadSites.size(); ++i) {
+            for (std::size_t i = 0; i < kBaseReadSites.size(); ++i)
+            {
                 const auto thunk = GenerateThunk(trampoline, kBaseReadSites[i], readView);
                 generatedBytes += thunk.size;
-                if (!PrepareCallPatch(patches[i], addresses[i], thunk, kBaseReadSites[i].expectedInstruction.size(), kBaseReadSites[i].name)) {
+                if (!PrepareCallPatch(patches[i], addresses[i], thunk, kBaseReadSites[i].expectedInstruction.size(), kBaseReadSites[i].name))
+                {
                     return false;
                 }
             }
-            for (std::size_t i = 0; i < kTextureIdentitySites.size(); ++i) {
+            for (std::size_t i = 0; i < kTextureIdentitySites.size(); ++i)
+            {
                 const auto thunk = GenerateTextureIdentityThunk(trampoline, kTextureIdentitySites[i]);
                 generatedBytes += thunk.size;
-                if (!PrepareCallPatch(textureIdentityPatches[i], textureIdentityAddresses[i], thunk, kTextureIdentitySites[i].instructionSize, kTextureIdentitySites[i].name)) {
+                if (!PrepareCallPatch(textureIdentityPatches[i], textureIdentityAddresses[i], thunk, kTextureIdentitySites[i].instructionSize, kTextureIdentitySites[i].name))
+                {
                     return false;
                 }
             }
 
-            for (const auto& patch : patches) {
-                REL::Relocation<std::uintptr_t>{ patch.address }.write(patch.bytes.data(), patch.size);
+            for (const auto &patch : patches)
+            {
+                REL::Relocation<std::uintptr_t>{patch.address}.write(patch.bytes.data(), patch.size);
             }
-            for (const auto& patch : textureIdentityPatches) {
-                REL::Relocation<std::uintptr_t>{ patch.address }.write(patch.bytes.data(), patch.size);
+            for (const auto &patch : textureIdentityPatches)
+            {
+                REL::Relocation<std::uintptr_t>{patch.address}.write(patch.bytes.data(), patch.size);
             }
-
             g_installed.store(true, std::memory_order_release);
             REX::INFO("[RenderSourceHooks] installed {} NPC read redirects and {} face-texture identity redirects ({} generated bytes)",
-                kBaseReadSites.size(), kTextureIdentitySites.size(), generatedBytes);
+                      kBaseReadSites.size(), kTextureIdentitySites.size(), generatedBytes);
             return true;
-        } catch (const std::exception& error) {
+        }
+        catch (const std::exception &error)
+        {
             REX::CRITICAL("[RenderSourceHooks] installation threw before completion: {}", error.what());
-        } catch (...) {
+        }
+        catch (...)
+        {
             REX::CRITICAL("[RenderSourceHooks] installation threw an unknown exception before completion");
         }
         return false;

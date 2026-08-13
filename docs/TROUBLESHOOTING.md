@@ -75,14 +75,19 @@ The preset and target must have the same race and sex. Race conversion, sex conv
 Search the log for the actor's base and reference FormIDs. First publication and catch-up end with:
 
 ```text
-[OverlayRuntime] detached render source published ...
+[FaceTextureCompositor] submitted ... generated face-texture requests ...
+[OverlayRuntime] face-texture composition completed and render source activated ...
 [OverlayRuntime] detached catch-up refresh completed ...
 ```
 
 Other relevant messages:
 
+- `configured leveled actor mapped` - the placed actor uses a generated runtime NPC rather than the configured pack target. The runtime inherited the configured assignment and will prepare a source for that generated base.
 - `render source ... pending while native queue is unavailable` or `preparation remains pending` - loading temporarily disabled the engine queue. This is expected by itself; the base remains pending and should dispatch when the queue becomes usable.
 - `render-source preparation dispatch ... queued` or `ran-inline` - the base-level preparation reached the verified native drain.
+- `submitted ... generated face-texture requests` - freckles, wrinkles, moles, complexion, and other post-blend layers reached the engine compositor. The source remains staged and invisible to world appearance reads until those asynchronous resources are ready.
+- `face-texture composition completed and render source activated` - the generated resources were finalized into FaceDB before the source became visible, and the waiting actor refresh can consume them.
+- `face-texture composition timed out` - the engine did not finish its generated resources within 30 seconds. Appearance injection shuts down instead of publishing an incomplete face.
 - `waiting ref ... is no longer loaded or valid` - the actor unloaded before its one-time catch-up refresh. A later 3D build uses the published source directly.
 - `dropped by the native queue; retained for retry` - the task was rejected by the drain safety check and will retry. Repeated drops without a later successful application should be reported.
 - `rendering vanilla and disabling that base` - detached preparation failed before publication. That NPC remains vanilla for the rest of the session.
@@ -102,7 +107,7 @@ This critical message means the guarded preparation payload did not run because 
 [NativeMainThreadQueue] DROP
 ```
 
-The rejected base remains pending, so one drop followed by a successful `detached render source published` message is recoverable.
+The rejected base remains pending, so one drop followed by a successful `face-texture composition completed` message is recoverable.
 Repeated drops without a later success indicate a queue compatibility problem; preserve the complete log and report it.
 Because the rejected payload did not run, this message alone does not indicate that a render source was prepared or published.
 

@@ -1,7 +1,6 @@
 #pragma once
 
 #include "Config/PreparedAssignment.h"
-
 #include <chrono>
 
 namespace Runtime
@@ -14,7 +13,7 @@ namespace Runtime
     {
     public:
         bool Arm(AssignmentMap assignments);
-        void OnReferenceSet3d(RE::TESObjectREFR* a_ref);
+        void OnReferenceSet3d(RE::TESObjectREFR *a_ref);
         bool IsArmed() const;
 
     private:
@@ -25,6 +24,8 @@ namespace Runtime
             kQueued,
             kCompositePending,
             kCompositeQueued,
+            kCompositeFinalized,
+            kCompositeActivationQueued,
             kReady,
             kDisabled
         };
@@ -33,9 +34,10 @@ namespace Runtime
         {
             std::shared_ptr<const Config::PreparedAssignment> assignment;
             std::unordered_set<RE::TESFormID> waitingRefs;
-            FaceTextureComposite* faceTextureComposite{ nullptr };
+            FaceTextureComposite *faceTextureComposite{nullptr};
             std::chrono::steady_clock::time_point compositionStarted{};
-            BaseStatus status{ BaseStatus::kDormant };
+            bool publicationBarrierArmed{false};
+            BaseStatus status{BaseStatus::kDormant};
         };
 
         bool StartPreparationPump();
@@ -44,22 +46,25 @@ namespace Runtime
         void PreparePendingBase(RE::TESFormID baseID, std::shared_ptr<const Config::PreparedAssignment> assignment);
         void RequeueBase(RE::TESFormID baseID);
         void TryDispatchCompositePoll(RE::TESFormID baseID);
-        void PollPendingComposite(RE::TESFormID baseID, std::shared_ptr<const Config::PreparedAssignment> assignment, FaceTextureComposite* composite);
+        void PollPendingComposite(RE::TESFormID baseID, std::shared_ptr<const Config::PreparedAssignment> assignment, FaceTextureComposite *composite);
         void RequeueComposite(RE::TESFormID baseID);
+        void TryDispatchCompositeActivation(RE::TESFormID baseID);
+        void PollCompositeActivation(RE::TESFormID baseID, std::shared_ptr<const Config::PreparedAssignment> assignment, FaceTextureComposite *composite);
+        void RequeueCompositeActivation(RE::TESFormID baseID);
         void DisableBaseBeforePublication(RE::TESFormID baseID);
-        std::vector<RE::TESFormID> CompletePublication(RE::TESFormID baseID, const std::shared_ptr<const Config::PreparedAssignment>& assignment);
+        std::vector<RE::TESFormID> CompletePublication(RE::TESFormID baseID, const std::shared_ptr<const Config::PreparedAssignment> &assignment, RE::TESNPC *canonical, RE::TESNPC *source);
         void UpdatePendingWorkFlagLocked();
 
-        bool RefreshWaitingReference(RE::TESNPC* target, RE::TESNPC* source, RE::TESFormID actorRefID, const Config::PreparedAssignment& assignment);
-        static bool HasLoaded3D(RE::Actor* actor);
+        bool RefreshWaitingReference(RE::TESNPC *target, RE::TESNPC *source, RE::TESFormID actorRefID, const Config::PreparedAssignment &assignment);
+        static bool HasLoaded3D(RE::Actor *actor);
 
         AssignmentMap m_configuredAssignments;
         std::unordered_map<RE::TESFormID, BaseState> m_bases;
         mutable std::mutex m_stateMutex;
-        std::atomic<bool> m_armed{ false };
-        std::atomic<bool> m_hasDispatchableBases{ false };
-        std::atomic<bool> m_preparationPumpRegistered{ false };
+        std::atomic<bool> m_armed{false};
+        std::atomic<bool> m_hasDispatchableBases{false};
+        std::atomic<bool> m_preparationPumpRegistered{false};
     };
 
-    OverlayRuntime& GetOverlayRuntime();
+    OverlayRuntime &GetOverlayRuntime();
 }
