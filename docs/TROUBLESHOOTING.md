@@ -83,6 +83,7 @@ Search the log for the actor's base and reference FormIDs. First publication and
 Other relevant messages:
 
 - `configured leveled actor mapped` - the placed actor uses a generated runtime NPC rather than the configured pack target. The runtime inherited the configured assignment and will prepare a source for that generated base.
+- `runtime FormID reuse detected` - another save reused a generated `FF...` FormID for a different configured NPC. The stale source was deactivated, the affected actor was queued for a vanilla rebuild, and that runtime FormID stays disabled until Starfield restarts.
 - `render source ... pending while native queue is unavailable` or `preparation remains pending` - loading temporarily disabled the engine queue. This is expected by itself; the base remains pending and should dispatch when the queue becomes usable.
 - `render-source preparation dispatch ... queued` or `ran-inline` - the base-level preparation reached the verified native drain.
 - `submitted ... generated face-texture requests` - freckles, wrinkles, moles, complexion, and other post-blend layers reached the engine compositor. The source remains staged and invisible to world appearance reads until those asynchronous resources are ready.
@@ -92,7 +93,7 @@ Other relevant messages:
 - `dropped by the native queue; retained for retry` - the task was rejected by the drain safety check and will retry. Repeated drops without a later successful application should be reported.
 - `rendering vanilla and disabling that base` - detached preparation failed before publication. That NPC remains vanilla for the rest of the session.
 - `catch-up refresh failed for published base` - publication already succeeded, so the base is not disabled. A later 3D build can still render from its source.
-- `assignments exceed the supported render-source limit` - more than 2048 winning assignments were discovered. The runtime refuses the complete set before creating or publishing any source.
+- `published render-source limit reached` - the session created 2048 distinct sources across configured and generated bases. Further publication fails closed and appearance injection is disabled for the process.
 - `appearance injection disabled for the process` - terminal safety shutdown also makes the installed hooks return canonical NPCs instead of published sources.
 - `byte gate failed` or `failed closed; refusing to load the plugin` - the installed Starfield executable does not match the supported appearance-read contract. Do not bypass this check; use a matching OSF Identity build.
 

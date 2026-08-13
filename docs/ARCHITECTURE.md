@@ -56,7 +56,7 @@ The main appearance APIs are `TESNPC::CopyAppearance`, the headpart/morph/AVM se
    `Resolver` resolves EditorID references from `.npc` files and plugin-local form references from `.json` files, then prepares headparts, morphs, colors, and AVM data.
 5. If several valid packs resolve to the same NPC base, the alphabetically earliest pack folder wins.
 6. The parsed preset and resolved dependencies are stored in an immutable `PreparedAssignment`, keyed by the configured target's runtime FormID.
-7. `OverlayRuntime::Arm` refuses assignment sets above the supported render-source limit before accepting any runtime work.
+7. `OverlayRuntime::Arm` accepts the immutable configured assignment set. The render-source registry separately enforces its publication limit as canonical and generated bases are encountered.
 
 ## Hook installation and failure boundary
 
@@ -80,7 +80,7 @@ CommonLibSF's `TESNPC::CreateUnregistered` allocates engine memory and directly 
 
 1. Copies race, sex/actor flags, skin, height, pronoun, and the engine-owned appearance into the detached object.
 2. Requires the copied appearance to match the source exactly and to use independent owned storage.
-3. Clears inherited facial-morph values from the detached copy, supplies the configured race when a generated leveled base did not materialize its inherited race, sizes body-morph storage when it did not materialize its inherited array, then applies the complete preset's morphs, headparts, colors, and AVM data only to that detached object. A generated base with a real non-null race mismatch is still rejected.
+3. Clears inherited facial-morph values from the detached copy, supplies the configured race when a generated leveled base did not materialize its inherited race, then applies the complete preset's morphs, headparts, colors, and AVM data only to that detached object. Body-region values go through `TESNPC::SetBodyMorph`, which owns the five-element allocation/null contract. A generated base with a real non-null race mismatch is still rejected.
 4. Validates the complete prepared result and rechecks the canonical base's state and storage identity.
 5. Sets the detached object's source-local rebuild state: the actor rebuild bit plus NPC appearance-change bits `0x800 | 0x4000`. It does not call `TESNPC::AddChange`, enter the engine change manager, or dirty the canonical form.
 
@@ -90,7 +90,7 @@ Normal actor rebuilds only request a pre-generated face DDS; they do not composi
 
 A failed or duplicate unpublished source is destroyed immediately.
 A staged or active source is intentionally process-lifetime: compositor and asynchronous FaceDB nodes can retain it after the initiating task has returned, so reclaiming or replacing it would create a use-after-free boundary.
-The registry has 4096 slots and admits at most 2048 assigned sources, keeping the hot-path table at or below a 50% load factor. Each append-only slot is keyed by the canonical base's nonzero runtime FormID and moves one way from staged to active. Save loading can replace an ownerless generated `TESNPC` pointer while preserving its runtime FormID; the replacement therefore resolves the same active source without a registry mutation, tombstone, or rebind state. Forward reads from FaceDB threads remain lock-free and allocation-free.
+The registry has 4096 slots and admits at most 2048 published sources, keeping its open-addressed tables at or below a 50% load factor. The publication count and both append-only table insertions are serialized by the publication mutex; duplicate publication does not consume capacity. The primary table is keyed by the canonical base's nonzero runtime FormID; a secondary index maps the detached source pointer back to that primary slot for average O(1) compositor and FaceDB reverse lookups. A primary slot normally moves from staged to active. Save loading can replace an ownerless generated `TESNPC` pointer while preserving its runtime FormID; when the configured base identity also matches, the replacement resolves the same active source without a registry mutation. `OverlayRuntime` retains that configured FormID after publication and validates it on every `ReferenceSet3d`. If another save reuses the dynamic FormID for a different configured NPC, the stale slot is atomically deactivated, the affected loaded reference is rebuilt against vanilla data in the native queue drain, and that runtime FormID remains disabled until Starfield restarts. Reads from FaceDB threads remain lock-free and allocation-free.
 
 ## Runtime event and queue path
 
@@ -102,7 +102,7 @@ The registry has 4096 slots and admits at most 2048 assigned sources, keeping th
 - `queued` prevents duplicate preparation while the native task owns the job.
 - `composite pending`, `composite queued`, `composite finalized`, and `composite activation queued` retain references while an AVM-bearing source is staged, its generated face textures are in flight, and FaceDB publication is settling behind the engine barrier.
 - Successful texture finalization activates the source and moves the base to `ready`; later 3D builds use the source directly through the hooks.
-- A post-load 3D rebuild may use a replacement `TESNPC` pointer for the same dynamic FormID. Because both runtime state and the render-source registry use that FormID, the normal appearance hooks find the active source during the rebuild without rerunning the preset or compositor.
+- A post-load 3D rebuild may use a replacement `TESNPC` pointer for the same dynamic FormID. When its configured base identity is unchanged, the normal appearance hooks find the active source during the rebuild without rerunning the preset or compositor. A different configured identity deactivates the stale binding and queues a vanilla rebuild instead.
 - Failure before publication moves the base to `disabled`, clears its waiters, and leaves it vanilla.
 
 Additional references encountered while a base is pending or queued join its temporary waiter set. If the native queue is unavailable or drops the guarded task, the base returns to pending. The permanent SFSE task retries pending bases once the queue is usable and becomes an atomic no-op while no base is dispatchable, including while the native queue already owns the only outstanding job.

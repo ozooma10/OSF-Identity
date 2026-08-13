@@ -49,12 +49,6 @@ namespace Runtime
             REX::WARN("[OverlayRuntime] Arm() called while already armed; immutable assignments were not replaced");
             return false;
         }
-        const auto sourceLimit = MaxSupportedRenderSources();
-        if (assignments.size() > sourceLimit)
-        {
-            REX::WARN("[OverlayRuntime] {} assignments exceed the supported render-source limit of {}; overlay runtime remains disabled", assignments.size(), sourceLimit);
-            return false;
-        }
         if (!StartPreparationPump())
         {
             REX::WARN("[OverlayRuntime] render-source preparation pump could not be started; overlay runtime remains disabled");
@@ -68,7 +62,7 @@ namespace Runtime
         for (auto &[baseID, assignment] : assignments)
         {
             configuredAssignments.emplace(baseID, assignment);
-            bases.emplace(baseID, BaseState{.assignment = std::move(assignment)});
+            bases.emplace(baseID, BaseState{.assignment = std::move(assignment), .configuredBaseID = baseID});
         }
 
         {
@@ -109,9 +103,14 @@ namespace Runtime
         const auto refID = actor->GetFormID();
         auto *configuredBase = GetConfiguredLeveledBase(actor);
         const auto configuredBaseID = configuredBase ? configuredBase->GetFormID() : RE::TESFormID{0};
+        const auto observedConfiguredBaseID = base->IsCreated() ? configuredBaseID : baseID;
         bool dispatch = false;
         bool invalidReadyState = false;
         bool inheritedAssignment = false;
+        bool readyIdentityMismatch = false;
+        bool inFlightIdentityMismatch = false;
+        bool identityFallbackAlreadyPending = false;
+        RE::TESFormID expectedConfiguredBaseID = 0;
         {
             const std::scoped_lock lock{m_stateMutex};
             auto found = m_bases.find(baseID);
@@ -120,7 +119,7 @@ namespace Runtime
                 const auto configured = m_configuredAssignments.find(configuredBaseID);
                 if (configured != m_configuredAssignments.end() && configuredBaseID != baseID && configured->second)
                 {
-                    found = m_bases.emplace(baseID, BaseState{.assignment = configured->second}).first;
+                    found = m_bases.emplace(baseID, BaseState{.assignment = configured->second, .configuredBaseID = configuredBaseID}).first;
                     inheritedAssignment = true;
                 }
             }
@@ -136,7 +135,29 @@ namespace Runtime
             }
 
             auto &state = found->second;
-            if (state.status == BaseStatus::kReady)
+            expectedConfiguredBaseID = state.configuredBaseID;
+            if (state.configuredBaseID == 0 || state.configuredBaseID != observedConfiguredBaseID)
+            {
+                if (state.status == BaseStatus::kReady && ownedSource)
+                {
+                    state.status = BaseStatus::kVanillaRefreshPending;
+                    state.waitingRefs.clear();
+                    state.waitingRefs.insert(refID);
+                    state.assignment.reset();
+                    m_hasDispatchableBases.store(true, std::memory_order_release);
+                    readyIdentityMismatch = true;
+                }
+                else if (state.status == BaseStatus::kVanillaRefreshPending || state.status == BaseStatus::kVanillaRefreshQueued)
+                {
+                    state.waitingRefs.insert(refID);
+                    identityFallbackAlreadyPending = true;
+                }
+                else
+                {
+                    inFlightIdentityMismatch = true;
+                }
+            }
+            else if (state.status == BaseStatus::kReady)
             {
                 invalidReadyState = !ownedSource;
             }
@@ -157,7 +178,28 @@ namespace Runtime
             REX::DEBUG("[OverlayRuntime] configured leveled actor mapped: ref=0x{:08X} configuredBase=0x{:08X} runtimeBase=0x{:08X}",
                        refID, configuredBaseID, baseID);
         }
-        if (invalidReadyState)
+        if (identityFallbackAlreadyPending)
+        {
+            return;
+        }
+        if (inFlightIdentityMismatch)
+        {
+            REX::CRITICAL("[OverlayRuntime] runtime FormID identity changed before publication: runtimeBase=0x{:08X} expectedConfiguredBase=0x{:08X} observedConfiguredBase=0x{:08X} ref=0x{:08X}; disabling appearance injection",
+                          baseID, expectedConfiguredBaseID, observedConfiguredBaseID, refID);
+            KillRuntime("a runtime FormID changed configured-base identity during render-source preparation");
+        }
+        else if (readyIdentityMismatch)
+        {
+            if (!DeactivateRenderSource(base, ownedSource))
+            {
+                KillRuntime("a reused runtime FormID could not deactivate its stale render-source binding");
+                return;
+            }
+            REX::WARN("[OverlayRuntime] runtime FormID reuse detected: runtimeBase=0x{:08X} expectedConfiguredBase=0x{:08X} observedConfiguredBase=0x{:08X} ref=0x{:08X}; stale render-source binding disabled and vanilla refresh queued",
+                      baseID, expectedConfiguredBaseID, observedConfiguredBaseID, refID);
+            TryDispatchVanillaRefresh(baseID);
+        }
+        else if (invalidReadyState)
         {
             KillRuntime("a base marked ready had no active FormID render-source binding");
         }
@@ -200,11 +242,21 @@ namespace Runtime
         RE::TESFormID baseID = 0;
         bool pollComposite = false;
         bool pollActivation = false;
+        bool refreshVanilla = false;
         {
             const std::scoped_lock lock{m_stateMutex};
             for (const auto &[candidateID, state] : m_bases)
             {
-                if (state.status == BaseStatus::kPending)
+                if (state.status == BaseStatus::kVanillaRefreshPending)
+                {
+                    baseID = candidateID;
+                    refreshVanilla = true;
+                    break;
+                }
+            }
+            for (const auto &[candidateID, state] : m_bases)
+            {
+                if (baseID == 0 && state.status == BaseStatus::kPending)
                 {
                     baseID = candidateID;
                     break;
@@ -242,7 +294,11 @@ namespace Runtime
 
         if (baseID != 0)
         {
-            if (pollActivation)
+            if (refreshVanilla)
+            {
+                TryDispatchVanillaRefresh(baseID);
+            }
+            else if (pollActivation)
             {
                 TryDispatchCompositeActivation(baseID);
             }
@@ -676,6 +732,97 @@ namespace Runtime
         UpdatePendingWorkFlagLocked();
     }
 
+    void OverlayRuntime::TryDispatchVanillaRefresh(const RE::TESFormID baseID)
+    {
+        {
+            const std::scoped_lock lock{m_stateMutex};
+            const auto found = m_bases.find(baseID);
+            if (found == m_bases.end() || found->second.status != BaseStatus::kVanillaRefreshPending)
+            {
+                return;
+            }
+            found->second.status = BaseStatus::kVanillaRefreshQueued;
+            UpdatePendingWorkFlagLocked();
+        }
+
+        const auto result = Util::NativeMainThreadQueue::Post([this, baseID]
+                                                              { RefreshVanillaAfterIdentityMismatch(baseID); },
+                                                              "OverlayRuntime.RefreshVanillaAfterIdentityMismatch",
+                                                              [this, baseID]
+                                                              {
+                                                                  RequeueVanillaRefresh(baseID);
+                                                                  REX::WARN("[OverlayRuntime] vanilla refresh for reused runtime base=0x{:08X} was dropped by the native queue; retained for retry", baseID);
+                                                              });
+
+        if (result == Util::NativeMainThreadQueue::PostResult::kUnavailable)
+        {
+            RequeueVanillaRefresh(baseID);
+            REX::DEBUG("[OverlayRuntime] native queue unavailable for reused runtime base=0x{:08X}; vanilla refresh remains pending", baseID);
+        }
+    }
+
+    void OverlayRuntime::RefreshVanillaAfterIdentityMismatch(const RE::TESFormID baseID)
+    {
+        std::vector<RE::TESFormID> waitingRefs;
+        {
+            const std::scoped_lock lock{m_stateMutex};
+            const auto found = m_bases.find(baseID);
+            if (found == m_bases.end() || found->second.status != BaseStatus::kVanillaRefreshQueued)
+            {
+                KillRuntime("a vanilla fallback refresh crossed an invalid base-state transition");
+                return;
+            }
+            waitingRefs.assign(found->second.waitingRefs.begin(), found->second.waitingRefs.end());
+            found->second.waitingRefs.clear();
+            found->second.status = BaseStatus::kDisabled;
+            UpdatePendingWorkFlagLocked();
+        }
+
+        auto *target = RE::TESForm::LookupByID<RE::TESNPC>(baseID);
+        for (const auto refID : waitingRefs)
+        {
+            auto *actor = RE::TESForm::LookupByID<RE::Actor>(refID);
+            if (!target || !actor || actor->GetNPC() != target || !HasLoaded3D(actor))
+            {
+                REX::DEBUG("[OverlayRuntime] vanilla fallback skipped for reused runtime base=0x{:08X} ref=0x{:08X}; reference is no longer loaded or valid", baseID, refID);
+                continue;
+            }
+
+            const auto canonicalState = CaptureOriginalNPCState(target);
+            const auto canonicalStorage = CaptureVisualStorageState(target);
+            try
+            {
+                actor->RefreshAppearance(false, 0x28, false);
+            }
+            catch (const std::exception &error)
+            {
+                REX::ERROR("[OverlayRuntime] vanilla fallback refresh for reused runtime base=0x{:08X} ref=0x{:08X} threw: {}", baseID, refID, error.what());
+            }
+            catch (...)
+            {
+                REX::ERROR("[OverlayRuntime] vanilla fallback refresh for reused runtime base=0x{:08X} ref=0x{:08X} threw an unknown exception", baseID, refID);
+            }
+
+            if (CaptureOriginalNPCState(target) != canonicalState || CaptureVisualStorageState(target) != canonicalStorage)
+            {
+                KillRuntime("the canonical TESNPC changed during a vanilla fallback refresh");
+                return;
+            }
+            REX::DEBUG("[OverlayRuntime] vanilla fallback refresh completed for reused runtime base=0x{:08X} ref=0x{:08X}", baseID, refID);
+        }
+    }
+
+    void OverlayRuntime::RequeueVanillaRefresh(const RE::TESFormID baseID)
+    {
+        const std::scoped_lock lock{m_stateMutex};
+        const auto found = m_bases.find(baseID);
+        if (found != m_bases.end() && found->second.status == BaseStatus::kVanillaRefreshQueued)
+        {
+            found->second.status = BaseStatus::kVanillaRefreshPending;
+        }
+        UpdatePendingWorkFlagLocked();
+    }
+
     void OverlayRuntime::DisableBaseBeforePublication(const RE::TESFormID baseID)
     {
         bool invalidTransition = false;
@@ -713,6 +860,7 @@ namespace Runtime
             const auto found = m_bases.find(baseID);
             const auto expectedStatus = found != m_bases.end() && found->second.faceTextureComposite ? BaseStatus::kCompositeActivationQueued : BaseStatus::kQueued;
             if (found == m_bases.end() || found->second.status != expectedStatus || found->second.assignment != assignment ||
+                found->second.configuredBaseID != assignment->baseFormID ||
                 !canonical || !source || FindOwnedRenderSource(canonical) != source)
             {
                 invalidTransition = true;
@@ -738,6 +886,7 @@ namespace Runtime
     {
         const auto hasPending = std::ranges::any_of(m_bases, [](const auto &entry)
                                                     { return entry.second.status == BaseStatus::kPending || entry.second.status == BaseStatus::kCompositePending ||
+                                                             entry.second.status == BaseStatus::kVanillaRefreshPending ||
                                                              entry.second.status == BaseStatus::kCompositeFinalized; });
         m_hasDispatchableBases.store(hasPending, std::memory_order_release);
     }

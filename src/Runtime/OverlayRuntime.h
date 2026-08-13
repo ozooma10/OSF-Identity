@@ -26,6 +26,8 @@ namespace Runtime
             kCompositeQueued,
             kCompositeFinalized,
             kCompositeActivationQueued,
+            kVanillaRefreshPending,
+            kVanillaRefreshQueued,
             kReady,
             kDisabled
         };
@@ -33,6 +35,7 @@ namespace Runtime
         struct BaseState
         {
             std::shared_ptr<const Config::PreparedAssignment> assignment;
+            RE::TESFormID configuredBaseID{0};
             std::unordered_set<RE::TESFormID> waitingRefs;
             FaceTextureComposite *faceTextureComposite{nullptr};
             std::chrono::steady_clock::time_point compositionStarted{};
@@ -51,6 +54,9 @@ namespace Runtime
         void TryDispatchCompositeActivation(RE::TESFormID baseID);
         void PollCompositeActivation(RE::TESFormID baseID, std::shared_ptr<const Config::PreparedAssignment> assignment, FaceTextureComposite *composite);
         void RequeueCompositeActivation(RE::TESFormID baseID);
+        void TryDispatchVanillaRefresh(RE::TESFormID baseID);
+        void RefreshVanillaAfterIdentityMismatch(RE::TESFormID baseID);
+        void RequeueVanillaRefresh(RE::TESFormID baseID);
         void DisableBaseBeforePublication(RE::TESFormID baseID);
         std::vector<RE::TESFormID> CompletePublication(RE::TESFormID baseID, const std::shared_ptr<const Config::PreparedAssignment> &assignment, RE::TESNPC *canonical, RE::TESNPC *source);
         void UpdatePendingWorkFlagLocked();

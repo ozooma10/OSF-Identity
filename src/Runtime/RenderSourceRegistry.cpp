@@ -52,6 +52,7 @@ namespace Runtime
         alignas(64) std::array<RegistrySlot, kRegistryCapacity> g_registry;
         alignas(64) std::array<SourceIndexSlot, kRegistryCapacity> g_sourceIndex;
         std::mutex g_publishMutex;
+        std::size_t g_publishedSourceCount{ 0 };  // Guarded by g_publishMutex.
 
         [[nodiscard]] std::size_t StartIndex(std::uint64_t a_key) noexcept
         {
@@ -213,6 +214,11 @@ namespace Runtime
             }
         }
 
+        if (g_publishedSourceCount >= kMaxPublishedSources) {
+            REX::CRITICAL("[RenderSourceRegistry] published render-source limit reached (published={}, limit={})", g_publishedSourceCount, kMaxPublishedSources);
+            return {};
+        }
+
         if (!publishSlot) {
             REX::CRITICAL("[RenderSourceRegistry] render-source registry is full (capacity={})", kRegistryCapacity);
             return {};
@@ -245,6 +251,7 @@ namespace Runtime
 
         sourcePublishSlot->registrySlot = publishSlot;
         sourcePublishSlot->source.store(a_source, std::memory_order_release);
+        ++g_publishedSourceCount;
         return { a_source, true };
     }
 
