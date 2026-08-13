@@ -3,6 +3,7 @@
 #include "FaceTextureCompositor.h"
 #include "NPCPresetApplicator.h"
 #include "NPCSnapshot.h"
+#include "RenderSourceHooks.h"
 #include "RenderSourceNPC.h"
 #include "RenderSourceRegistry.h"
 #include "RuntimeSafety.h"
@@ -234,6 +235,8 @@ namespace Runtime
 
     void OverlayRuntime::PumpPendingBases()
     {
+        ReportRenderSourceHookTelemetry();
+
         if (!m_hasDispatchableBases.load(std::memory_order_acquire) || !IsArmed() || !Util::NativeMainThreadQueue::IsAvailable())
         {
             return;

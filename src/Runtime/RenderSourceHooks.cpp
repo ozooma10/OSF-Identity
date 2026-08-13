@@ -49,11 +49,12 @@ namespace Runtime
         };
 
         // 1.16.244: direct actor->base read that feeds the appearance builder or its FaceDB work graph.
-        constexpr std::array<InlineBaseReadSite, 15> kBaseReadSites{
+        constexpr std::array<InlineBaseReadSite, 16> kBaseReadSites{
             InlineBaseReadSite{"ActorAppearanceBuilder.initialBase", REL::ID{102205}, 0x1A7, {0x49, 0x8B, 0xBE, 0x98, 0x00, 0x00, 0x00}, Gpr::kR14, Gpr::kRdi},
             InlineBaseReadSite{"ActorAppearanceBuilder.faceResourceBase", REL::ID{102205}, 0x270, {0x4D, 0x8B, 0x86, 0x98, 0x00, 0x00, 0x00}, Gpr::kR14, Gpr::kR8},
             InlineBaseReadSite{"ActorAppearanceBuilder.geometryBase", REL::ID{102205}, 0x8A2, {0x49, 0x8B, 0x8E, 0x98, 0x00, 0x00, 0x00}, Gpr::kR14, Gpr::kRcx},
             InlineBaseReadSite{"ActorAppearanceBuilder.changeBase", REL::ID{102205}, 0xF42, {0x49, 0x8B, 0x8E, 0x98, 0x00, 0x00, 0x00}, Gpr::kR14, Gpr::kRcx},
+            InlineBaseReadSite{"QueuedActorFaceResource.base", REL::ID{45904}, 0x83, {0x48, 0x8B, 0x9F, 0x98, 0x00, 0x00, 0x00}, Gpr::kRdi, Gpr::kRbx},
             InlineBaseReadSite{"FaceCustomizationTextures.base", REL::ID{40889}, 0x30, {0x48, 0x8B, 0xB1, 0x98, 0x00, 0x00, 0x00}, Gpr::kRcx, Gpr::kRsi},
             InlineBaseReadSite{"EyeCustomization.base", REL::ID{40892}, 0x61, {0x4D, 0x8B, 0xAD, 0x98, 0x00, 0x00, 0x00}, Gpr::kR13, Gpr::kR13},
             InlineBaseReadSite{"HairCustomization.base", REL::ID{40901}, 0x101, {0x48, 0x8B, 0x88, 0x98, 0x00, 0x00, 0x00}, Gpr::kRax, Gpr::kRcx},
@@ -118,7 +119,35 @@ namespace Runtime
             std::size_t size{0};
         };
 
+        struct HookTelemetry
+        {
+            std::atomic<std::uint32_t> lastBaseFormID{0};
+            std::atomic<std::uint64_t> hitCount{0};
+            std::atomic<std::uint32_t> reportedBaseFormID{0};
+            std::atomic<std::uint64_t> reportedHitCount{0};
+        };
+
+        struct GeometryLookupTelemetry
+        {
+            std::atomic<std::uint32_t> lastBaseFormID{0};
+            std::atomic<std::uintptr_t> lastResourceAddress{0};
+            std::atomic<std::uint32_t> lastHeadPartFormID{0};
+            std::atomic<std::uintptr_t> lastEntryAddress{0};
+            std::atomic<std::uint64_t> lookupCount{0};
+            std::atomic<std::uint64_t> missCount{0};
+            std::atomic<std::uint64_t> reportedLookupCount{0};
+        };
+
         std::atomic<bool> g_installed{false};
+        std::array<HookTelemetry, kBaseReadSites.size()> g_hookTelemetry{};
+        GeometryLookupTelemetry g_geometryLookupTelemetry{};
+
+        // 1.16.244: FUN_140D938A0 has already filtered the detached source's
+        // head parts to types 3/11 when it asks the current FaceDB resource for
+        // the corresponding geometry entry.
+        constexpr REL::ID kGeometryAttachmentID{69635};
+        constexpr std::ptrdiff_t kGeometryLookupOffset{0x2C2};
+        constexpr std::array<std::uint8_t, 6> kGeometryLookupInstruction{0xFF, 0x90, 0xF0, 0x01, 0x00, 0x00};
 
         std::string BytesAt(const std::uintptr_t a_address, const std::size_t a_count)
         {
@@ -172,6 +201,20 @@ namespace Runtime
                 }
             }
             return valid;
+        }
+
+        bool PreflightGeometryLookup(std::uintptr_t &a_address)
+        {
+            const REL::Relocation<std::uintptr_t> location{kGeometryAttachmentID, kGeometryLookupOffset};
+            a_address = location.address();
+            if (std::memcmp(reinterpret_cast<const void *>(a_address), kGeometryLookupInstruction.data(), kGeometryLookupInstruction.size()) == 0)
+            {
+                return true;
+            }
+
+            REX::CRITICAL("[RenderSourceHooks] byte gate failed at geometry attachment lookup (Address Library ID {} + 0x{:X}); expected FaceDB resource virtual call, found [{}]",
+                          kGeometryAttachmentID.id(), kGeometryLookupOffset, BytesAt(a_address, kGeometryLookupInstruction.size()));
+            return false;
         }
 
         constexpr bool IsPowerOfTwo(const std::size_t a_value) noexcept
@@ -233,7 +276,8 @@ namespace Runtime
         public:
             BaseReadThunk(
                 const InlineBaseReadSite &a_site,
-                const RenderSourceRegistryReadView &a_view) : Xbyak::CodeGenerator(kMaxThunkSize)
+                const RenderSourceRegistryReadView &a_view,
+                HookTelemetry &a_telemetry) : Xbyak::CodeGenerator(kMaxThunkSize)
             {
                 if (a_site.actorRegister == Gpr::kRsp || a_site.resultRegister == Gpr::kRsp)
                 {
@@ -302,13 +346,21 @@ namespace Runtime
                 jmp(done, T_NEAR);
 
                 L(found);
-                mov(key, ptr[table + byteOffset + static_cast<int>(a_view.activeOffset)]);
-                test(key, key);
+                mov(remaining, ptr[table + byteOffset + static_cast<int>(a_view.activeOffset)]);
+                test(remaining, remaining);
                 jz(done, T_NEAR);
-                mov(key, ptr[table + byteOffset + static_cast<int>(a_view.sourceOffset)]);
-                test(key, key);
+                mov(remaining, ptr[table + byteOffset + static_cast<int>(a_view.sourceOffset)]);
+                test(remaining, remaining);
                 jz(done, T_NEAR);
-                mov(result, key);
+
+                // Record successful substitutions without crossing the C++ ABI
+                // from an engine appearance worker.
+                mov(table, reinterpret_cast<std::uintptr_t>(std::addressof(a_telemetry.lastBaseFormID)));
+                mov(dword[table], key32);
+                mov(table, reinterpret_cast<std::uintptr_t>(std::addressof(a_telemetry.hitCount)));
+                lock();
+                inc(qword[table]);
+                mov(result, remaining);
 
                 L(done);
                 for (auto it = scratchRegisters.rbegin(); it != scratchRegisters.rend(); ++it)
@@ -322,6 +374,61 @@ namespace Runtime
                 if (getSize() > kMaxThunkSize)
                 {
                     throw std::runtime_error("base-read thunk exceeded its generation limit");
+                }
+            }
+        };
+
+        class GeometryLookupTelemetryThunk final : public Xbyak::CodeGenerator
+        {
+        public:
+            explicit GeometryLookupTelemetryThunk(GeometryLookupTelemetry &a_telemetry) : Xbyak::CodeGenerator(kMaxThunkSize)
+            {
+                Xbyak::Label recordBase;
+                Xbyak::Label done;
+
+                // Preserve the original indirect-call contract. RAX contains
+                // the resource vtable, RCX the resource, RDX the head-part
+                // model key, and R12 the actor whose geometry is being built.
+                push(rcx);
+                push(rdx);
+                sub(rsp, 0x28);
+                call(ptr[rax + 0x1F0]);
+                add(rsp, 0x28);
+                pop(r11);
+                pop(r10);
+
+                mov(rcx, reinterpret_cast<std::uintptr_t>(std::addressof(a_telemetry.lastResourceAddress)));
+                mov(qword[rcx], r10);
+                mov(edx, dword[r11 - 0x48]);
+                mov(rcx, reinterpret_cast<std::uintptr_t>(std::addressof(a_telemetry.lastHeadPartFormID)));
+                mov(dword[rcx], edx);
+                mov(rcx, reinterpret_cast<std::uintptr_t>(std::addressof(a_telemetry.lastEntryAddress)));
+                mov(qword[rcx], rax);
+
+                mov(r10, reinterpret_cast<std::uintptr_t>(std::addressof(a_telemetry.lookupCount)));
+                lock();
+                inc(qword[r10]);
+                test(rax, rax);
+                jnz(recordBase);
+                mov(r10, reinterpret_cast<std::uintptr_t>(std::addressof(a_telemetry.missCount)));
+                lock();
+                inc(qword[r10]);
+
+                L(recordBase);
+                mov(r10, ptr[r12 + 0x98]);
+                test(r10, r10);
+                jz(done);
+                mov(r10d, dword[r10 + 0x28]);
+                mov(r11, reinterpret_cast<std::uintptr_t>(std::addressof(a_telemetry.lastBaseFormID)));
+                mov(dword[r11], r10d);
+
+                L(done);
+                ret();
+                ready();
+
+                if (getSize() > kMaxThunkSize)
+                {
+                    throw std::runtime_error("geometry-lookup telemetry thunk exceeded its generation limit");
                 }
             }
         };
@@ -505,9 +612,13 @@ namespace Runtime
                 .size = size};
         }
 
-        GeneratedThunk GenerateThunk(REL::Trampoline &a_trampoline, const InlineBaseReadSite &a_site, const RenderSourceRegistryReadView &a_view)
+        GeneratedThunk GenerateThunk(
+            REL::Trampoline &a_trampoline,
+            const InlineBaseReadSite &a_site,
+            const RenderSourceRegistryReadView &a_view,
+            HookTelemetry &a_telemetry)
         {
-            BaseReadThunk thunk{a_site, a_view};
+            BaseReadThunk thunk{a_site, a_view, a_telemetry};
             return CopyThunk(a_trampoline, thunk);
         }
 
@@ -546,6 +657,12 @@ namespace Runtime
             throw std::runtime_error("unknown face-texture identity thunk kind");
         }
 
+        GeneratedThunk GenerateGeometryLookupTelemetryThunk(REL::Trampoline &a_trampoline, GeometryLookupTelemetry &a_telemetry)
+        {
+            GeometryLookupTelemetryThunk thunk{a_telemetry};
+            return CopyThunk(a_trampoline, thunk);
+        }
+
         bool PrepareCallPatch(PreparedPatch &a_patch, const std::uintptr_t a_address, const GeneratedThunk &a_thunk, const std::size_t a_size, const std::string_view a_name)
         {
             if (a_size < 5 || a_size > a_patch.bytes.size())
@@ -582,7 +699,9 @@ namespace Runtime
         {
             std::array<std::uintptr_t, kBaseReadSites.size()> addresses{};
             std::array<std::uintptr_t, kTextureIdentitySites.size()> textureIdentityAddresses{};
-            if (!PreflightFaceTextureCompositorContract() || !PreflightSites(addresses) || !PreflightTextureIdentitySites(textureIdentityAddresses))
+            std::uintptr_t geometryLookupAddress = 0;
+            if (!PreflightFaceTextureCompositorContract() || !PreflightSites(addresses) || !PreflightTextureIdentitySites(textureIdentityAddresses) ||
+                !PreflightGeometryLookup(geometryLookupAddress))
             {
                 REX::CRITICAL("[RenderSourceHooks] one or more appearance or compositor sites did not match; no engine code was patched");
                 return false;
@@ -594,10 +713,11 @@ namespace Runtime
             auto &trampoline = REL::GetTrampoline();
             std::array<PreparedPatch, kBaseReadSites.size()> patches{};
             std::array<PreparedPatch, kTextureIdentitySites.size()> textureIdentityPatches{};
+            PreparedPatch geometryLookupPatch{};
             std::size_t generatedBytes = 0;
             for (std::size_t i = 0; i < kBaseReadSites.size(); ++i)
             {
-                const auto thunk = GenerateThunk(trampoline, kBaseReadSites[i], readView);
+                const auto thunk = GenerateThunk(trampoline, kBaseReadSites[i], readView, g_hookTelemetry[i]);
                 generatedBytes += thunk.size;
                 if (!PrepareCallPatch(patches[i], addresses[i], thunk, kBaseReadSites[i].expectedInstruction.size(), kBaseReadSites[i].name))
                 {
@@ -613,6 +733,12 @@ namespace Runtime
                     return false;
                 }
             }
+            const auto geometryLookupThunk = GenerateGeometryLookupTelemetryThunk(trampoline, g_geometryLookupTelemetry);
+            generatedBytes += geometryLookupThunk.size;
+            if (!PrepareCallPatch(geometryLookupPatch, geometryLookupAddress, geometryLookupThunk, kGeometryLookupInstruction.size(), "FaceDB geometry lookup telemetry"))
+            {
+                return false;
+            }
 
             for (const auto &patch : patches)
             {
@@ -622,8 +748,9 @@ namespace Runtime
             {
                 REL::Relocation<std::uintptr_t>{patch.address}.write(patch.bytes.data(), patch.size);
             }
+            REL::Relocation<std::uintptr_t>{geometryLookupPatch.address}.write(geometryLookupPatch.bytes.data(), geometryLookupPatch.size);
             g_installed.store(true, std::memory_order_release);
-            REX::INFO("[RenderSourceHooks] installed {} NPC read redirects and {} face-texture identity redirects ({} generated bytes)",
+            REX::INFO("[RenderSourceHooks] installed {} NPC read redirects, {} face-texture identity redirects, and geometry lookup telemetry ({} generated bytes)",
                       kBaseReadSites.size(), kTextureIdentitySites.size(), generatedBytes);
             return true;
         }
@@ -636,5 +763,41 @@ namespace Runtime
             REX::CRITICAL("[RenderSourceHooks] installation threw an unknown exception before completion");
         }
         return false;
+    }
+
+    void ReportRenderSourceHookTelemetry() noexcept
+    {
+        if (!g_installed.load(std::memory_order_acquire))
+        {
+            return;
+        }
+
+        for (std::size_t i = 0; i < g_hookTelemetry.size(); ++i)
+        {
+            auto &telemetry = g_hookTelemetry[i];
+            const auto baseID = telemetry.lastBaseFormID.load(std::memory_order_relaxed);
+            const auto hitCount = telemetry.hitCount.load(std::memory_order_relaxed);
+            const auto previouslyReportedBaseID = telemetry.reportedBaseFormID.exchange(baseID, std::memory_order_relaxed);
+            const auto previouslyReportedHitCount = telemetry.reportedHitCount.exchange(hitCount, std::memory_order_relaxed);
+            if (baseID == 0 || (previouslyReportedBaseID == baseID && previouslyReportedHitCount == hitCount))
+            {
+                continue;
+            }
+
+            REX::DEBUG("[RenderSourceHooks] source consumed at '{}' for base=0x{:08X} totalHits={}",
+                       kBaseReadSites[i].name, baseID, hitCount);
+        }
+
+        const auto lookupCount = g_geometryLookupTelemetry.lookupCount.load(std::memory_order_relaxed);
+        if (lookupCount != 0 && g_geometryLookupTelemetry.reportedLookupCount.exchange(lookupCount, std::memory_order_relaxed) != lookupCount)
+        {
+            REX::DEBUG("[RenderSourceHooks] FaceDB hair-class geometry lookup for base=0x{:08X} headPart=0x{:08X} resource=0x{:016X} entry=0x{:016X} totalLookups={} totalMisses={}",
+                       g_geometryLookupTelemetry.lastBaseFormID.load(std::memory_order_relaxed),
+                       g_geometryLookupTelemetry.lastHeadPartFormID.load(std::memory_order_relaxed),
+                       g_geometryLookupTelemetry.lastResourceAddress.load(std::memory_order_relaxed),
+                       g_geometryLookupTelemetry.lastEntryAddress.load(std::memory_order_relaxed),
+                       lookupCount,
+                       g_geometryLookupTelemetry.missCount.load(std::memory_order_relaxed));
+        }
     }
 }

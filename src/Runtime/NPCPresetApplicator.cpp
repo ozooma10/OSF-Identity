@@ -11,6 +11,12 @@ namespace Runtime
 {
     namespace
     {
+        // TESNPC::AddChange(0x800) sets this actor-base bit before it enters
+        // the registered-form change manager. FaceDB tests the bit to choose
+        // runtime face generation over the baked-face path. Detached FormID-0
+        // sources must reproduce only that object-local preparation step.
+        constexpr std::uint32_t kRuntimeGeneratedFaceFlag = 0x8000U;
+
         bool SameText(const char *a_left, const std::string &a_right)
         {
             return ::_stricmp(Util::SafeText(a_left), a_right.c_str()) == 0;
@@ -464,16 +470,16 @@ namespace Runtime
             source->actorData = a_target->actorData;
             source->formRace = targetRace ? targetRace : a_dependencies.race;
             source->formSkin = a_target->formSkin;
-            source->originalRace = a_target->originalRace ? a_target->originalRace : source->formRace;
+            source->originalRace = source->formRace;
             source->height = a_target->height;
             source->heightMax = a_target->heightMax;
             source->pronoun = a_target->pronoun;
             source->CopyAppearance(a_target, false);
             source->formRace = targetRace ? targetRace : a_dependencies.race;
-            if (!source->originalRace)
-            {
-                source->originalRace = source->formRace;
-            }
+            // A detached carrier has no entry in the engine's pointer-keyed
+            // alternate-race head-part cache. Make it a self-contained NPC so
+            // native appearance builders enumerate its owned headParts array.
+            source->originalRace = source->formRace;
             source->faceNPC = nullptr;
 
             const bool copiedExactly = SameExactVisualValues(source, a_target);
@@ -489,16 +495,15 @@ namespace Runtime
             ApplyMorphs(source, a_preset);
             ApplyVisuals(source, a_preset, a_dependencies);
 
-            // Reproduce the source-local state produced by the formerly proven AddChange(0x800) + AddChange(0x4000) refresh path. 
-            // Do not call AddChange on this unregistered carrier: that would cross into the engine change manager.
-            source->actorData.actorBaseFlags = static_cast<RE::ACTOR_BASE_DATA::Flag>(source->actorData.actorBaseFlags.underlying() | 0x8000U);
-            source->changeFlags |= 0x4800;
+            source->actorData.actorBaseFlags = static_cast<RE::ACTOR_BASE_DATA::Flag>(
+                source->actorData.actorBaseFlags.underlying() | kRuntimeGeneratedFaceFlag);
 
             const bool morphsValid = ValidateMorphs(source, a_preset);
             const bool visualsValid = morphsValid && ValidateVisuals(source, a_preset, a_dependencies);
             const bool presetValid = morphsValid && visualsValid;
             const bool sourceInvariant = source->GetFormID() == 0 && source->QRefCount() == 0 && source->GetRace() == a_dependencies.race &&
-                                         (source->actorData.actorBaseFlags.underlying() & 0x8000U) != 0 && (source->changeFlags & 0x4800) == 0x4800;
+                                         source->originalRace == source->formRace &&
+                                         source->actorData.actorBaseFlags.underlying() == (canonicalState.actorFlags | kRuntimeGeneratedFaceFlag);
             const bool canonicalPreserved = CaptureOriginalNPCState(a_target) == canonicalState && CaptureVisualStorageState(a_target) == canonicalStorage;
             if (!presetValid || !sourceInvariant || !canonicalPreserved)
             {
