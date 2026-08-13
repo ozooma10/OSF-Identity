@@ -21,25 +21,6 @@ namespace Runtime
             return ::_stricmp(Util::SafeText(a_left), Util::SafeText(a_right)) == 0;
         }
 
-        bool EnsureBodyMorphStorage(RE::TESNPC *a_target, const std::size_t a_count)
-        {
-            if (a_count == 0)
-            {
-                return true;
-            }
-            if (a_count > std::numeric_limits<RE::BSTArray<float>::size_type>::max())
-            {
-                return false;
-            }
-
-            if (!a_target->bodyMorphValues)
-            {
-                a_target->bodyMorphValues = new RE::BSTArray<float>();
-            }
-            a_target->bodyMorphValues->resize(static_cast<RE::BSTArray<float>::size_type>(a_count));
-            return a_target->bodyMorphValues->size() == a_count;
-        }
-
         void ApplyMorphs(RE::TESNPC *a_target, const Config::AppearancePreset &a_preset)
         {
             // Both supported producer contracts describe a complete appearance.
@@ -501,13 +482,6 @@ namespace Runtime
             if (!copiedExactly || !independent || !canonicalPreservedAfterCopy)
             {
                 REX::WARN("[NPCPresetApplicator] detached baseline copy failed exact={} independent={} canonicalPreserved={}", copiedExactly, independent, canonicalPreservedAfterCopy);
-                DestroyUnpublishedRenderSource(source);
-                return nullptr;
-            }
-
-            if (!EnsureBodyMorphStorage(source, a_preset.bodyMorphRegionValues.size()))
-            {
-                REX::WARN("[NPCPresetApplicator] detached body-morph storage could not be sized to {} entries", a_preset.bodyMorphRegionValues.size());
                 DestroyUnpublishedRenderSource(source);
                 return nullptr;
             }
