@@ -23,6 +23,23 @@ namespace Runtime
 
         void ApplyMorphs(RE::TESNPC* a_target, const Config::AppearancePreset& a_preset)
         {
+            if (a_preset.sourceFormat == Config::PresetSourceFormat::kCharGenJson) {
+                // CharGen JSON serializes only the saved entries. Replace the detached carrier's copied maps so unrelated morphs from the target cannot leak into the requested appearance.
+                if (a_target->shapeBlendData) {
+                    a_target->shapeBlendData->clear();
+                }
+                if (a_target->facialBoneValues) {
+                    a_target->facialBoneValues->clear();
+                }
+                if (a_target->facialBoneGroupValues) {
+                    for (auto& region : *a_target->facialBoneGroupValues) {
+                        if (region.value) {
+                            region.value->clear();
+                        }
+                    }
+                }
+            }
+
             a_target->morphWeight.thin = static_cast<float>(a_preset.morphWeights.x);
             a_target->morphWeight.muscular = static_cast<float>(a_preset.morphWeights.y);
             a_target->morphWeight.fat = static_cast<float>(a_preset.morphWeights.z);
@@ -41,11 +58,11 @@ namespace Runtime
                     }
                     const RE::BSFixedStringCS key{ slider.groupName.c_str() };
                     a_target->EnsureFacialBoneGroup(region.regionID, key);
-                    if (!a_target->unk3E8) {
+                    if (!a_target->facialBoneGroupValues) {
                         continue;
                     }
-                    const auto outer = a_target->unk3E8->find(region.regionID);
-                    if (outer == a_target->unk3E8->end() || !outer->value) {
+                    const auto outer = a_target->facialBoneGroupValues->find(region.regionID);
+                    if (outer == a_target->facialBoneGroupValues->end() || !outer->value) {
                         continue;
                     }
                     for (auto& entry : *outer->value) {
@@ -170,9 +187,9 @@ namespace Runtime
                             found = true;
                             value = entry->value;
                         }
-                    } else if (slider.id == 0 && a_target->unk3E8) {
-                        const auto outer = a_target->unk3E8->find(region.regionID);
-                        if (outer != a_target->unk3E8->end() && outer->value) {
+                    } else if (slider.id == 0 && a_target->facialBoneGroupValues) {
+                        const auto outer = a_target->facialBoneGroupValues->find(region.regionID);
+                        if (outer != a_target->facialBoneGroupValues->end() && outer->value) {
                             for (const auto& entry : *outer->value) {
                                 if (::_stricmp(Util::SafeText(entry.key.c_str()), slider.groupName.c_str()) == 0) {
                                     found = true;
@@ -185,6 +202,50 @@ namespace Runtime
                     const auto expected = static_cast<float>(slider.value);
                     if ((found && value != expected) || (!found && expected != 0.0F)) {
                         return false;
+                    }
+                }
+            }
+
+            if (a_preset.sourceFormat == Config::PresetSourceFormat::kCharGenJson) {
+                if (a_target->shapeBlendData) {
+                    for (const auto& actual : *a_target->shapeBlendData) {
+                        const auto expected = std::ranges::find_if(a_preset.facialMorphSliders, [&](const Config::PresetNamedMorph& a_morph) {
+                            return ::_stricmp(Util::SafeText(actual.key.c_str()), a_morph.name.c_str()) == 0;
+                        });
+                        if (expected == a_preset.facialMorphSliders.end()) {
+                            return false;
+                        }
+                    }
+                }
+                if (a_target->facialBoneValues) {
+                    for (const auto& actual : *a_target->facialBoneValues) {
+                        const bool expected = std::ranges::any_of(a_preset.facialBoneRegions, [&](const Config::PresetBoneRegion& a_region) {
+                            return std::ranges::any_of(a_region.sliders, [&](const Config::PresetBoneSlider& a_slider) {
+                                return a_slider.id != 0 && a_slider.id == actual.key;
+                            });
+                        });
+                        if (!expected) {
+                            return false;
+                        }
+                    }
+                }
+                if (a_target->facialBoneGroupValues) {
+                    for (const auto& actualRegion : *a_target->facialBoneGroupValues) {
+                        if (!actualRegion.value) {
+                            continue;
+                        }
+                        for (const auto& actualSlider : *actualRegion.value) {
+                            const auto expectedRegion = std::ranges::find(a_preset.facialBoneRegions, actualRegion.key, &Config::PresetBoneRegion::regionID);
+                            if (expectedRegion == a_preset.facialBoneRegions.end()) {
+                                return false;
+                            }
+                            const auto expectedSlider = std::ranges::find_if(expectedRegion->sliders, [&](const Config::PresetBoneSlider& a_slider) {
+                                return a_slider.id == 0 && ::_stricmp(Util::SafeText(actualSlider.key.c_str()), a_slider.groupName.c_str()) == 0;
+                            });
+                            if (expectedSlider == expectedRegion->sliders.end()) {
+                                return false;
+                            }
+                        }
                     }
                 }
             }

@@ -67,6 +67,7 @@ target("npc-appearance-preset-tests")
     set_rundir(os.projectdir())
     add_files(
         "tools/tests/npc_appearance_preset_tests.cpp",
+        "src/Config/ConfigDetail.cpp",
         "src/Config/Preset.cpp"
     )
     add_includedirs("src")

@@ -2,6 +2,8 @@
 
 #include <glaze/glaze.hpp>
 
+#include <map>
+
 // schema for json files (package manifest, preset metadata, and CK preset)
 // member names match JSON keys exactly
 namespace Config::Schema
@@ -120,6 +122,57 @@ namespace Config::Schema
         std::int64_t SkinTone{ 0 };
         std::string TeethCustomization;
         std::vector<std::string> UniqueHeadPartsA;
+    };
+
+    struct CharGenColor
+    {
+        std::int64_t a{ 0 };
+        std::int64_t b{ 0 };
+        std::int64_t g{ 0 };
+        std::int64_t r{ 0 };
+    };
+
+    struct CharGenHeadPartData
+    {
+        CharGenColor Color;
+        std::string Group;
+        double Intensity{ 0.0 };
+        std::string Name;
+        std::string Texture;
+        std::int64_t Type{ 0 };
+        std::int64_t unk04{ 0 };
+    };
+
+    struct CharGenWeight
+    {
+        double Heavy{ 0.0 };
+        double Muscular{ 0.0 };
+        double Thin{ 0.0 };
+    };
+
+    struct CharGenJsonPreset
+    {
+        std::map<std::string, double> AdditionalSliders;
+        std::optional<std::vector<double>> BodyMorphRegionValues;
+        std::vector<std::string> Dependencies;
+        std::string EyeColor;
+        std::string EyebrowColor;
+        std::string FacialHairColor;
+        std::string Gender;
+        std::string HairColor;
+        std::vector<CharGenHeadPartData> HeadPartData;
+        std::vector<std::string> HeadParts;
+        std::string JewelryColor;
+        std::map<std::string, std::map<std::string, double>> Morphs;
+        std::string Name;
+        std::int64_t Pronoun{ 0 };
+        std::string Race;
+        std::map<std::string, double> ShapeBlendData;
+        std::int64_t SkinTone{ 0 };
+        std::string Teeth;
+        std::int64_t Version{ 0 };
+        CharGenWeight Weight;
+        std::string unk470;
     };
 
     // Reject unknown keys (Glaze's default), require every non-optional member, and refuse anything but whitespace after the root value.

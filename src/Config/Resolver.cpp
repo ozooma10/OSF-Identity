@@ -1,5 +1,10 @@
 #include "Resolver.h"
 
+#include "PluginLookup.h"
+#include "RuntimeFormID.h"
+
+#include <format>
+
 namespace Config
 {
     namespace
@@ -21,30 +26,57 @@ namespace Config
             return std::ranges::find(validRaces, static_cast<const RE::TESForm*>(a_race)) != validRaces.end();
         }
 
-        RE::BGSHeadPart* ResolveHeadPart(ResolvedAppearanceDependencies& a_result, const RE::TESRace* a_race, const RE::SEX a_sex,
-            std::string_view a_field, std::string_view a_editorID, const std::optional<RE::BGSHeadPart::HeadPartType> a_expectedType, std::unordered_set<const RE::BGSHeadPart*>& a_seen)
+        std::string DescribeFormReference(const PresetFormReference& a_reference)
         {
-            auto* part = RE::TESForm::LookupByEditorID<RE::BGSHeadPart>(RE::BSFixedString{ a_editorID });
-            if (!part) {
-                AddIssue(a_result, std::string{ a_field }, std::string{ a_editorID }, "headpart_not_found", "EditorID did not resolve to BGSHeadPart");
-                return nullptr;
-            }
-            if (!a_seen.insert(part).second) {
-                AddIssue(a_result, std::string{ a_field }, std::string{ a_editorID }, "duplicate_headpart", "the same head-part form occurs more than once");
-                return nullptr;
-            }
-            if (!RaceOffersHeadPart(a_race, a_sex, part)) {
-                AddIssue(a_result, std::string{ a_field }, std::string{ a_editorID }, "headpart_not_valid_for_race", "head-part's valid-races form list excludes the resolved race");
-                return nullptr;
-            }
-            if (a_expectedType && part->type.get() != *a_expectedType) {
-                AddIssue(a_result, std::string{ a_field }, std::string{ a_editorID }, "headpart_type_mismatch", std::format("resolved type={} but CK positional slot requires type={}", part->type.underlying(), static_cast<std::uint32_t>(*a_expectedType)));
-                return nullptr;
-            }
-            return part;
+            return std::format("{}|{:X}", a_reference.plugin, a_reference.localFormID);
         }
 
-        void ResolveHeadParts(ResolvedAppearanceDependencies& a_result, const AppearancePreset& a_preset, const RE::SEX a_sex)
+        std::optional<RE::TESFormID> ResolveFormID(ResolvedAppearanceDependencies& a_result, const std::string_view a_field, const PresetFormReference& a_reference)
+        {
+            const auto plugin = FindLoadedPlugin(RE::TESDataHandler::GetSingleton(), a_reference.plugin);
+            if (!plugin) {
+                AddIssue(a_result, std::string{ a_field }, a_reference.plugin, "plugin_not_loaded", "referenced plugin is not loaded");
+                return std::nullopt;
+            }
+            const auto runtimeFormID = EncodeRuntimeFormID(a_reference.localFormID, plugin->tier, plugin->index);
+            if (!runtimeFormID) {
+                AddIssue(a_result, std::string{ a_field }, DescribeFormReference(a_reference), "form_id_out_of_range", "local FormID does not fit the loaded plugin tier");
+                return std::nullopt;
+            }
+            return runtimeFormID;
+        }
+
+        RE::BGSHeadPart* ValidateHeadPart(ResolvedAppearanceDependencies& a_result, const RE::TESRace* a_race, const RE::SEX a_sex,
+            const std::string_view a_field, const std::string_view a_value, RE::BGSHeadPart* a_part,
+            const std::optional<RE::BGSHeadPart::HeadPartType> a_expectedType, std::unordered_set<const RE::BGSHeadPart*>& a_seen)
+        {
+            if (!a_part) {
+                AddIssue(a_result, std::string{ a_field }, std::string{ a_value }, "headpart_not_found", "form did not resolve to BGSHeadPart");
+                return nullptr;
+            }
+            if (!a_seen.insert(a_part).second) {
+                AddIssue(a_result, std::string{ a_field }, std::string{ a_value }, "duplicate_headpart", "the same head-part form occurs more than once");
+                return nullptr;
+            }
+            if (!RaceOffersHeadPart(a_race, a_sex, a_part)) {
+                AddIssue(a_result, std::string{ a_field }, std::string{ a_value }, "headpart_not_valid_for_race", "head-part's valid-races form list excludes the resolved race");
+                return nullptr;
+            }
+            if (a_expectedType && a_part->type.get() != *a_expectedType) {
+                AddIssue(a_result, std::string{ a_field }, std::string{ a_value }, "headpart_type_mismatch", std::format("resolved type={} but CK positional slot requires type={}", a_part->type.underlying(), static_cast<std::uint32_t>(*a_expectedType)));
+                return nullptr;
+            }
+            return a_part;
+        }
+
+        RE::BGSHeadPart* ResolveCkHeadPart(ResolvedAppearanceDependencies& a_result, const RE::TESRace* a_race, const RE::SEX a_sex, const std::string_view a_field,
+            const std::string_view a_editorID, const std::optional<RE::BGSHeadPart::HeadPartType> a_expectedType, std::unordered_set<const RE::BGSHeadPart*>& a_seen)
+        {
+            auto* part = RE::TESForm::LookupByEditorID<RE::BGSHeadPart>(RE::BSFixedString{ a_editorID });
+            return ValidateHeadPart(a_result, a_race, a_sex, a_field, a_editorID, part, a_expectedType, a_seen);
+        }
+
+        void ResolveCkHeadParts(ResolvedAppearanceDependencies& a_result, const AppearancePreset& a_preset, const RE::SEX a_sex)
         {
             constexpr auto kCkUniqueSlots = static_cast<std::size_t>(RE::BGSHeadPart::HeadPartType::kEyelashes) + 1;
             if (a_preset.uniqueHeadParts.size() != kCkUniqueSlots) {
@@ -63,16 +95,61 @@ namespace Config
                     continue;
                 }
                 const auto expected = static_cast<RE::BGSHeadPart::HeadPartType>(i);
-                a_result.uniqueHeadParts[i] = ResolveHeadPart(a_result, a_result.race, a_sex, std::format("UniqueHeadPartsA[{}]", i), editorID, expected, seen);
+                a_result.uniqueHeadParts[i] = ResolveCkHeadPart(a_result, a_result.race, a_sex, std::format("UniqueHeadPartsA[{}]", i), editorID, expected, seen);
             }
 
             a_result.miscHeadParts.reserve(a_preset.miscHeadParts.size());
             for (std::size_t i = 0; i < a_preset.miscHeadParts.size(); ++i) {
                 const auto& editorID = a_preset.miscHeadParts[i];
-                auto* part = ResolveHeadPart(a_result, a_result.race, a_sex, std::format("MiscHeadPartsA[{}]", i), editorID, std::nullopt, seen);
+                auto* part = ResolveCkHeadPart(a_result, a_result.race, a_sex, std::format("MiscHeadPartsA[{}]", i), editorID, std::nullopt, seen);
                 if (part) {
                     a_result.miscHeadParts.push_back(part);
                 }
+            }
+        }
+
+        void ResolveCharGenHeadParts(ResolvedAppearanceDependencies& a_result, const AppearancePreset& a_preset, const RE::SEX a_sex)
+        {
+            constexpr auto kUniqueSlots = static_cast<std::size_t>(RE::BGSHeadPart::HeadPartType::kEyelashes) + 1;
+            std::unordered_set<const RE::BGSHeadPart*> seen;
+            a_result.uniqueHeadParts.resize(kUniqueSlots, nullptr);
+
+            for (std::size_t i = 0; i < a_preset.headPartForms.size(); ++i) {
+                const auto field = std::format("HeadParts[{}]", i);
+                const auto& reference = a_preset.headPartForms[i];
+                const auto runtimeFormID = ResolveFormID(a_result, field, reference);
+                if (!runtimeFormID) {
+                    continue;
+                }
+                const auto value = DescribeFormReference(reference);
+                auto* part = ValidateHeadPart( a_result, a_result.race, a_sex, field, value, RE::TESForm::LookupByID<RE::BGSHeadPart>(*runtimeFormID), std::nullopt, seen);
+                if (!part) {
+                    continue;
+                }
+
+                const auto type = static_cast<std::size_t>(part->type.get());
+                if (type >= kUniqueSlots) {
+                    AddIssue(a_result, field, value, "headpart_type_unsupported", "resolved head-part type is outside the supported human appearance slots");
+                    continue;
+                }
+                if (part->type.get() == RE::BGSHeadPart::HeadPartType::kMisc) {
+                    a_result.miscHeadParts.push_back(part);
+                    continue;
+                }
+                if (a_result.uniqueHeadParts[type]) {
+                    AddIssue(a_result, field, value, "duplicate_headpart_type", "more than one non-misc head part resolves to the same appearance slot");
+                    continue;
+                }
+                a_result.uniqueHeadParts[type] = part;
+            }
+        }
+
+        void ResolveHeadParts(ResolvedAppearanceDependencies& a_result, const AppearancePreset& a_preset, const RE::SEX a_sex)
+        {
+            if (a_preset.sourceFormat == PresetSourceFormat::kCharGenJson) {
+                ResolveCharGenHeadParts(a_result, a_preset, a_sex);
+            } else {
+                ResolveCkHeadParts(a_result, a_preset, a_sex);
             }
         }
 
@@ -178,6 +255,25 @@ namespace Config
             a_result.avmLayers.reserve(a_preset.postBlendLayers.size());
             for (const auto& layer : a_preset.postBlendLayers) {
                 RE::BSFixedString category{ layer.name };
+                if (layer.materialType || layer.texturePath) {
+                    if (!layer.materialType || !layer.texturePath || !layer.customColor ||
+                        (*layer.materialType != 1 && *layer.materialType != 2)) {
+                        ok = false;
+                        AddIssue(a_result, "HeadPartData", layer.name, "direct_avm_incomplete", "CharGen JSON AVM material data is incomplete or unsupported");
+                        continue;
+                    }
+
+                    RE::AVMData materialized{};
+                    materialized.type = static_cast<RE::AVMData::Type>(*layer.materialType);
+                    materialized.category = category;
+                    materialized.unk10.name = RE::BSFixedString{ layer.value };
+                    materialized.unk10.texturePath = RE::BSFixedString{ *layer.texturePath };
+                    materialized.unk10.color = RE::Color{ layer.customColor->red, layer.customColor->green, layer.customColor->blue, layer.customColor->rough };
+                    materialized.unk10.intensity = layer.packedIntensity;
+                    a_result.avmLayers.push_back(std::move(materialized));
+                    continue;
+                }
+
                 // The skin-tone value catalog only exists for chargen-authorable layers (those with a bare SimpleGroup_/Chargen_ AVMD). 
                 // Complex-group layers such as Accents1 have no catalog yet are valid on NPC records, so an empty catalog is advisory; 
                 RE::BSScrapArray<RE::BSFixedString> values;
@@ -299,20 +395,42 @@ namespace Config
         }
 
         bool formsOK = true;
-        result.race = RE::TESForm::LookupByEditorID<RE::TESRace>(RE::BSFixedString{ a_preset.raceFormID });
+        for (const auto& plugin : a_preset.requiredPlugins) {
+            if (!FindLoadedPlugin(RE::TESDataHandler::GetSingleton(), plugin)) {
+                formsOK = false;
+                AddIssue(result, "Dependencies", plugin, "plugin_not_loaded", "required CharGen JSON plugin is not loaded");
+            }
+        }
+
+        std::string raceField = "RaceFormID";
+        std::string raceValue = a_preset.raceFormID;
+        if (a_preset.sourceFormat == PresetSourceFormat::kCharGenJson) {
+            raceField = "Race";
+            if (!a_preset.raceForm) {
+                AddIssue(result, raceField, {}, "race_reference_missing", "CharGen JSON preset has no decoded race form reference");
+                return result;
+            }
+            raceValue = DescribeFormReference(*a_preset.raceForm);
+            const auto runtimeFormID = ResolveFormID(result, raceField, *a_preset.raceForm);
+            if (runtimeFormID) {
+                result.race = RE::TESForm::LookupByID<RE::TESRace>(*runtimeFormID);
+            }
+        } else {
+            result.race = RE::TESForm::LookupByEditorID<RE::TESRace>(RE::BSFixedString{ a_preset.raceFormID });
+        }
         if (!result.race) {
-            AddIssue(result, "RaceFormID", a_preset.raceFormID, "race_not_found", "EditorID did not resolve to TESRace");
+            AddIssue(result, raceField, raceValue, "race_not_found", "form did not resolve to TESRace");
             return result;
         }
         if (a_target->GetRace() != result.race) {
             formsOK = false;
-            AddIssue(result, "RaceFormID", a_preset.raceFormID, "target_race_mismatch", "preset race differs from the target race; race transformation is out of scope");
+            AddIssue(result, raceField, raceValue, "target_race_mismatch", "preset race differs from the target race; race transformation is out of scope");
         }
 
         const auto presetSex = a_preset.sex == PresetSex::kFemale ? RE::SEX::kFemale : RE::SEX::kMale;
         if (a_target->GetSex() != presetSex) {
             formsOK = false;
-            AddIssue(result, "Sex", a_preset.sex == PresetSex::kFemale ? "Female" : "Male", "target_sex_mismatch", "preset sex differs from the target; sex transformation is out of scope");
+            AddIssue(result, a_preset.sourceFormat == PresetSourceFormat::kCharGenJson ? "Gender" : "Sex", a_preset.sex == PresetSex::kFemale ? "Female" : "Male", "target_sex_mismatch", "preset sex differs from the target; sex transformation is out of scope");
         }
 
         const auto issuesBeforeHeadParts = result.issues.size();

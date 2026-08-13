@@ -1,6 +1,7 @@
 # Architecture
 
-OSF Identity applies `.npc` presets when actors 3d gets build. The "real" `TESNPC` remains the actor's base and is never mutated. Preset data lives in a detached engine `TESNPC` associated with each tracked NPC.
+OSF Identity applies `.npc` and `.json` presets when actor 3D is built. The "real" `TESNPC` remains the actor's base and is never mutated. 
+Preset data lives in a detached engine `TESNPC` associated with each tracked NPC.
 
 The complete flow is:
 
@@ -42,10 +43,11 @@ The main appearance APIs are `TESNPC::CopyAppearance`, the headpart/morph/AVM se
 
 `Config::RunScan` performs all filesystem and data resolution before runtime events are accepted:
 
-1. `PackDiscovery` reads loose files from `Data/SFSE/Plugins/OSFIdentity/Packs/<Pack>/<OwningPlugin>/<LocalFormID>.npc`.
+1. `PackDiscovery` reads loose `.npc` and `.json` files from `Data/SFSE/Plugins/OSFIdentity/Packs/<Pack>/<OwningPlugin>/<LocalFormID>.<format>`.
 2. `PackScanner` resolves the owning plugin and plugin-local FormID to the loaded runtime FormID. Full, medium, and small plugins are handled separately.
 3. The target must resolve to a unique `HumanRace` `TESNPC`.
-4. `Preset` parses the CK/CharGenMenu export, and `Resolver` resolves its race, headparts, morphs, colors, and AVM data against loaded game forms.
+4. `Preset` dispatches by extension and normalizes either the CK-compatible NPC contract or CharGenMenu Version 2 JSON contract. 
+   `Resolver` resolves EditorID references from `.npc` files and plugin-local form references from `.json` files, then prepares headparts, morphs, colors, and AVM data.
 5. If several valid packs resolve to the same NPC base, the alphabetically earliest pack folder wins.
 6. The parsed preset and resolved dependencies are stored in an immutable `PreparedAssignment`, keyed by the target's runtime base FormID.
 7. `OverlayRuntime::Arm` refuses assignment sets above the supported render-source limit before accepting any runtime work.

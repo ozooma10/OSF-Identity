@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-// Filesystem pack contract: discover <Pack>/<OwningPlugin>/<LocalFormID>.npc assignments.
+// Filesystem pack contract: discover <Pack>/<OwningPlugin>/<LocalFormID>.npc or .json assignments.
 namespace Config
 {
     struct Target

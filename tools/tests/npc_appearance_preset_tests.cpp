@@ -88,27 +88,54 @@ namespace
         const auto result = NA::ParseCkPreset(a_json, "permissive.npc");
         return result.preset.has_value() && result.issues.empty();
     }
+
+    [[nodiscard]] bool RejectsCharGenJson(const std::string& a_json)
+    {
+        const auto result = NA::ParseCharGenJsonPreset(a_json, "adversarial.json");
+        return result.HasFatalError() && !result.issues.empty();
+    }
 }
 
-int main()
+int main(const int a_argc, char* a_argv[])
 {
     namespace NA = Config;
+    if (a_argc > 1) {
+        for (int i = 1; i < a_argc; ++i) {
+            const auto result = NA::LoadPreset(a_argv[i]);
+            if (result.preset && result.issues.empty()) {
+                std::cout << "PASS " << a_argv[i] << '\n';
+                continue;
+            }
+            ++g_failed;
+            std::cout << "FAIL " << a_argv[i] << '\n';
+            for (const auto& issue : result.issues) {
+                std::cout << "  " << issue.code << ": " << issue.message << '\n';
+            }
+        }
+        std::cout << "RESULT failed=" << g_failed << '\n';
+        return g_failed == 0 ? 0 : 1;
+    }
+
     const auto fixtures = std::filesystem::path{ "fixtures/osf-identity/Presets/CK" };
-    auto baselineResult = NA::LoadCkPreset(fixtures / "Baseline.npc");
-    auto headpartResult = NA::LoadCkPreset(fixtures / "HeadpartOnly.npc");
-    auto facialResult = NA::LoadCkPreset(fixtures / "FacialMorphOnly.npc");
-    auto tintResult = NA::LoadCkPreset(fixtures / "TintOnly.npc");
-    auto bodyResult = NA::LoadCkPreset(fixtures / "BodyMorphOnly.npc");
-    auto compositeResult = NA::LoadCkPreset(fixtures / "Sarah.npc");
+    auto baselineResult = NA::LoadPreset(fixtures / "Baseline.npc");
+    auto headpartResult = NA::LoadPreset(fixtures / "HeadpartOnly.npc");
+    auto facialResult = NA::LoadPreset(fixtures / "FacialMorphOnly.npc");
+    auto tintResult = NA::LoadPreset(fixtures / "TintOnly.npc");
+    auto bodyResult = NA::LoadPreset(fixtures / "BodyMorphOnly.npc");
+    auto compositeResult = NA::LoadPreset(fixtures / "Sarah.npc");
 
     const auto charGenFixtures =
         std::filesystem::path{ "fixtures/osf-identity/Presets/CharGenMenu" };
-    auto charGenBaselineResult = NA::LoadCkPreset(charGenFixtures / "Baseline.npc");
-    auto charGenHeadpartResult = NA::LoadCkPreset(charGenFixtures / "HeadpartOnly.npc");
-    auto charGenFacialResult = NA::LoadCkPreset(charGenFixtures / "FacialMorphOnly.npc");
-    auto charGenTintResult = NA::LoadCkPreset(charGenFixtures / "TintOnly.npc");
-    auto charGenBodyResult = NA::LoadCkPreset(charGenFixtures / "BodyMorphOnly.npc");
-    auto charGenCompositeResult = NA::LoadCkPreset(charGenFixtures / "Sarah.npc");
+    auto charGenBaselineResult = NA::LoadPreset(charGenFixtures / "Baseline.npc");
+    auto charGenHeadpartResult = NA::LoadPreset(charGenFixtures / "HeadpartOnly.npc");
+    auto charGenFacialResult = NA::LoadPreset(charGenFixtures / "FacialMorphOnly.npc");
+    auto charGenTintResult = NA::LoadPreset(charGenFixtures / "TintOnly.npc");
+    auto charGenBodyResult = NA::LoadPreset(charGenFixtures / "BodyMorphOnly.npc");
+    auto charGenCompositeResult = NA::LoadPreset(charGenFixtures / "Sarah.npc");
+
+    const auto charGenJsonFixture = std::filesystem::path{
+        "fixtures/osf-identity/Packs/lovely-companions/Starfield.esm/00005983.json" };
+    auto charGenJsonResult = NA::LoadPreset(charGenJsonFixture);
 
     auto* baseline = RequirePreset(baselineResult, "CK Baseline.npc decodes");
     auto* headpart = RequirePreset(headpartResult, "CK HeadpartOnly.npc decodes");
@@ -122,12 +149,43 @@ int main()
     auto* charGenTint = RequirePreset(charGenTintResult, "CharGenMenu TintOnly.npc decodes");
     auto* charGenBody = RequirePreset(charGenBodyResult, "CharGenMenu BodyMorphOnly.npc decodes");
     auto* charGenComposite = RequirePreset(charGenCompositeResult, "CharGenMenu Sarah.npc decodes");
+    auto* charGenJson = RequirePreset(charGenJsonResult, "CharGenMenu Version 2 JSON decodes through .json dispatch");
     if (!baseline || !headpart || !facial || !tint || !body || !composite ||
         !charGenBaseline || !charGenHeadpart || !charGenFacial || !charGenTint ||
-        !charGenBody || !charGenComposite) {
+        !charGenBody || !charGenComposite || !charGenJson) {
         std::cout << "RESULT failed=" << ++g_failed << '\n';
         return 1;
     }
+
+    std::size_t charGenJsonBoneSliders = 0;
+    for (const auto& region : charGenJson->facialBoneRegions) {
+        charGenJsonBoneSliders += region.sliders.size();
+    }
+    Check(charGenJson->sourceFormat == NA::PresetSourceFormat::kCharGenJson &&
+              charGenJson->raceForm == NA::PresetFormReference{ "Starfield.esm", 0x347Du } &&
+              charGenJson->requiredPlugins.size() == 2 &&
+              charGenJson->sex == NA::PresetSex::kFemale && charGenJson->skinTone == 2,
+          "CharGen JSON identity dependency and plugin-local race fields decode");
+    Check(charGenJson->bodyMorphRegionValues.size() == 5 &&
+              charGenJson->headPartForms.size() == 12 &&
+              charGenJson->facialMorphSliders.size() == 12 &&
+              charGenJson->facialBoneRegions.size() == 10 && charGenJsonBoneSliders == 88 &&
+              charGenJson->postBlendLayers.size() == 10,
+          "CharGen JSON complete appearance sections normalize into the runtime model");
+    Check(charGenJson->morphWeights.x == 0.0005993153317831457 &&
+              charGenJson->morphWeights.y == 0.0 &&
+              charGenJson->morphWeights.z == 0.0027707500848919153,
+          "CharGen Thin Muscular Heavy weights map to runtime thin muscular fat axes");
+    const auto* charGenJsonComplexion = FindTint(*charGenJson, "ComplexionMask1");
+    Check(charGenJsonComplexion && charGenJsonComplexion->materialType == 1 &&
+              charGenJsonComplexion->texturePath == "textures/actors/human/faces/chargen/postblenddetails/complexion/freckles_midface_mask.dds" &&
+              charGenJsonComplexion->customColor &&
+              charGenJsonComplexion->customColor->red == 166 &&
+              charGenJsonComplexion->customColor->green == 70 &&
+              charGenJsonComplexion->customColor->blue == 40 &&
+              charGenJsonComplexion->customColor->rough == 130 &&
+              charGenJsonComplexion->packedIntensity == 9,
+          "CharGen JSON AVM type texture RGBA and packed intensity decode directly");
 
     Check(baseline->npcFormEditorID == "Companion_SarahMorgan" &&
               baseline->raceFormID == "HumanRace" && baseline->sex == NA::PresetSex::kFemale &&
@@ -243,11 +301,60 @@ int main()
 
     const auto baselineJson = Read(fixtures / "Baseline.npc");
     const auto charGenBaselineJson = Read(charGenFixtures / "Baseline.npc");
+    const auto charGenJsonText = Read(charGenJsonFixture);
     Check(!baselineJson.empty(), "baseline JSON read for adversarial corpus");
     Check(!charGenBaselineJson.empty(), "CharGenMenu baseline JSON read for adversarial corpus");
+    Check(!charGenJsonText.empty(), "CharGenMenu Version 2 JSON read for adversarial corpus");
 
     Check(Rejects(baselineJson.substr(0, baselineJson.size() / 2)), "truncated JSON rejected");
     Check(Rejects(baselineJson + " trailing"), "trailing data rejected");
+    Check(RejectsCharGenJson(charGenJsonText.substr(0, charGenJsonText.size() / 2)) &&
+              RejectsCharGenJson(charGenJsonText + " trailing"),
+          "truncated and trailing CharGen JSON data rejected");
+
+    auto missingBodyJson = charGenJsonText;
+    const auto missingBodyStart = missingBodyJson.find(R"(    "BodyMorphRegionValues": [)");
+    const auto missingBodyEnd = missingBodyJson.find(R"(    "Dependencies": [)", missingBodyStart);
+    if (missingBodyStart != std::string::npos && missingBodyEnd != std::string::npos) {
+        missingBodyJson.erase(missingBodyStart, missingBodyEnd - missingBodyStart);
+    }
+    const auto missingBodyResult = NA::ParseCharGenJsonPreset(missingBodyJson, "missing-body.json");
+    Check(missingBodyStart != std::string::npos && missingBodyEnd != std::string::npos &&
+              missingBodyResult.preset && missingBodyResult.issues.empty() &&
+              missingBodyResult.preset->bodyMorphRegionValues.empty(),
+          "omitted CharGen JSON body morph data preserves the target body");
+
+    auto jsonModified = charGenJsonText;
+    Check(ReplaceOnce(jsonModified, "{", R"({"Surprise":1,)") && RejectsCharGenJson(jsonModified),
+          "unknown CharGen JSON root property rejected");
+
+    jsonModified = charGenJsonText;
+    Check(ReplaceOnce(jsonModified, R"("Version": 2)", R"("Version": 1)") && RejectsCharGenJson(jsonModified),
+          "unsupported CharGen JSON producer version rejected");
+
+    jsonModified = charGenJsonText;
+    Check(ReplaceOnce(jsonModified, R"("Race": "Starfield.esm|347D")", R"("Race": "Missing.esm|347D")") && RejectsCharGenJson(jsonModified),
+          "CharGen JSON form reference plugin must be declared as a dependency");
+
+    jsonModified = charGenJsonText;
+    Check(ReplaceOnce(jsonModified, R"("Race": "Starfield.esm|347D")", R"("Race": "Starfield.esm|GG")") && RejectsCharGenJson(jsonModified),
+          "malformed CharGen JSON plugin-local form reference rejected");
+
+    jsonModified = charGenJsonText;
+    Check(ReplaceOnce(jsonModified, R"("102": 0.10000000149011612)", R"("0": 0.10000000149011612)") && RejectsCharGenJson(jsonModified),
+          "zero CharGen additional-slider ID rejected before runtime normalization");
+
+    jsonModified = charGenJsonText;
+    Check(ReplaceOnce(jsonModified, R"("Intensity": 0.2421875)", R"("Intensity": 0.24)") && RejectsCharGenJson(jsonModified),
+          "non-quantized CharGen JSON tint intensity rejected");
+
+    jsonModified = charGenJsonText;
+    Check(ReplaceOnce(jsonModified, R"("Type": 1)", R"("Type": 3)") && RejectsCharGenJson(jsonModified),
+          "unsupported CharGen JSON AVM type rejected");
+
+    jsonModified = charGenJsonText;
+    Check(ReplaceOnce(jsonModified, R"("a": 0)", R"("a": 256)") && RejectsCharGenJson(jsonModified),
+          "CharGen JSON AVM color channel overflow rejected");
 
     // A repeated key is not rejected: Glaze takes the last occurrence, matching
     // every mainstream JSON reader. The pack author sees the value they wrote
@@ -454,10 +561,16 @@ int main()
 
     const auto tempRoot = std::filesystem::absolute("tmp/npc-appearance-preset-tests");
     std::filesystem::remove_all(tempRoot);
-    Write(tempRoot / "wrong.json", baselineJson);
+    Write(tempRoot / "wrong.txt", baselineJson);
+    Write(tempRoot / "wrong-format.npc", charGenJsonText);
     Write(tempRoot / "empty.npc", "");
-    Check(NA::LoadCkPreset(tempRoot / "wrong.json").HasFatalError(), "non-.npc file rejected");
-    Check(NA::LoadCkPreset(tempRoot / "empty.npc").HasFatalError(), "empty .npc file rejected");
+    Write(tempRoot / "empty.json", "");
+    Check(NA::LoadPreset(tempRoot / "wrong.txt").HasFatalError(), "unsupported preset extension rejected");
+    Check(NA::LoadPreset(tempRoot / "wrong-format.npc").HasFatalError(),
+          "renamed CharGen JSON remains rejected by the strict NPC decoder");
+    Check(NA::LoadPreset(tempRoot / "empty.npc").HasFatalError() &&
+              NA::LoadPreset(tempRoot / "empty.json").HasFatalError(),
+          "empty NPC and JSON presets rejected");
     std::filesystem::remove_all(tempRoot);
 
     std::cout << "RESULT failed=" << g_failed << '\n';

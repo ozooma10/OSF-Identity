@@ -23,6 +23,8 @@ Data/SFSE/Plugins/OSFIdentity/Packs/   # shared root (packs must be in this fold
       00005983.npc                  # plugin-local FormID
 ```
 
+Preset files may be Creation Kit/CK-compatible `.npc` exports or CharGenMenu Version 2 `.json` exports.
+
 Removing a pack promotes the next valid one, or restores the original appearance.
 
 - [Troubleshooting](docs/TROUBLESHOOTING.md) if something is not working
@@ -31,13 +33,12 @@ Removing a pack promotes the next valid one, or restores the original appearance
 
 ## How packs are chosen
 
-Every target is identified by its owning plugin plus plugin-local FormID; 
-Packs discover presets from `<OwningPlugin>/<localFormId>.npc`.
+Every target is identified by its owning plugin plus plugin-local FormID;
+packs discover presets from `<OwningPlugin>/<localFormId>.npc` or `<OwningPlugin>/<localFormId>.json`.
 
 Runtime/load-order FormIDs and EditorID targets are not accepted.
 
-When several valid packs resolve to the same NPC base, the alphabetically earliest pack
-folder name wins
+When several valid packs resolve to the same NPC base, the alphabetically earliest pack folder name wins
 
 Mod-manager load order is irrelevant.
 

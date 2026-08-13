@@ -1,7 +1,9 @@
 #pragma once
 
 #include "./Config.h"
+#include "./Preset.h"
 
+#include <optional>
 #include <string_view>
 
 namespace Config::Detail
@@ -11,6 +13,8 @@ namespace Config::Detail
     [[nodiscard]] bool IsPluginName(std::string_view a_name);
 
     [[nodiscard]] bool ParseLocalFormID(std::string_view a_text, std::uint32_t& a_out);
+
+    [[nodiscard]] std::optional<PresetSourceFormat> PresetFormatFromExtension(const std::filesystem::path& a_path);
 
     [[nodiscard]] bool IsWithin(const std::filesystem::path& a_root, const std::filesystem::path& a_candidate);
 

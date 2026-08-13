@@ -25,6 +25,16 @@ namespace Config
             return Util::FoldASCII(a_target.plugin) + ":" + std::to_string(a_target.localFormID);
         }
 
+        bool IsRootPresetCandidate(const std::filesystem::path& a_path)
+        {
+            const auto sourceFormat = Detail::PresetFormatFromExtension(a_path);
+            if (sourceFormat == PresetSourceFormat::kCkNpc) {
+                return true;
+            }
+            std::uint32_t ignored = 0;
+            return sourceFormat == PresetSourceFormat::kCharGenJson && Detail::ParseLocalFormID(a_path.stem().string(), ignored);
+        }
+
         DiscoveryResult ScanPackDirectory(const std::filesystem::path& a_packDirectory)
         {
             DiscoveryResult result;
@@ -42,9 +52,7 @@ namespace Config
                 if (rootIt->is_directory(ec) && !ec) {
                     pluginDirectories.push_back(rootIt->path());
                 } else if (!ec && rootIt->is_regular_file(ec) && !ec) {
-                    const auto filename = Util::FoldASCII(rootIt->path().filename().string());
-                    const auto extension = Util::FoldASCII(rootIt->path().extension().string());
-                    if (extension == ".npc") {
+                    if (IsRootPresetCandidate(rootIt->path())) {
                         Detail::AddIssue(result, rootIt->path(), 0, "invalid_convention_layout", "preset files must be inside <OwningPlugin>/");
                     }
                 } else if (!ec) {
@@ -96,7 +104,7 @@ namespace Config
 
                 for (const auto& file : files) {
                     const auto foldedFilename = Util::FoldASCII(file.filename().string());
-                    if (Util::FoldASCII(file.extension().string()) != ".npc") {
+                    if (!Detail::PresetFormatFromExtension(file)) {
                         continue;
                     }
                     if (filenameCounts[foldedFilename] != 1) {

@@ -54,12 +54,12 @@ try {
 
     $bundledPreset = Get-ChildItem -LiteralPath $stageRoot `
         -Recurse `
-        -File `
-        -Filter '*.npc' |
+        -File |
+        Where-Object { $_.Extension -in @('.npc', '.json') } |
         Select-Object -First 1
 
     if ($bundledPreset) {
-        throw "Production staging unexpectedly contains an NPC fixture: $($bundledPreset.FullName)"
+        throw "Production staging unexpectedly contains a preset fixture: $($bundledPreset.FullName)"
     }
 
     Compress-Archive -Path (Join-Path $stageRoot '*') -DestinationPath $zipPath -CompressionLevel Optimal

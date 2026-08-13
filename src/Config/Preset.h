@@ -18,6 +18,20 @@ namespace Config
         kFemale
     };
 
+    enum class PresetSourceFormat
+    {
+        kCkNpc,
+        kCharGenJson
+    };
+
+    struct PresetFormReference
+    {
+        std::string plugin;
+        std::uint32_t localFormID{ 0 };
+
+        bool operator==(const PresetFormReference&) const = default;
+    };
+
     struct PresetMorphWeights
     {
         double x{ 0.0 };
@@ -68,6 +82,8 @@ namespace Config
         std::string value;
         std::string modulationValue;
         std::optional<PresetCustomColor> customColor;
+        std::optional<std::uint32_t> materialType;
+        std::optional<std::string> texturePath;
         std::uint32_t packedIntensity{ 0 };
 
         bool operator==(const PresetTintLayer&) const = default;
@@ -75,8 +91,11 @@ namespace Config
 
     struct AppearancePreset
     {
+        PresetSourceFormat sourceFormat{ PresetSourceFormat::kCkNpc };
         std::string npcFormEditorID;
         std::string raceFormID;
+        std::optional<PresetFormReference> raceForm;
+        std::vector<std::string> requiredPlugins;
         PresetSex sex{ PresetSex::kFemale };
         std::uint8_t skinTone{ 0 };
         std::string browHairColor;
@@ -89,6 +108,7 @@ namespace Config
         std::vector<double> bodyMorphRegionValues;
         std::vector<std::string> miscHeadParts;
         std::vector<std::string> uniqueHeadParts;
+        std::vector<PresetFormReference> headPartForms;
         std::vector<PresetNamedMorph> facialMorphSliders;
         std::vector<PresetBoneRegion> facialBoneRegions;
         std::vector<PresetTintLayer> postBlendLayers;
@@ -112,9 +132,9 @@ namespace Config
         [[nodiscard]] bool HasFatalError() const noexcept { return !preset.has_value(); }
     };
 
-    [[nodiscard]] PresetResult ParseCkPreset(
-        std::string_view a_json,
-        const std::filesystem::path& a_path = {});
+    [[nodiscard]] PresetResult ParseCkPreset(std::string_view a_json, const std::filesystem::path& a_path = {});
 
-    [[nodiscard]] PresetResult LoadCkPreset(const std::filesystem::path& a_path);
+    [[nodiscard]] PresetResult ParseCharGenJsonPreset(std::string_view a_json, const std::filesystem::path& a_path = {});
+
+    [[nodiscard]] PresetResult LoadPreset(const std::filesystem::path& a_path);
 }

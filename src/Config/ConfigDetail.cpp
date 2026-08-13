@@ -1,8 +1,8 @@
 #include "ConfigDetail.h"
 
-#include "Preset.h"
 #include "Util/String.h"
 
+#include <algorithm>
 #include <charconv>
 #include <system_error>
 #include <utility>
@@ -43,7 +43,8 @@ namespace Config::Detail
     bool IsPluginName(const std::string_view a_name)
     {
         if (a_name.size() <= 4 || a_name.size() > 260 || a_name.contains('/') || a_name.contains('\\') ||
-            a_name.contains(':')) {
+            a_name.contains(':') || a_name.contains('|') ||
+            !std::ranges::all_of(a_name, [](const unsigned char a_ch) { return a_ch >= 0x20 && a_ch != 0x7F; })) {
             return false;
         }
         const auto folded = Util::FoldASCII(a_name);
@@ -62,6 +63,18 @@ namespace Config::Detail
         }
         a_out = value;
         return true;
+    }
+
+    std::optional<PresetSourceFormat> PresetFormatFromExtension(const std::filesystem::path& a_path)
+    {
+        const auto extension = Util::FoldASCII(a_path.extension().string());
+        if (extension == ".npc") {
+            return PresetSourceFormat::kCkNpc;
+        }
+        if (extension == ".json") {
+            return PresetSourceFormat::kCharGenJson;
+        }
+        return std::nullopt;
     }
 
     bool IsWithin(const std::filesystem::path& a_root, const std::filesystem::path& a_candidate)
@@ -106,8 +119,8 @@ namespace Config::Detail
         if (!ValidateRelativePath(a_text, relative, a_error)) {
             return false;
         }
-        if (Util::FoldASCII(relative.extension().string()) != ".npc") {
-            a_error = "preset path must use the .npc extension";
+        if (!PresetFormatFromExtension(relative)) {
+            a_error = "preset path must use the .npc or .json extension";
             return false;
         }
 

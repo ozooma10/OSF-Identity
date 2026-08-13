@@ -141,9 +141,9 @@ int main()
     const auto validRoot = root / "valid";
     Write(validRoot / "Bravo Pack" / "Starfield.esm" / "00005983.npc");
     Write(validRoot / "alpha pack" / "Example.esl" / "A.NPC");
+    Write(validRoot / "alpha pack" / "Example.esl" / "B.JsOn", "{}");
     Write(validRoot / "Middle Pack" / "Example.esp" / "00FFFFFF.npc");
     Write(validRoot / "alpha pack" / "package.json", "{}");
-    Write(validRoot / "alpha pack" / "Example.esl" / "A.json", "{}");
     Write(validRoot / "alpha pack" / "Example.esl" / "README.md", "notes");
 
     const auto valid = Config::DiscoverPacks(validRoot);
@@ -157,17 +157,20 @@ int main()
 
     const auto* alpha = FindPack(valid, "alpha pack");
     Check(alpha && alpha->rootPath == validRoot / "alpha pack" &&
-              alpha->assignments.size() == 1 &&
+              alpha->assignments.size() == 2 &&
               alpha->assignments[0].target.plugin == "Example.esl" &&
               alpha->assignments[0].target.localFormID == 0xAu &&
-              alpha->assignments[0].presetPath.is_absolute(),
-          "pack identity and plugin-local target come from the filesystem");
-    Check(alpha && alpha->assignments.size() == 1,
-          "unsupported JSON and unrelated files do not become assignments");
+              alpha->assignments[0].presetPath.is_absolute() &&
+              alpha->assignments[1].target.localFormID == 0xBu &&
+              alpha->assignments[1].presetPath.extension() == ".JsOn",
+          "NPC and JSON targets come from the filesystem with their native extensions");
+    Check(alpha && alpha->assignments.size() == 2,
+          "legacy package metadata and unrelated files do not become assignments");
 
     const auto layoutRoot = root / "invalid-layout";
     Write(layoutRoot / "loose.txt", "stray");
     Write(layoutRoot / "Layout Pack" / "5983.npc");
+    Write(layoutRoot / "Layout Pack" / "5984.json", "{}");
     Write(layoutRoot / "Layout Pack" / "not-a-plugin" / "5983.npc");
     Write(layoutRoot / "Layout Pack" / "Starfield.esm" / "Nested" /
           "5984.npc");
@@ -207,12 +210,12 @@ int main()
     Write(duplicateTargetRoot / "Duplicate Pack" / "Starfield.esm" /
           "5983.npc");
     Write(duplicateTargetRoot / "Duplicate Pack" / "Starfield.esm" /
-          "00005983.npc");
+          "00005983.json", "{}");
     const auto duplicateTarget = Config::DiscoverPacks(duplicateTargetRoot);
     const auto* duplicatePack = FindPack(duplicateTarget, "Duplicate Pack");
     Check(duplicatePack && duplicatePack->assignments.empty() &&
               CountIssues(duplicateTarget, "duplicate_target") == 2,
-          "equivalent flexible-width FormIDs are rejected as duplicate targets");
+          "equivalent cross-format FormIDs are rejected as duplicate targets");
 
 #ifndef _WIN32
     const auto duplicateFilenameRoot = root / "duplicate-filename";

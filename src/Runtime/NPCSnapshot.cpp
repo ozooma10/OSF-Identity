@@ -64,9 +64,9 @@ namespace Runtime
             state.boneValueCount = a_npc->facialBoneValues->size();
             state.boneValueStorage = a_npc->facialBoneValues;
         }
-        if (a_npc->unk3E8) {
-            state.boneGroupCount = a_npc->unk3E8->size();
-            state.boneGroupStorage = a_npc->unk3E8;
+        if (a_npc->facialBoneGroupValues) {
+            state.boneGroupCount = a_npc->facialBoneGroupValues->size();
+            state.boneGroupStorage = a_npc->facialBoneGroupValues;
         }
         state.tintCount = a_npc->tintAVMData.size();
         state.tintStorage = a_npc->tintAVMData.data();
@@ -158,16 +158,16 @@ namespace Runtime
             }
         }
 
-        if ((a_left->unk3E8 == nullptr) != (a_right->unk3E8 == nullptr)) {
+        if ((a_left->facialBoneGroupValues == nullptr) != (a_right->facialBoneGroupValues == nullptr)) {
             return false;
         }
-        if (a_left->unk3E8) {
-            if (a_left->unk3E8->size() != a_right->unk3E8->size()) {
+        if (a_left->facialBoneGroupValues) {
+            if (a_left->facialBoneGroupValues->size() != a_right->facialBoneGroupValues->size()) {
                 return false;
             }
-            for (const auto& outer : *a_left->unk3E8) {
-                const auto otherOuter = a_right->unk3E8->find(outer.key);
-                if (otherOuter == a_right->unk3E8->end() ||
+            for (const auto& outer : *a_left->facialBoneGroupValues) {
+                const auto otherOuter = a_right->facialBoneGroupValues->find(outer.key);
+                if (otherOuter == a_right->facialBoneGroupValues->end() ||
                     (outer.value == nullptr) != (otherOuter->value == nullptr)) {
                     return false;
                 }

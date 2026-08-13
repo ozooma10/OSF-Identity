@@ -2,6 +2,7 @@
 #include "./AssignmentSelection.h"
 #include "./Config.h"
 #include "./PackScanner.h"
+#include "./PluginLookup.h"
 #include "./RuntimeFormID.h"
 #include "../Util/String.h"
 
@@ -15,12 +16,6 @@ namespace Config
             std::shared_ptr<const PreparedAssignment> assignment;
         };
 
-        struct LoadedPlugin
-        {
-            PluginTier tier;
-            std::uint32_t index;
-        };
-
         std::string RelativeLogPath(const std::filesystem::path& a_path, const std::filesystem::path& a_packsRoot)
         {
             const auto relative = a_path.lexically_normal().lexically_relative(a_packsRoot.lexically_normal());
@@ -28,29 +23,6 @@ namespace Config
                 return a_path.filename().string();
             }
             return relative.string();
-        }
-
-        std::optional<LoadedPlugin> FindLoadedPlugin(const RE::TESDataHandler* a_handler, const std::string_view a_pluginName)
-        {
-            const auto targetName = Util::FoldASCII(a_pluginName);
-            const auto find = [&](const auto& a_files, PluginTier a_tier) -> std::optional<LoadedPlugin> {
-                std::uint32_t tierIndex = 0;
-                for (const auto* file : a_files) {
-                    if (file && Util::FoldASCII(Util::SafeText(file->fileName)) == targetName) {
-                        return LoadedPlugin{ .tier = a_tier, .index = a_tier == PluginTier::kFull ? file->compileIndex : tierIndex };
-                    }
-                    tierIndex++;
-                }
-                return std::nullopt;
-            };
-            if(auto plugin = find(a_handler->compiledFileCollection.files, PluginTier::kFull)) {
-                return plugin;
-            }
-            if(auto plugin = find(a_handler->compiledFileCollection.mediumFiles, PluginTier::kMedium)) {
-                return plugin;
-            }
-
-            return find(a_handler->compiledFileCollection.smallFiles, PluginTier::kSmall);
         }
 
         RE::TESNPC* ResolveTarget(const Target& a_target, const RE::TESDataHandler* a_handler, RE::TESRace* a_humanRace)
@@ -109,7 +81,7 @@ namespace Config
                     continue;
                 }
 
-                auto loaded = LoadCkPreset(assignment.presetPath);
+                auto loaded = LoadPreset(assignment.presetPath);
                 if (!loaded.preset) {
                     for (const auto& issue : loaded.issues) {
                         REX::WARN("[PackScanner] preset issue: {}:{}: {} ({})", RelativeLogPath(issue.path, a_packsRoot), issue.offset, issue.code, issue.message);
