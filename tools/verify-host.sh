@@ -35,6 +35,7 @@ echo "[verify-host] building host test suites with $cxx"
     -o "$build_dir/npc-appearance-config-tests"
 "$cxx" "${cxxflags[@]}" \
     tools/tests/npc_appearance_preset_tests.cpp \
+    src/Config/ConfigDetail.cpp \
     src/Config/Preset.cpp \
     -o "$build_dir/npc-appearance-preset-tests"
 
